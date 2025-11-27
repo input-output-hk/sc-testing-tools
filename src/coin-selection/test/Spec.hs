@@ -68,6 +68,7 @@ import Convex.MockChain.Defaults qualified as Defaults
 import Convex.MockChain.Gen qualified as Gen
 import Convex.MockChain.Staking (registerPool)
 import Convex.MockChain.Utils (
+  mockchainFails,
   mockchainSucceeds,
   runMockchainProp,
   runTestableErr,
@@ -138,6 +139,17 @@ tests =
         , testCase "spending a singleton output" (mockchainSucceeds $ failOnError (mintingPlutus >>= spendSingletonOutput))
         , testCase "spend an output locked by the matching index script" (mockchainSucceeds $ failOnError matchingIndex)
         , testCase "mint a token with the matching index minting policy" (mockchainSucceeds $ failOnError matchingIndexMP)
+        ]
+    , testGroup
+        "ha scripts"
+        [ testCase "spend an output succeeds" (mockchainSucceeds $ failOnError (sampleScriptTest (Scripts.SampleRedeemer True True)))
+        , testCase
+            "spend an output fails"
+            ( mockchainFails
+                (failOnError (sampleScriptTest (Scripts.SampleRedeemer False True)))
+                -- Test tree fails
+                (\_ -> pure ())
+            )
         ]
     , testGroup
         "mockchain"
@@ -427,6 +439,33 @@ matchingIndex = inBabbage @era $ do
 
   -- Spend the outputs in a single transaction
   void (tryBalanceAndSubmit mempty Wallet.w1 (execBuildTx $ traverse_ Scripts.spendMatchingIndex inputs) TrailingChange [])
+
+sampleScriptTest
+  :: forall era m
+   . ( MonadMockchain era m
+     , MonadError (BalanceTxError era) m
+     , MonadFail m
+     , C.IsBabbageBasedEra era
+     , C.HasScriptLanguageInEra C.PlutusScriptV3 era
+     )
+  => Scripts.SampleRedeemer
+  -> m ()
+sampleScriptTest redemer = inBabbage @era $ do
+  let txBody =
+        execBuildTx
+          ( BuildTx.payToScriptDatumHash
+              Defaults.networkId
+              (plutusScript Scripts.sampleValidatorScript)
+              ()
+              C.NoStakeAddress
+              (C.lovelaceToValue 10_000_000)
+          )
+  -- here is the locking !!!
+  input <- C.TxIn . C.getTxId . C.getTxBody <$> tryBalanceAndSubmit mempty Wallet.w1 txBody TrailingChange [] <*> pure (C.TxIx 0)
+
+  -- Spend!! the outputs in a single transaction
+  _tx <- tryBalanceAndSubmit mempty Wallet.w1 (execBuildTx $ Scripts.spendSample redemer input) TrailingChange []
+  pure ()
 
 scriptStakingCredential :: C.StakeCredential
 scriptStakingCredential = C.StakeCredentialByScript $ C.hashScript (C.PlutusScript C.PlutusScriptV2 Scripts.v2StakingScript)

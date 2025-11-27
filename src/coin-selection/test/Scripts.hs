@@ -15,6 +15,9 @@ module Scripts (
   matchingIndexMPScript,
   spendMatchingIndex,
   mintMatchingIndex,
+  sampleValidatorScript,
+  spendSample,
+  Sample.SampleRedeemer (..),
 ) where
 
 import Cardano.Api qualified as C
@@ -29,6 +32,7 @@ import PlutusTx (BuiltinData, CompiledCode)
 import PlutusTx qualified
 import PlutusTx.Prelude (BuiltinUnit)
 import Scripts.MatchingIndex qualified as MatchingIndex
+import Scripts.Sample qualified as Sample
 
 v2SpendingScript :: C.PlutusScript C.PlutusScriptV2
 v2SpendingScript = C.PlutusScriptSerialised $ alwaysSucceedingNAryFunction 3
@@ -45,11 +49,17 @@ matchingIndexValidatorCompiled = $$(PlutusTx.compile [||MatchingIndex.validator|
 matchingIndexMPCompiled :: CompiledCode (BuiltinData -> BuiltinUnit)
 matchingIndexMPCompiled = $$(PlutusTx.compile [||MatchingIndex.mintingPolicy||])
 
+sampleValidatorCompiled :: CompiledCode (BuiltinData -> BuiltinUnit)
+sampleValidatorCompiled = $$(PlutusTx.compile [||Sample.validator||])
+
 {- | Script that passes if the input's index (in the list of transaction inputs)
   matches the number passed as the redeemer
 -}
 matchingIndexValidatorScript :: C.PlutusScript C.PlutusScriptV3
 matchingIndexValidatorScript = compiledCodeToScript matchingIndexValidatorCompiled
+
+sampleValidatorScript :: C.PlutusScript C.PlutusScriptV3
+sampleValidatorScript = compiledCodeToScript sampleValidatorCompiled
 
 matchingIndexMPScript :: C.PlutusScript C.PlutusScriptV3
 matchingIndexMPScript = compiledCodeToScript matchingIndexMPCompiled
@@ -57,7 +67,12 @@ matchingIndexMPScript = compiledCodeToScript matchingIndexMPCompiled
 {- | Spend an output locked by 'matchingIndexValidatorScript', setting
 the redeemer to the index of the input in the final transaction
 -}
-spendMatchingIndex :: forall era m. (C.IsAlonzoBasedEra era, C.HasScriptLanguageInEra C.PlutusScriptV3 era) => (MonadBuildTx era m) => C.TxIn -> m ()
+spendMatchingIndex
+  :: forall era m
+   . (C.IsAlonzoBasedEra era, C.HasScriptLanguageInEra C.PlutusScriptV3 era)
+  => (MonadBuildTx era m)
+  => C.TxIn
+  -> m ()
 spendMatchingIndex txi =
   let witness txBody =
         C.ScriptWitness C.ScriptWitnessForSpending $
@@ -79,3 +94,20 @@ mintMatchingIndex policy assetName quantity =
             C.NoScriptDatumForMint
             (fromIntegral @Int @Integer $ BuildTx.findIndexMinted policy txBody)
      in BuildTx.setScriptsValid >> BuildTx.addMintWithTxBody policy assetName quantity witness
+
+spendSample
+  :: forall era m
+   . (C.IsAlonzoBasedEra era, C.HasScriptLanguageInEra C.PlutusScriptV3 era)
+  => (MonadBuildTx era m)
+  => Sample.SampleRedeemer
+  -> C.TxIn
+  -> m ()
+spendSample redeemer txi =
+  let witness _ =
+        C.ScriptWitness C.ScriptWitnessForSpending $
+          BuildTx.buildScriptWitness
+            sampleValidatorScript
+            (C.ScriptDatumForTxIn $ Just $ toHashableScriptData ())
+            -- (fromIntegral @Int @Integer $ 9898) -- BuildTx.findIndexSpending txi txBody)
+            redeemer
+   in BuildTx.setScriptsValid >> BuildTx.addInputWithTxBody txi witness
