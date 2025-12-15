@@ -150,7 +150,65 @@ tests =
                 -- Test tree fails
                 (\_ -> pure ())
             )
-        , testCase "spend pingPong an output succeeds" (mockchainSucceeds $ failOnError (pingPongScriptTest Scripts.Pong))
+        , testGroup
+            "ping-pong"
+            [ testCase
+                "Ping and Pong should succeed"
+                ( mockchainSucceeds $
+                    failOnError
+                      (pingPongMultipleRounds Scripts.Pinged [Scripts.Pong])
+                )
+            , testCase
+                "Pong and Ping should succeed"
+                ( mockchainSucceeds $
+                    failOnError (pingPongMultipleRounds Scripts.Ponged [Scripts.Ping])
+                )
+            , testCase
+                "Ping and Ping should fail"
+                ( mockchainFails
+                    (failOnError (pingPongMultipleRounds Scripts.Pinged [Scripts.Ping]))
+                    -- Test tree fails
+                    (\_ -> pure ())
+                )
+            , testCase
+                "Pong and Pong should fail"
+                ( mockchainFails
+                    (failOnError (pingPongMultipleRounds Scripts.Ponged [Scripts.Pong]))
+                    -- Test tree fails
+                    (\_ -> pure ())
+                )
+            , testCase
+                "Stop after Ping should succeed"
+                ( mockchainSucceeds $
+                    failOnError (pingPongMultipleRounds Scripts.Ponged [Scripts.Ping, Scripts.Stop])
+                )
+            , testCase
+                "Stop after Pong should succeed"
+                ( mockchainSucceeds $
+                    failOnError (pingPongMultipleRounds Scripts.Pinged [Scripts.Pong, Scripts.Stop])
+                )
+            , testCase
+                "Stop after Stop should fail"
+                ( mockchainFails
+                    (failOnError (pingPongMultipleRounds Scripts.Stopped [Scripts.Stop]))
+                    -- Test tree fails
+                    (\_ -> pure ())
+                )
+            , testCase
+                "Ping after Stop should fail"
+                ( mockchainFails
+                    (failOnError (pingPongMultipleRounds Scripts.Stopped [Scripts.Ping]))
+                    -- Test tree fails
+                    (\_ -> pure ())
+                )
+            , testCase
+                "Pong after Stop should fail"
+                ( mockchainFails
+                    (failOnError (pingPongMultipleRounds Scripts.Stopped [Scripts.Pong]))
+                    -- Test tree fails
+                    (\_ -> pure ())
+                )
+            ]
         ]
     , testGroup
         "mockchain"
@@ -451,7 +509,7 @@ sampleScriptTest
      )
   => Scripts.SampleRedeemer
   -> m ()
-sampleScriptTest redemer = inBabbage @era $ do
+sampleScriptTest redeemer = inBabbage @era $ do
   let txBody =
         execBuildTx
           ( BuildTx.payToScriptDatumHash
@@ -465,10 +523,10 @@ sampleScriptTest redemer = inBabbage @era $ do
   input <- C.TxIn . C.getTxId . C.getTxBody <$> tryBalanceAndSubmit mempty Wallet.w1 txBody TrailingChange [] <*> pure (C.TxIx 0)
 
   -- Spend!! the outputs in a single transaction
-  _tx <- tryBalanceAndSubmit mempty Wallet.w1 (execBuildTx $ Scripts.spendSample redemer input) TrailingChange []
+  _tx <- tryBalanceAndSubmit mempty Wallet.w1 (execBuildTx $ Scripts.spendSample redeemer input) TrailingChange []
   pure ()
 
-pingPongScriptTest
+pingPongMultipleRounds
   :: forall era m
    . ( MonadMockchain era m
      , MonadError (BalanceTxError era) m
@@ -476,44 +534,40 @@ pingPongScriptTest
      , C.IsBabbageBasedEra era
      , C.HasScriptLanguageInEra C.PlutusScriptV3 era
      )
-  => Scripts.PingPongRedeemer
+  => Scripts.PingPongState
+  -> [Scripts.PingPongRedeemer]
   -> m ()
-pingPongScriptTest redemer = inBabbage @era $ do
+pingPongMultipleRounds fstState redeemers = inBabbage @era $ do
+  let value = 10_000_000
+  -- this is the inital state and will not be validated
+  -- we should prepare the state based on what we are about to play
   let txBody =
         execBuildTx
           ( BuildTx.payToScriptInlineDatum
               Defaults.networkId
               (C.hashScript (plutusScript Scripts.pingPongValidatorScript))
-              Scripts.Pinged
+              -- we should start with Pinged if redeemer is Pong
+              -- and Ponged if redeemer is Ping
+              fstState
               C.NoStakeAddress
-              (C.lovelaceToValue 10_000_000)
+              (C.lovelaceToValue value)
           )
-  -- here is the locking !!!
   tx <- tryBalanceAndSubmit mempty Wallet.w1 txBody TrailingChange []
-  -- error $ show tx
-
-  let input = C.TxIn (C.getTxId $ C.getTxBody tx) (C.TxIx 0)
-  -- input <- C.TxBody . C.getTxId . C.getTxBody <$> tryBalanceAndSubmit mempty Wallet.w1 txBody TrailingChange [] <*> pure (C.TxIx 0)
-
-  -- Spend!! the outputs in a single transaction
-  _tx <-
-    tryBalanceAndSubmit
-      mempty
-      Wallet.w1
-      ( execBuildTx $ do
-          Scripts.spendPingPong redemer input
-          --
-          -- here we are going to payToScript
-          BuildTx.payToScriptInlineDatum
-            Defaults.networkId
-            (C.hashScript (plutusScript Scripts.pingPongValidatorScript))
-            Scripts.Ponged
-            C.NoStakeAddress
-            (C.lovelaceToValue 10_000_000) -- add to the witness the datum
-      )
-      TrailingChange
-      []
+  _ <- play value tx redeemers
   pure ()
+ where
+  play _ tx [] = pure tx
+  play value tx (redeemer : xs) = do
+    newTx <-
+      tryBalanceAndSubmit
+        mempty
+        Wallet.w1
+        (execBuildTx $ Scripts.playPingPongRound Defaults.networkId value redeemer (getTxIn tx))
+        TrailingChange
+        []
+    play value newTx xs
+
+  getTxIn tx = C.TxIn (C.getTxId $ C.getTxBody tx) (C.TxIx 0)
 
 scriptStakingCredential :: C.StakeCredential
 scriptStakingCredential = C.StakeCredentialByScript $ C.hashScript (C.PlutusScript C.PlutusScriptV2 Scripts.v2StakingScript)

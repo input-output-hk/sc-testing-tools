@@ -18,12 +18,13 @@ module Scripts (
   sampleValidatorScript,
   pingPongValidatorScript,
   spendSample,
-  spendPingPong,
+  playPingPongRound,
   Sample.SampleRedeemer (..),
   PingPong.PingPongRedeemer (..),
   PingPong.PingPongState (..),
 ) where
 
+import Cardano.Api (NetworkId)
 import Cardano.Api qualified as C
 import Convex.BuildTx (MonadBuildTx)
 import Convex.BuildTx qualified as BuildTx
@@ -124,19 +125,35 @@ spendSample redeemer txi =
             redeemer
    in BuildTx.setScriptsValid >> BuildTx.addInputWithTxBody txi witness
 
-spendPingPong
+plutusScript :: (C.IsPlutusScriptLanguage lang) => C.PlutusScript lang -> C.Script lang
+plutusScript = C.PlutusScript C.plutusScriptVersion
+
+playPingPongRound
   :: forall era m
-   . (C.IsAlonzoBasedEra era, C.HasScriptLanguageInEra C.PlutusScriptV3 era)
+   . ( C.IsBabbageBasedEra era
+     , C.HasScriptLanguageInEra C.PlutusScriptV3 era
+     )
   => (MonadBuildTx era m)
-  => PingPong.PingPongRedeemer
+  => NetworkId
+  -> C.Lovelace
+  -> PingPong.PingPongRedeemer
   -> C.TxIn
   -> m ()
-spendPingPong redeemer txi =
+playPingPongRound networkId value redeemer txi = do
   let witness _ =
         C.ScriptWitness C.ScriptWitnessForSpending $
           BuildTx.buildScriptWitness
             pingPongValidatorScript
-            (C.ScriptDatumForTxIn $ Nothing) -- Just $ toHashableScriptData PingPong.Pinged)
-            -- (fromIntegral @Int @Integer $ 9898) -- BuildTx.findIndexSpending txi txBody)
+            (C.ScriptDatumForTxIn $ Nothing)
             redeemer
-   in BuildTx.setScriptsValid >> BuildTx.addInputWithTxBody txi witness
+  BuildTx.setScriptsValid >> BuildTx.addInputWithTxBody txi witness
+  BuildTx.payToScriptInlineDatum
+    networkId
+    (C.hashScript (plutusScript Scripts.pingPongValidatorScript))
+    ( case redeemer of
+        PingPong.Ping -> PingPong.Pinged
+        PingPong.Pong -> PingPong.Ponged
+        PingPong.Stop -> PingPong.Stopped
+    )
+    C.NoStakeAddress
+    (C.lovelaceToValue value) -- add to the witness the datum
