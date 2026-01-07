@@ -34,6 +34,7 @@ packages:
   src/node-client
   src/optics
   src/testing-interface
+  src/threat-model
   src/tx-mod
   src/wallet
 

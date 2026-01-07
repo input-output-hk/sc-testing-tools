@@ -1,0 +1,91 @@
+cabal-version: 3.0
+name:          convex-threat-model
+version:       0.1.0.0
+synopsis:
+  Threat model testing framework for Cardano smart contracts
+
+license:       Apache-2.0
+license-files: LICENSE
+maintainer:    RSoulatIOHK@users.noreply.github.com
+author:        Romain Soulat
+homepage:      https://github.com/RSoulatIOHK/sc-tools-experiments
+bug-reports:   https://github.com/RSoulatIOHK/sc-tools-experiments
+description:
+  A framework for adversarial testing of Cardano smart contracts using
+  transaction modification and re-validation. Ports concepts from IOG's
+  quickcheck-contractmodel to work with Convex's MockChain infrastructure.
+
+build-type:    Simple
+
+common lang
+  default-language:   Haskell2010
+  default-extensions:
+    DeriveFoldable
+    DeriveFunctor
+    DeriveGeneric
+    DeriveLift
+    DeriveTraversable
+    ExplicitForAll
+    FlexibleContexts
+    GeneralizedNewtypeDeriving
+    ImportQualifiedPost
+    MultiParamTypeClasses
+    ScopedTypeVariables
+    StandaloneDeriving
+
+  ghc-options:
+    -Wall -Wnoncanonical-monad-instances -Wunused-packages
+    -Wincomplete-uni-patterns -Wincomplete-record-updates
+    -Wredundant-constraints -Widentities
+
+library
+  import:          lang
+  exposed-modules:
+    Convex.ThreatModel.Core
+    Convex.ThreatModel.DSL
+    Convex.ThreatModel.Threats.DoubleSatisfaction
+    Convex.ThreatModel.Threats.LargeDatum
+    Convex.ThreatModel.Threats.LargeValue
+    Convex.ThreatModel.Threats.StateTransition
+    Convex.ThreatModel.TxModifier
+    Convex.ThreatModel.Validation
+
+  hs-source-dirs:  lib
+  build-depends:
+    , base                >=4.14.0
+    , cardano-api
+    , cardano-ledger-core
+    , cardano-ledger-shelley
+    , containers
+    , convex-base
+    , convex-coin-selection
+    , convex-mockchain
+    , convex-optics
+    , convex-wallet
+    , lens
+    , mtl
+    , plutus-ledger-api
+    , text
+    , transformers
+
+test-suite threat-model-tests
+  import:         lang
+  type:           exitcode-stdio-1.0
+  main-is:        Spec.hs
+  other-modules:
+    ThreatModel.PingPong.DoubleSatisfactionSpec
+    ThreatModel.PingPong.LargeDatumSpec
+    ThreatModel.PingPong.LargeValueSpec
+    ThreatModel.PingPong.StateTransitionSpec
+
+  hs-source-dirs: test
+  build-depends:
+    , base
+    , cardano-api
+    , convex-coin-selection
+    , convex-mockchain
+    , convex-threat-model
+    , convex-wallet
+    , hspec
+    , plutus-ledger-api
+    , QuickCheck
