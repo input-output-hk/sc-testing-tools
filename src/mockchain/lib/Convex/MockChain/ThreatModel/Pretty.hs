@@ -10,6 +10,7 @@ import Cardano.Ledger.Alonzo.Tx qualified as Ledger (Data)
 import Cardano.Ledger.Alonzo.TxWits qualified as Ledger
 
 import Cardano.Ledger.Alonzo.Scripts qualified as Ledger
+import Cardano.Ledger.Conway.Scripts qualified as Conway
 import Cardano.Ledger.Hashes qualified as Ledger
 import Data.ByteString qualified as BS
 import Data.Char
@@ -176,10 +177,12 @@ prettyRedeemer inps mints purpose (dat, _) = pTag <:> prettyScriptData (getScrip
  where
   pTag =
     case purpose of
-      Ledger.AlonzoSpending (Ledger.AsIx ix) -> text "Spend" <+> prettyIn (inps !! fromIntegral ix)
-      Ledger.AlonzoMinting (Ledger.AsIx ix) -> text "Mint" <+> prettyHash (mints !! fromIntegral ix)
-      Ledger.AlonzoCertifying _ -> text "Certify"
-      Ledger.AlonzoRewarding _ -> text "Reward"
+      Conway.ConwaySpending (Ledger.AsIx ix) -> text "Spend" <+> prettyIn (inps !! fromIntegral ix)
+      Conway.ConwayMinting (Ledger.AsIx ix) -> text "Mint" <+> prettyHash (mints !! fromIntegral ix)
+      Conway.ConwayCertifying _ -> text "Certify"
+      Conway.ConwayRewarding _ -> text "Reward"
+      Conway.ConwayVoting _ -> text "Vote"
+      Conway.ConwayProposing _ -> text "Propose"
 
 prettyDatumMap :: TxBodyScriptData Era -> Doc
 prettyDatumMap (TxBodyScriptData _ (Ledger.TxDats dats) _)
