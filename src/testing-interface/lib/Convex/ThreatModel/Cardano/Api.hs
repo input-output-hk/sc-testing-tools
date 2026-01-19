@@ -9,7 +9,9 @@ module Convex.ThreatModel.Cardano.Api where
 import Cardano.Api
 
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
+import Cardano.Ledger.Alonzo.PParams (getLanguageView)
 import Cardano.Ledger.Alonzo.Scripts qualified as Ledger
+import Cardano.Ledger.Alonzo.Tx (hashScriptIntegrity)
 import Cardano.Ledger.Alonzo.TxBody qualified as Ledger
 import Cardano.Ledger.Alonzo.TxWits qualified as Ledger
 import Cardano.Ledger.Api.Era qualified as Ledger (eraProtVerLow)
@@ -18,6 +20,7 @@ import Cardano.Ledger.Binary qualified as CBOR
 import Cardano.Ledger.Conway.Scripts qualified as Conway
 import Cardano.Ledger.Conway.TxBody qualified as Conway
 import Cardano.Ledger.Keys (WitVKey (..), coerceKeyRole, hashKey)
+import Cardano.Ledger.Plutus.Language qualified as Plutus
 import Cardano.Slotting.Slot ()
 import Cardano.Slotting.Time (SlotLength, mkSlotLength)
 import Control.Lens ((&), (.~), _1)
@@ -41,6 +44,7 @@ import Data.Maybe (listToMaybe)
 import Data.Maybe.Strict
 import Data.SOP.NonEmpty (NonEmpty (NonEmptyOne))
 import Data.Sequence.Strict qualified as Seq
+import Data.Set qualified as Set
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Word
 import GHC.Exts (toList)
@@ -354,9 +358,6 @@ This function:
 1. Calculates the new required fee
 2. Adjusts the change output (last output to wallet address) to compensate
 3. Re-signs the transaction with the wallet's key
-
-Note: This works at the ledger level to preserve the transaction structure
-created by TxModifier operations.
 -}
 rebalanceAndSign
   :: (MonadMockchain Era m, MonadFail m)
@@ -392,12 +393,65 @@ rebalanceAndSign wallet tx utxo = do
   adjustedOutputs <- adjustChangeOutput walletAddr feeDiff currentOuts
 
   -- Apply the changes: new fee and adjusted outputs
-  let finalTx = setTxOutputsList adjustedOutputs $ setTxFeeCoin newFee tx
+  let modifiedTx = setTxOutputsList adjustedOutputs $ setTxFeeCoin newFee tx
+
+  -- Recalculate script integrity hash
+  let finalTx = recalculateScriptIntegrityHash pparams modifiedTx
 
   -- Re-sign (strip old signatures and add new one)
   let Tx finalBody _ = finalTx
       unsignedTx = makeSignedTransaction [] finalBody
   pure $ Wallet.signTx wallet unsignedTx
+
+{- | Recalculate and update the script integrity hash in a transaction.
+
+The script integrity hash commits to:
+- The redeemers in the transaction
+- The datums in the witness set
+- The cost models for languages used (from protocol parameters)
+
+After modifying a transaction (adding/removing inputs, changing redeemers/datums),
+this hash becomes stale and must be recalculated.
+-}
+recalculateScriptIntegrityHash :: LedgerProtocolParameters Era -> Tx Era -> Tx Era
+recalculateScriptIntegrityHash pparams (Tx (ShelleyTxBody era body scripts scriptData auxData validity) wits) =
+  let
+    -- Extract redeemers and datums from scriptData
+    (redeemers, datums) = case scriptData of
+      TxBodyNoScriptData -> (Ledger.Redeemers mempty, Ledger.TxDats mempty)
+      TxBodyScriptData _ dats rdmrs -> (rdmrs, dats)
+
+    -- Get the protocol parameters
+    pp = unLedgerProtocolParameters pparams
+
+    -- Determine which languages are used by examining the scripts in the transaction
+    usedLangs =
+      Set.fromList
+        [ lang
+        | script <- scripts
+        , Just lang <- [getScriptLanguage script]
+        ]
+
+    -- Get LangDepView for each used language
+    langs =
+      Set.fromList
+        [ getLanguageView pp lang
+        | lang <- Set.toList usedLangs
+        ]
+
+    -- Compute new script integrity hash
+    newHash = hashScriptIntegrity langs redeemers datums
+
+    -- Update the body with new hash
+    body' = body{Conway.ctbScriptIntegrityHash = newHash}
+   in
+    Tx (ShelleyTxBody era body' scripts scriptData auxData validity) wits
+
+-- | Extract the Plutus language from a ledger script, if it's a Plutus script
+getScriptLanguage :: Ledger.AlonzoScript LedgerEra -> Maybe Plutus.Language
+getScriptLanguage script = case script of
+  Ledger.TimelockScript{} -> Nothing
+  Ledger.PlutusScript ps -> Just $ Ledger.plutusScriptLanguage ps
 
 -- | Get the fee from a transaction
 getTxFeeCoin :: Tx Era -> Coin

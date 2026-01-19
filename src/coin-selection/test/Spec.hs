@@ -576,22 +576,19 @@ This test runs the doubleSatisfaction threat model against the VULNERABLE
 bounty validator. The threat model attempts to bundle a "safe script" input
 that satisfies the vulnerable script's output requirement.
 
-The bounty script only checks "some output pays to beneficiary" without
-uniquely identifying which output belongs to this spend.
+Since the vulnerable bounty only checks "some output pays to beneficiary"
+without uniquely identifying which output belongs to this spend, the threat
+model WILL find a vulnerability.
 
-NOTE: In Conway era, the doubleSatisfaction attack is blocked by Phase 1
-ledger rules (PPViewHashesDontMatch, NotAllowedSupplementalDatums) before the
-script even runs. The threat model needs to be updated to properly handle
-Conway-era datum and protocol parameter rules for the attack to work.
-
-For now, this test verifies that the attack is rejected (by Phase 1 rules),
-which is still a secure outcome even if not for the intended reason.
+We use 'expectFailure' because finding the vulnerability means the
+QuickCheck property fails (which is the expected behavior for a vulnerable
+script).
 
 NOTE: This test uses runThreatModelM which runs INSIDE MockchainT for full
 Phase 1 + Phase 2 validation with re-balancing and re-signing.
 -}
 propBountyVulnerableToDoubleSatisfaction :: RunOptions -> Property
-propBountyVulnerableToDoubleSatisfaction opts = monadicIO $ do
+propBountyVulnerableToDoubleSatisfaction opts = QC.expectFailure $ monadicIO $ do
   let Options{params} = mcOptions opts
 
   -- Run the scenario AND the threat model INSIDE MockchainT
