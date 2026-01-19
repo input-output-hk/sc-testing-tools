@@ -247,11 +247,13 @@ applyTxMod tx utxos (AddOutput addr value datum refscript) =
     toShelleyTxOut
       shelleyBasedEra
       (makeTxOut addr value datum refscript)
+  -- Note: Inline datums are embedded in the output itself, NOT in the witness set.
+  -- Only supplemental datums (for TxOutDatumHash outputs) go in the witness set.
   scriptData' = case datum of
     TxOutDatumNone -> scriptData
     TxOutDatumHash{} -> scriptData
     TxOutSupplementalDatum _ d -> addDatum (toAlonzoData d) scriptData
-    TxOutDatumInline _ d -> addDatum (toAlonzoData d) scriptData
+    TxOutDatumInline{} -> scriptData
 applyTxMod tx utxos (AddInput addr value datum rscript False) =
   ( Tx (ShelleyTxBody era body{Conway.ctbSpendInputs = inputs'} scripts scriptData'' auxData validity) wits
   , utxos'
@@ -271,11 +273,12 @@ applyTxMod tx utxos (AddInput addr value datum rscript False) =
     | idx' >= idx = idx' + 1
     | otherwise = idx'
 
+  -- Note: Inline datums are embedded in the output itself, NOT in the witness set.
   scriptData'' = case datum of
     TxOutDatumNone -> scriptData'
     TxOutDatumHash{} -> scriptData'
     TxOutSupplementalDatum _ d -> addDatum (toAlonzoData d) scriptData'
-    TxOutDatumInline _ d -> addDatum (toAlonzoData d) scriptData'
+    TxOutDatumInline{} -> scriptData'
 
   scriptData' = recomputeScriptData Nothing idxUpdate scriptData
 applyTxMod tx utxos (AddInput addr value datum rscript True) =
@@ -455,13 +458,14 @@ applyTxMod tx utxos (ChangeOutput ix maddr mvalue mdatum mrscript) =
         (fromMaybe datum mdatum)
         (fromMaybe rscript mrscript)
 
+  -- Note: Inline datums are embedded in the output itself, NOT in the witness set.
   scriptData' = case mdatum of
     Nothing -> scriptData
     Just d -> case d of
       TxOutDatumNone -> scriptData
       TxOutDatumHash{} -> scriptData
       TxOutSupplementalDatum _ d' -> addDatum (toAlonzoData d') scriptData
-      TxOutDatumInline _ d' -> addDatum (toAlonzoData d') scriptData
+      TxOutDatumInline{} -> scriptData
 applyTxMod tx utxos (ChangeInput txIn maddr mvalue mdatum mrscript) =
   (Tx (ShelleyTxBody era body scripts scriptData' auxData validity) wits, utxos')
  where
@@ -479,12 +483,13 @@ applyTxMod tx utxos (ChangeInput txIn maddr mvalue mdatum mrscript) =
       (fromMaybe rscript mrscript)
   utxos' = UTxO . Map.insert txIn txOut . unUTxO $ utxos
 
+  -- Note: Inline datums are embedded in the output itself, NOT in the witness set.
   scriptData' = case mdatum of
     Nothing -> scriptData
     Just TxOutDatumNone -> scriptData
     Just TxOutDatumHash{} -> scriptData
     Just (TxOutSupplementalDatum _ d) -> addDatum (toAlonzoData d) scriptData
-    Just (TxOutDatumInline _ d) -> addDatum (toAlonzoData d) scriptData
+    Just TxOutDatumInline{} -> scriptData
 applyTxMod tx utxos (ChangeScriptInput txIn mvalue mdatum mredeemer mrscript) =
   (Tx (ShelleyTxBody era body scripts scriptData' auxData validity) wits, utxos')
  where
