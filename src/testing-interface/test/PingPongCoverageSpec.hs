@@ -12,7 +12,6 @@ module PingPongCoverageSpec (
 ) where
 
 import Cardano.Api qualified as C
-import Control.Monad.Except (runExceptT)
 import Convex.BuildTx (execBuildTx, mintPlutus)
 import Convex.BuildTx qualified as BuildTx
 import Convex.Class (getUtxo)
@@ -20,8 +19,8 @@ import Convex.CoinSelection (ChangeOutputPosition (TrailingChange))
 import Convex.MockChain (fromLedgerUTxO)
 import Convex.MockChain.CoinSelection (tryBalanceAndSubmit)
 import Convex.MockChain.Defaults qualified as Defaults
-import Convex.MockChain.Utils (Options (..), mockchainFailsWithOptions, mockchainSucceedsWithOptions)
 
+import Convex.TestingInterface (Options (..), mockchainFailsWithOptions, mockchainSucceedsWithOptions)
 import Convex.Utils.String (unsafeAssetName, unsafeDatumHash)
 import Convex.Wallet.MockWallet qualified as Wallet
 import Data.Map qualified as Map
@@ -96,43 +95,31 @@ testInvalidDatumIndex opts = mockchainFailsWithOptions opts action handleError
             C.ReferenceScriptNone
 
     -- Deploy the invalid datum to the script address
-    deployResult <-
-      runExceptT $
+    _deployResult <-
+      tryBalanceAndSubmit
+        mempty
+        Wallet.w1
+        (execBuildTx $ BuildTx.prependTxOut txOut)
+        TrailingChange
+        []
+
+    -- Find the script UTxO by address (don't assume TxIx 0)
+    utxoSet <- fromLedgerUTxO C.shelleyBasedEra <$> getUtxo
+    let C.UTxO utxos = utxoSet
+        -- Find UTxOs at the script address
+        scriptUtxos = Map.filter (\(C.TxOut addr _ _ _) -> addr == scriptAddr) utxos
+
+    case Map.toList scriptUtxos of
+      [] -> fail "No UTxO found at script address"
+      ((txIn, _) : _) -> do
+        -- Use Pong as the redeemer (any valid redeemer will do - the failure
+        -- happens when parsing the INPUT datum, not the redeemer)
         tryBalanceAndSubmit
           mempty
           Wallet.w1
-          (execBuildTx $ BuildTx.prependTxOut txOut)
+          (execBuildTx $ Scripts.playPingPongRound Defaults.networkId 10_000_000 PingPong.Pong txIn)
           TrailingChange
           []
-
-    case deployResult of
-      Left err -> fail $ "Deploy failed: " ++ show err
-      Right _ -> do
-        -- Find the script UTxO by address (don't assume TxIx 0)
-        utxoSet <- fromLedgerUTxO C.shelleyBasedEra <$> getUtxo
-        let C.UTxO utxos = utxoSet
-            -- Find UTxOs at the script address
-            scriptUtxos = Map.filter (\(C.TxOut addr _ _ _) -> addr == scriptAddr) utxos
-
-        case Map.toList scriptUtxos of
-          [] -> fail "No UTxO found at script address"
-          ((txIn, _) : _) -> do
-            -- Use Pong as the redeemer (any valid redeemer will do - the failure
-            -- happens when parsing the INPUT datum, not the redeemer)
-            spendResult <-
-              runExceptT $
-                tryBalanceAndSubmit
-                  mempty
-                  Wallet.w1
-                  (execBuildTx $ Scripts.playPingPongRound Defaults.networkId 10_000_000 PingPong.Pong txIn)
-                  TrailingChange
-                  []
-
-            -- If the spend succeeds, we fail the test - it should have triggered the validator error
-            case spendResult of
-              Left err -> fail $ show err
-              Right _ -> do
-                fail "Spend succeeded but should have failed with 'PingPongState: invalid index'"
 
   -- We expect the mockchain to fail - this is correct behavior
   handleError _ = pure ()
@@ -160,30 +147,21 @@ testInvalidScriptPurpose opts = mockchainFailsWithOptions opts action handleErro
 
     -- Build a minting transaction using PingPong validator as the policy
     -- The script will be invoked with MintingScript purpose
-    result <-
-      runExceptT $
-        tryBalanceAndSubmit
-          mempty
-          Wallet.w1
-          ( execBuildTx $ do
-              -- Mint using the PingPong script as a policy
-              -- The script will be invoked with MintingScript purpose
-              -- We use Ping as the redeemer (any redeemer will do - it'll fail on purpose check)
-              mintPlutus
-                Scripts.pingPongValidatorScript -- Use the spending validator as minting policy
-                PingPong.Ping -- Any redeemer, doesn't matter - it'll fail on purpose check
-                assetName
-                quantity
-          )
-          TrailingChange
-          []
-
-    -- The transaction MUST fail with script error - if it succeeds, that's a test failure
-    case result of
-      Left err -> fail $ show err
-      Right _ -> do
-        -- If the transaction succeeded, the script didn't reject invalid purpose
-        fail "Transaction succeeded but should have failed with 'Invalid script purpose'"
+    tryBalanceAndSubmit
+      mempty
+      Wallet.w1
+      ( execBuildTx $ do
+          -- Mint using the PingPong script as a policy
+          -- The script will be invoked with MintingScript purpose
+          -- We use Ping as the redeemer (any redeemer will do - it'll fail on purpose check)
+          mintPlutus
+            Scripts.pingPongValidatorScript -- Use the spending validator as minting policy
+            PingPong.Ping -- Any redeemer, doesn't matter - it'll fail on purpose check
+            assetName
+            quantity
+      )
+      TrailingChange
+      []
 
   -- We expect the mockchain to fail - this is correct behavior
   -- The error should contain "Invalid script purpose - expected SpendingScript"
@@ -210,67 +188,56 @@ testFindOwnInputRecursive opts = mockchainSucceedsWithOptions opts $ do
       value = C.lovelaceToValue 10_000_000
 
   -- Deploy FIRST UTxO to the script
-  deployResult1 <-
-    runExceptT $
-      tryBalanceAndSubmit
-        mempty
-        Wallet.w1
-        ( execBuildTx $
-            BuildTx.payToScriptInlineDatum
-              Defaults.networkId
-              scriptHash
-              PingPong.Pinged
-              C.NoStakeAddress
-              value
-        )
-        TrailingChange
-        []
+  deployTx1 <-
+    tryBalanceAndSubmit
+      mempty
+      Wallet.w1
+      ( execBuildTx $
+          BuildTx.payToScriptInlineDatum
+            Defaults.networkId
+            scriptHash
+            PingPong.Pinged
+            C.NoStakeAddress
+            value
+      )
+      TrailingChange
+      []
 
-  deployTx1 <- either (fail . show) pure deployResult1
   let scriptTxIn1 = C.TxIn (C.getTxId $ C.getTxBody deployTx1) (C.TxIx 0)
 
   -- Deploy SECOND UTxO to the script (in a separate transaction to get different TxId)
-  deployResult2 <-
-    runExceptT $
-      tryBalanceAndSubmit
-        mempty
-        Wallet.w1
-        ( execBuildTx $
-            BuildTx.payToScriptInlineDatum
-              Defaults.networkId
-              scriptHash
-              PingPong.Pinged
-              C.NoStakeAddress
-              value
-        )
-        TrailingChange
-        []
+  deployTx2 <-
+    tryBalanceAndSubmit
+      mempty
+      Wallet.w1
+      ( execBuildTx $
+          BuildTx.payToScriptInlineDatum
+            Defaults.networkId
+            scriptHash
+            PingPong.Pinged
+            C.NoStakeAddress
+            value
+      )
+      TrailingChange
+      []
 
-  deployTx2 <- either (fail . show) pure deployResult2
   let scriptTxIn2 = C.TxIn (C.getTxId $ C.getTxBody deployTx2) (C.TxIx 0)
 
   -- Now spend BOTH script UTxOs in a SINGLE transaction.
   -- When the validator runs for each input, it will see BOTH inputs in txInfoInputs.
   -- Due to TxId ordering, one validator invocation will have its own input second,
   -- which MUST trigger the recursive case in findOwnInput.
-  spendResult <-
-    runExceptT $
-      tryBalanceAndSubmit
-        mempty
-        Wallet.w1
-        ( execBuildTx $ do
-            -- Spend first script UTxO (Pinged -> Ponged)
-            Scripts.playPingPongRound Defaults.networkId 10_000_000 PingPong.Pong scriptTxIn1
-            -- Spend second script UTxO (Pinged -> Ponged)
-            Scripts.playPingPongRound Defaults.networkId 10_000_000 PingPong.Pong scriptTxIn2
-        )
-        TrailingChange
-        []
-
-  -- Verify the spend succeeded
-  case spendResult of
-    Left err -> fail $ "Spend failed: " ++ show err
-    Right _ -> pure ()
+  tryBalanceAndSubmit
+    mempty
+    Wallet.w1
+    ( execBuildTx $ do
+        -- Spend first script UTxO (Pinged -> Ponged)
+        Scripts.playPingPongRound Defaults.networkId 10_000_000 PingPong.Pong scriptTxIn1
+        -- Spend second script UTxO (Pinged -> Ponged)
+        Scripts.playPingPongRound Defaults.networkId 10_000_000 PingPong.Pong scriptTxIn2
+    )
+    TrailingChange
+    []
 
 {- | Test that NoOutputDatum error (line 249) is triggered.
 
@@ -294,23 +261,20 @@ testNoOutputDatum opts = mockchainFailsWithOptions opts action handleError
         value = C.lovelaceToValue 10_000_000
 
     -- Deploy a valid PingPong UTxO with proper inline datum
-    deployResult <-
-      runExceptT $
-        tryBalanceAndSubmit
-          mempty
-          Wallet.w1
-          ( execBuildTx $
-              BuildTx.payToScriptInlineDatum
-                Defaults.networkId
-                scriptHash
-                PingPong.Pinged
-                C.NoStakeAddress
-                value
-          )
-          TrailingChange
-          []
-
-    _deployTx <- either (fail . show) pure deployResult
+    _deployTx <-
+      tryBalanceAndSubmit
+        mempty
+        Wallet.w1
+        ( execBuildTx $
+            BuildTx.payToScriptInlineDatum
+              Defaults.networkId
+              scriptHash
+              PingPong.Pinged
+              C.NoStakeAddress
+              value
+        )
+        TrailingChange
+        []
 
     -- Find the script UTxO
     utxoSet <- fromLedgerUTxO C.shelleyBasedEra <$> getUtxo
@@ -329,29 +293,21 @@ testNoOutputDatum opts = mockchainFailsWithOptions opts action handleError
         -- 2. Find the output at the script address
         -- 3. Try to get the state from the output's datum
         -- 4. Fail because the output has NoOutputDatum (line 249)
-        spendResult <-
-          runExceptT $
-            tryBalanceAndSubmit
-              mempty
-              Wallet.w1
-              ( execBuildTx $ do
-                  -- Spend the script input with inline datum
-                  BuildTx.spendPlutusInlineDatum
-                    txIn
-                    Scripts.pingPongValidatorScript
-                    PingPong.Pong -- Valid redeemer for Pinged -> Ponged transition
-                    -- Create output at script address WITHOUT datum
-                    -- This triggers line 249: "... - NoOutputDatum"
-                  BuildTx.payToAddress scriptAddr value
-              )
-              TrailingChange
-              []
-
-        -- The transaction must fail with the NoOutputDatum error
-        case spendResult of
-          Left err -> fail $ show err
-          Right _ -> do
-            fail "Transaction succeeded but should have failed with 'NoOutputDatum'"
+        tryBalanceAndSubmit
+          mempty
+          Wallet.w1
+          ( execBuildTx $ do
+              -- Spend the script input with inline datum
+              BuildTx.spendPlutusInlineDatum
+                txIn
+                Scripts.pingPongValidatorScript
+                PingPong.Pong -- Valid redeemer for Pinged -> Ponged transition
+                -- Create output at script address WITHOUT datum
+                -- This triggers line 249: "... - NoOutputDatum"
+              BuildTx.payToAddress scriptAddr value
+          )
+          TrailingChange
+          []
 
   -- We expect the mockchain to fail - this is correct behavior
   -- The error should contain "NoOutputDatum"
@@ -377,57 +333,48 @@ testOutputDatumHashFound opts = mockchainSucceedsWithOptions opts $ do
 
   -- Deploy with DATUM HASH (not inline datum)
   -- This creates an input with OutputDatumHash
-  deployResult <-
-    runExceptT $
-      tryBalanceAndSubmit
-        mempty
-        Wallet.w1
-        ( execBuildTx $
-            BuildTx.payToScriptDatumHash
-              Defaults.networkId
-              script
-              PingPong.Pinged
-              C.NoStakeAddress
-              value
-        )
-        TrailingChange
-        []
+  deployTx <-
+    tryBalanceAndSubmit
+      mempty
+      Wallet.w1
+      ( execBuildTx $
+          BuildTx.payToScriptDatumHash
+            Defaults.networkId
+            script
+            PingPong.Pinged
+            C.NoStakeAddress
+            value
+      )
+      TrailingChange
+      []
 
-  deployTx <- either (fail . show) pure deployResult
   let txIn = C.TxIn (C.getTxId $ C.getTxBody deployTx) (C.TxIx 0)
 
   -- Spend the input using spendPlutus (NOT spendPlutusInlineDatum)
   -- This adds the input's datum (Pinged) to txInfoData
   -- The validator will look up the input datum via OutputDatumHash path
   -- For the OUTPUT, we use inline datum to keep things simple
-  spendResult <-
-    runExceptT $
-      tryBalanceAndSubmit
-        mempty
-        Wallet.w1
-        ( execBuildTx $ do
-            -- Spend the script input with explicit datum (datum hash)
-            -- This exercises line 250-251 for the INPUT lookup
-            BuildTx.spendPlutus
-              txIn
-              Scripts.pingPongValidatorScript
-              PingPong.Pinged -- The input datum (goes to txInfoData)
-              PingPong.Pong -- The redeemer
-              -- Create output with INLINE datum (simpler path, always works)
-            BuildTx.payToScriptInlineDatum
-              Defaults.networkId
-              scriptHash
-              PingPong.Ponged -- The output datum (inline, no lookup needed)
-              C.NoStakeAddress
-              value
-        )
-        TrailingChange
-        []
-
-  -- Verify the spend succeeded
-  case spendResult of
-    Left err -> fail $ "Spend failed: " ++ show err
-    Right _ -> pure ()
+  tryBalanceAndSubmit
+    mempty
+    Wallet.w1
+    ( execBuildTx $ do
+        -- Spend the script input with explicit datum (datum hash)
+        -- This exercises line 250-251 for the INPUT lookup
+        BuildTx.spendPlutus
+          txIn
+          Scripts.pingPongValidatorScript
+          PingPong.Pinged -- The input datum (goes to txInfoData)
+          PingPong.Pong -- The redeemer
+          -- Create output with INLINE datum (simpler path, always works)
+        BuildTx.payToScriptInlineDatum
+          Defaults.networkId
+          scriptHash
+          PingPong.Ponged -- The output datum (inline, no lookup needed)
+          C.NoStakeAddress
+          value
+    )
+    TrailingChange
+    []
 
 {- | Test that OutputDatumHash lookup fails (line 252).
 
@@ -447,23 +394,21 @@ testOutputDatumHashNotFound opts = mockchainFailsWithOptions opts action handleE
         value = C.lovelaceToValue 10_000_000
 
     -- Deploy with valid inline datum
-    deployResult <-
-      runExceptT $
-        tryBalanceAndSubmit
-          mempty
-          Wallet.w1
-          ( execBuildTx $
-              BuildTx.payToScriptInlineDatum
-                Defaults.networkId
-                scriptHash
-                PingPong.Pinged
-                C.NoStakeAddress
-                value
-          )
-          TrailingChange
-          []
+    deployTx <-
+      tryBalanceAndSubmit
+        mempty
+        Wallet.w1
+        ( execBuildTx $
+            BuildTx.payToScriptInlineDatum
+              Defaults.networkId
+              scriptHash
+              PingPong.Pinged
+              C.NoStakeAddress
+              value
+        )
+        TrailingChange
+        []
 
-    deployTx <- either (fail . show) pure deployResult
     let txIn = C.TxIn (C.getTxId $ C.getTxBody deployTx) (C.TxIx 0)
 
     -- Create a fake datum hash that won't be in the datum map
@@ -480,28 +425,20 @@ testOutputDatumHashNotFound opts = mockchainFailsWithOptions opts action handleE
             (C.TxOutDatumHash C.alonzoBasedEra fakeDatumHash)
             C.ReferenceScriptNone
 
-    spendResult <-
-      runExceptT $
-        tryBalanceAndSubmit
-          mempty
-          Wallet.w1
-          ( execBuildTx $ do
-              -- Spend the script input (which has inline datum)
-              BuildTx.spendPlutusInlineDatum
-                txIn
-                Scripts.pingPongValidatorScript
-                PingPong.Pong
-              -- Create output with datum hash that won't be found
-              BuildTx.prependTxOut txOut
-          )
-          TrailingChange
-          []
-
-    -- The transaction must fail with the OutputDatumHash not found error
-    case spendResult of
-      Left err -> fail $ show err
-      Right _ -> do
-        fail "Transaction succeeded but should have failed with 'OutputDatumHash not found in datum map'"
+    tryBalanceAndSubmit
+      mempty
+      Wallet.w1
+      ( execBuildTx $ do
+          -- Spend the script input (which has inline datum)
+          BuildTx.spendPlutusInlineDatum
+            txIn
+            Scripts.pingPongValidatorScript
+            PingPong.Pong
+          -- Create output with datum hash that won't be found
+          BuildTx.prependTxOut txOut
+      )
+      TrailingChange
+      []
 
   -- We expect the mockchain to fail - this is correct behavior
   -- The error should contain "OutputDatumHash not found in datum map"

@@ -28,6 +28,7 @@ module PingPongSpec (
 
 import Cardano.Api qualified as C
 import Control.Lens ((^.))
+import Control.Monad (unless, void)
 import Control.Monad.Except (MonadError, runExceptT)
 import Control.Monad.IO.Class (MonadIO (..))
 import Control.Monad.Trans (lift)
@@ -40,7 +41,6 @@ import Convex.Class (
 import Convex.Class qualified
 import Convex.CoinSelection (BalanceTxError, ChangeOutputPosition (TrailingChange))
 import Convex.MockChain (
-  MockchainT,
   fromLedgerUTxO,
   runMockchain0IOWith,
  )
@@ -49,16 +49,15 @@ import Convex.MockChain.CoinSelection (
   tryBalanceAndSubmit,
  )
 import Convex.MockChain.Defaults qualified as Defaults
-import Convex.MockChain.Utils (
-  Options (Options, params),
-  mockchainFailsWithOptions,
-  mockchainSucceedsWithOptions,
- )
 import Convex.NodeParams (ledgerProtocolParameters)
 import Convex.TestingInterface (
   Actions (Actions),
+  Options (Options, params),
   RunOptions (mcOptions),
   TestingInterface (..),
+  TestingMonadT (..),
+  mockchainFailsWithOptions,
+  mockchainSucceedsWithOptions,
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel (
@@ -174,9 +173,7 @@ instance TestingInterface PingPongModel where
                   C.NoStakeAddress
                   (C.lovelaceToValue $ pmValue model)
               )
-      runExceptT (balanceAndSubmit mempty Wallet.w1 txBody TrailingChange []) >>= \case
-        Left err -> fail $ "Failed to initialize contract: " ++ show err
-        Right _ -> pure ()
+      void $ tryBalanceAndSubmit mempty Wallet.w1 txBody TrailingChange []
     PlayRound redeemer -> do
       -- liftIO $ putStrLn $ "Playing round: " ++ show redeemer
       -- Find the UTxO at the script address
@@ -193,7 +190,7 @@ instance TestingInterface PingPongModel where
           -- Get the value from the UTxO
           let lovelace = C.selectLovelace (C.fromMaryValue val)
           -- Execute the round
-          runExceptT
+          void
             ( balanceAndSubmit
                 mempty
                 Wallet.w1
@@ -201,9 +198,6 @@ instance TestingInterface PingPongModel where
                 TrailingChange
                 []
             )
-            >>= \case
-              Left err -> fail $ "Failed to play round: " ++ show err
-              Right _ -> pure ()
 
   validate model = case pmTxIn model of
     Nothing -> pure True -- No contract deployed yet
@@ -239,9 +233,6 @@ instance TestingInterface PingPongModel where
             _ -> do
               liftIO $ putStrLn "Expected inline datum but got something else"
               pure False
-   where
-    unless True _ = pure ()
-    unless False m = m
 
   monitoring _state _action prop = prop
 
@@ -293,7 +284,7 @@ propPingPongWithThreatModel opts (Actions actions) = monadicIO $ do
   let Options{params} = mcOptions opts
 
   -- Run the mockchain and collect transactions
-  result <- run $ runMockchain0IOWith Wallet.initialUTxOs params $ do
+  result <- run $ runMockchain0IOWith Wallet.initialUTxOs params $ failOnError $ runTestingMonadT $ do
     -- Execute all actions
     _ <- foldMActions (initialState @PingPongModel) actions
     -- Collect submitted transactions
@@ -323,7 +314,7 @@ propPingPongWithThreatModel opts (Actions actions) = monadicIO $ do
       monitor (counterexample $ "Tested " ++ show (length txs) ++ " transactions")
       pure $ runThreatModel basicThreatModel envs
  where
-  foldMActions :: PingPongModel -> [Action PingPongModel] -> MockchainT C.ConwayEra IO PingPongModel
+  foldMActions :: PingPongModel -> [Action PingPongModel] -> TestingMonadT IO PingPongModel
   foldMActions s [] = pure s
   foldMActions s (a : as) = do
     perform s a
@@ -625,57 +616,56 @@ pingPongTests opts runOpts =
     [ testCase
         "Ping and Pong should succeed"
         ( mockchainSucceedsWithOptions opts $
-            failOnError
-              (pingPongMultipleRounds Scripts.Pinged [Scripts.Pong])
+            pingPongMultipleRounds Scripts.Pinged [Scripts.Pong]
         )
     , testCase
         "Pong and Ping should succeed"
         ( mockchainSucceedsWithOptions opts $
-            failOnError (pingPongMultipleRounds Scripts.Ponged [Scripts.Ping])
+            pingPongMultipleRounds Scripts.Ponged [Scripts.Ping]
         )
     , testCase
         "Ping and Ping should fail"
         ( mockchainFailsWithOptions
             opts
-            (failOnError (pingPongMultipleRounds Scripts.Pinged [Scripts.Ping]))
+            (pingPongMultipleRounds Scripts.Pinged [Scripts.Ping])
             (\_ -> pure ())
         )
     , testCase
         "Pong and Pong should fail"
         ( mockchainFailsWithOptions
             opts
-            (failOnError (pingPongMultipleRounds Scripts.Ponged [Scripts.Pong]))
+            (pingPongMultipleRounds Scripts.Ponged [Scripts.Pong])
             (\_ -> pure ())
         )
     , testCase
         "Stop after Ping should succeed"
         ( mockchainSucceedsWithOptions opts $
-            failOnError (pingPongMultipleRounds Scripts.Ponged [Scripts.Ping, Scripts.Stop])
+            pingPongMultipleRounds Scripts.Ponged [Scripts.Ping, Scripts.Stop]
         )
     , testCase
         "Stop after Pong should succeed"
         ( mockchainSucceedsWithOptions opts $
-            failOnError (pingPongMultipleRounds Scripts.Pinged [Scripts.Pong, Scripts.Stop])
+            pingPongMultipleRounds Scripts.Pinged [Scripts.Pong, Scripts.Stop]
         )
     , testCase
         "Stop after Stop should fail"
         ( mockchainFailsWithOptions
             opts
-            (failOnError (pingPongMultipleRounds Scripts.Stopped [Scripts.Stop]))
+            (pingPongMultipleRounds Scripts.Stopped [Scripts.Stop])
             (\_ -> pure ())
         )
     , testCase
         "Ping after Stop should fail"
         ( mockchainFailsWithOptions
             opts
-            (failOnError (pingPongMultipleRounds Scripts.Stopped [Scripts.Ping]))
+            (pingPongMultipleRounds Scripts.Stopped [Scripts.Ping])
             (\_ -> pure ())
         )
     , testCase
         "Pong after Stop should fail"
         ( mockchainFailsWithOptions
             opts
-            (failOnError (pingPongMultipleRounds Scripts.Stopped [Scripts.Pong]))
+            (pingPongMultipleRounds Scripts.Stopped [Scripts.Pong])
             (\_ -> pure ())
         )
     , propRunActionsWithOptions @PingPongModel
