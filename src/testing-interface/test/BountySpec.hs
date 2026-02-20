@@ -33,12 +33,10 @@ import Convex.MockChain.CoinSelection (
   tryBalanceAndSubmit,
  )
 import Convex.MockChain.Defaults qualified as Defaults
-import Convex.MockChain.Utils (
-  Options (Options, params),
- )
 import Convex.NodeParams (ledgerProtocolParameters)
 import Convex.PlutusLedger.V1 (transPubKeyHash)
 import Convex.TestingInterface (
+  Options (Options, params),
   RunOptions (mcOptions),
  )
 import Convex.ThreatModel (

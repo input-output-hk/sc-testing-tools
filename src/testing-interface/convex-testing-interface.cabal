@@ -54,14 +54,16 @@ library
   build-depends:
     , aeson
     , aeson-pretty
-    , base              >=4.14.0
+    , base                   >=4.14.0
     , bytestring
     , cardano-api
     , containers
     , convex-base
+    , convex-coin-selection
     , convex-mockchain
     , convex-optics
     , convex-wallet
+    , HUnit
     , lens
     , prettyprinter
     , QuickCheck
