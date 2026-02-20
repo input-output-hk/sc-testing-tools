@@ -1,16 +1,19 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module Convex.TestingInterface (
-  -- * testing interface
+  -- * Testing interface
   TestingInterface (..),
   ModelState,
 
@@ -19,6 +22,14 @@ module Convex.TestingInterface (
   propRunActionsWithOptions,
   RunOptions (..),
   defaultRunOptions,
+
+  -- * The Testing Monad
+  TestingMonadT (..),
+  mockchainSucceedsWithOptions,
+  mockchainFailsWithOptions,
+  Options (..),
+  defaultOptions,
+  modifyTransactionLimits,
 
   -- * Actions
   Actions (Actions),
@@ -48,37 +59,43 @@ module Convex.TestingInterface (
   TestTree,
 ) where
 
-import Control.Monad (foldM)
+import Control.Monad (foldM, unless, when)
 import Control.Monad.IO.Class (liftIO)
+import Test.HUnit (Assertion)
 import Test.QuickCheck (Arbitrary (..), Gen, Property, conjoin, counterexample, discard, elements, frequency, oneof, property)
 import Test.QuickCheck.Monadic (monadicIO, monitor, run)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.QuickCheck (testProperty)
 
 import Cardano.Api qualified as C
-import Convex.Class (getTxs, getUtxo)
+import Convex.Class (MonadBlockchain, MonadMockchain, coverageData, getTxs, getUtxo)
+import Convex.CoinSelection (BalanceTxError, coverageFromBalanceTxError)
 import Convex.MockChain (MockChainState (MockChainState, mcsCoverageData), MockchainT, fromLedgerUTxO, runMockchain0IOWith)
-import Convex.MockChain.Utils (Options (Options, coverageRef, params), defaultOptions, tryExtractCoverageData)
+import Convex.MonadLog (MonadLog)
+import Convex.NodeParams (NodeParams (..), ledgerProtocolParameters)
+import Convex.ThreatModel (ExceptT, ThreatModel, ThreatModelEnv (..), runExceptT, runThreatModelM)
 import Convex.Wallet.MockWallet qualified as Wallet
-import Data.Foldable (traverse_)
-import Data.IORef (modifyIORef, newIORef, readIORef)
 
-import Control.Lens ((^.))
-import Convex.NodeParams (ledgerProtocolParameters)
-import Convex.ThreatModel (ThreatModel, ThreatModelEnv (..), runThreatModelM)
-
-import Control.Exception (SomeException, catch, throwIO, try)
+import Cardano.Ledger.Core qualified as L
+import Control.Exception (catch, throwIO)
+import Control.Lens ((&), (.~), (^.))
+import Convex.MockChain.Defaults qualified as Defaults
 import Data.Aeson (ToJSON (..), (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Encode.Pretty qualified as Aeson
 import Data.Aeson.Key qualified as Key
 import Data.ByteString.Lazy.Char8 qualified as LBS
+import Data.Foldable (for_)
+import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
 import Data.Map qualified as Map
+import Data.Maybe (listToMaybe)
 import Data.Set qualified as Set
+import Data.Word (Word32)
 import GHC.Generics (Generic)
 import PlutusTx.Coverage (
   CovLoc (..),
   CoverageAnnotation (..),
+  CoverageData,
   CoverageIndex,
   CoverageReport (..),
   Metadata (..),
@@ -129,12 +146,12 @@ class (Show state, Eq state) => TestingInterface state where
   This should execute the actual transaction(s) that implement the action.
   The current model state is provided to allow access to tracked blockchain state.
   -}
-  perform :: state -> Action state -> MockchainT C.ConwayEra IO ()
+  perform :: state -> Action state -> TestingMonadT IO ()
 
   {- | Validate that the blockchain state matches the model state.
   Default: no validation (always succeeds).
   -}
-  validate :: state -> MockchainT C.ConwayEra IO Bool
+  validate :: state -> TestingMonadT IO Bool
   validate _ = pure True
 
   {- | Called after each action to check custom properties.
@@ -150,6 +167,26 @@ class (Show state, Eq state) => TestingInterface state where
   -}
   threatModels :: [ThreatModel ()]
   threatModels = []
+
+{- | Tests run in the mockchain monad extended with balancing error handling.
+
+Leaving handling of balancing errors to the testing interface is important because
+the errors can contain data for code coverage.
+-}
+newtype TestingMonadT m a = TestingMonad
+  { runTestingMonadT :: ExceptT (BalanceTxError C.ConwayEra) (MockchainT C.ConwayEra m) a
+  }
+  deriving newtype
+    ( Functor
+    , Applicative
+    , Monad
+    , C.MonadError (BalanceTxError C.ConwayEra)
+    , C.MonadIO
+    , MonadLog
+    , MonadFail
+    , MonadBlockchain C.ConwayEra
+    , MonadMockchain C.ConwayEra
+    )
 
 -- | Opaque wrapper for model state
 newtype ModelState state = ModelState {unModelState :: state}
@@ -251,30 +288,22 @@ propRunActionsWithOptions groupName opts =
     when (verbose opts) $
       monitor (counterexample $ "Initial state: " ++ show initialSt)
 
-    result <- run $ try @SomeException $ runMockchain0IOWith Wallet.initialUTxOs params $ do
+    result <- run $ runMockchain0IOWith Wallet.initialUTxOs params $ runExceptT $ runTestingMonadT $ do
       -- Execute the valid prefix
-      (finalState, _) <-
-        foldM
-          ( \(state, _) action -> do
-              newState <- runAction opts state action
-              pure (newState, Nothing :: Maybe (C.UTxO C.ConwayEra))
-          )
-          (initialSt, Nothing)
-          actions
+      finalState <- foldM (runAction opts) initialSt actions
 
       -- Attempt the invalid action — should fail
       perform finalState badAction
 
     case result of
-      Left err -> do
+      (Left err, MockChainState{mcsCoverageData = covData}) -> do
         -- Good: the invalid action failed as expected
         -- Extract and accumulate coverage from the failure
-        let covData = tryExtractCoverageData err
-        traverse_ (\ref -> liftIO $ modifyIORef ref (<> covData)) coverageRef
+        for_ coverageRef $ \ref -> liftIO $ modifyIORef ref (<> (covData <> coverageFromBalanceTxError err))
         pure (property True)
-      Right (_, MockChainState{mcsCoverageData = covData}) -> do
+      (Right _, MockChainState{mcsCoverageData = covData}) -> do
         -- Accumulate coverage even on unexpected success
-        traverse_ (\ref -> liftIO $ modifyIORef ref (<> covData)) coverageRef
+        for_ coverageRef $ \ref -> liftIO $ modifyIORef ref (<> covData)
         -- Bad: the invalid action succeeded — contract is too permissive
         monitor (counterexample $ "Expected failure for invalid action but it succeeded")
         pure (property False)
@@ -287,7 +316,7 @@ propRunActionsWithOptions groupName opts =
     when (verbose opts) $
       monitor (counterexample $ "Initial state: " ++ show initialSt)
 
-    result <- run $ runMockchain0IOWith Wallet.initialUTxOs params $ do
+    result <- run $ runMockchain0IOWith Wallet.initialUTxOs params $ runExceptT $ runTestingMonadT $ do
       (finalState, lastUtxoBefore) <-
         foldM
           ( \(state, _) action -> do
@@ -299,7 +328,7 @@ propRunActionsWithOptions groupName opts =
           actions
       -- Get the last transaction
       allTxs <- getTxs
-      let lastTx = if null allTxs then Nothing else Just (head allTxs)
+      let lastTx = listToMaybe allTxs
 
       -- Run threat models INSIDE MockchainT with full Phase 1 + Phase 2 validation
       threatModelResult <- case (lastTx, lastUtxoBefore) of
@@ -314,14 +343,15 @@ propRunActionsWithOptions groupName opts =
       pure (finalState, threatModelResult)
 
     case result of
-      ((finalState, threatModelProp), MockChainState{mcsCoverageData = covData}) -> do
+      (Left err, MockChainState{mcsCoverageData = covData}) -> do
+        -- Extract and accumulate coverage from the failure
+        for_ coverageRef $ \ref -> liftIO $ modifyIORef ref (<> (covData <> coverageFromBalanceTxError err))
+        pure (property False)
+      (Right (finalState, threatModelProp), MockChainState{mcsCoverageData = covData}) -> do
         monitor (counterexample $ "Final state: " ++ show finalState)
         -- accumulate coverage
-        traverse_ (\ref -> liftIO $ modifyIORef ref (<> covData)) coverageRef
+        for_ coverageRef $ \ref -> liftIO $ modifyIORef ref (<> covData)
         pure threatModelProp
-
-  when True m = m
-  when False _ = return ()
 
 -- | Execute a single action and update the model state
 runAction
@@ -329,7 +359,7 @@ runAction
   => RunOptions
   -> state
   -> Action state
-  -> MockchainT C.ConwayEra IO state
+  -> TestingMonadT IO state
 runAction opts modelState action = do
   when (verbose opts) $
     liftIO $
@@ -353,11 +383,6 @@ runAction opts modelState action = do
     fail "Blockchain state does not match model state"
 
   pure modelState'
- where
-  unless True _ = pure ()
-  unless False m = m
-  when True m = m
-  when False _ = pure ()
 
 {- | Configuration for coverage collection and reporting.
 
@@ -543,3 +568,52 @@ withCoverage CoverageConfig{coverageIndices, coverageReport = reportAction} k = 
           report = CoverageReport combinedIdx covData
       reportAction report
       throwIO e
+
+-- | Options for running the testing monad.
+data Options era = Options
+  { params :: NodeParams era
+  , coverageRef :: Maybe (IORef CoverageData)
+  }
+
+defaultOptions :: Options C.ConwayEra
+defaultOptions =
+  Options
+    { params = Defaults.nodeParams
+    , coverageRef = Nothing
+    }
+
+-- | Modify the maximum transaction size in the protocol parameters of the given options
+modifyTransactionLimits :: Options C.ConwayEra -> Word32 -> Options C.ConwayEra
+modifyTransactionLimits opts@Options{params = Defaults.pParams -> pp} newVal =
+  -- TODO: use lenses to make this cleaner
+  opts
+    { params = (params opts){npProtocolParameters = C.LedgerProtocolParameters $ pp & L.ppMaxTxSizeL .~ newVal}
+    }
+
+-- | Run the 'TestingMonadT' action with the given options and fail if there is an error
+mockchainSucceedsWithOptions :: Options C.ConwayEra -> TestingMonadT IO a -> Assertion
+mockchainSucceedsWithOptions Options{params, coverageRef} action =
+  runMockchain0IOWith Wallet.initialUTxOs params (runExceptT (runTestingMonadT action))
+    >>= \(res, st) -> do
+      let covData = st ^. coverageData
+      for_ coverageRef $ \ref -> modifyIORef ref (<> covData)
+      case res of
+        Right _ -> pure ()
+        Left err -> do
+          for_ coverageRef $ \ref -> modifyIORef ref (<> coverageFromBalanceTxError err)
+          fail $ show err
+
+{- | Run the 'TestingMonadT' action with the given options, fail if it
+    succeeds, and handle the error appropriately.
+-}
+mockchainFailsWithOptions :: Options C.ConwayEra -> TestingMonadT IO a -> (BalanceTxError C.ConwayEra -> Assertion) -> Assertion
+mockchainFailsWithOptions Options{params, coverageRef} action handleError =
+  runMockchain0IOWith Wallet.initialUTxOs params (runExceptT (runTestingMonadT action))
+    >>= \(res, st) -> do
+      let covData = st ^. coverageData
+      for_ coverageRef $ \ref -> modifyIORef ref (<> covData)
+      case res of
+        Right _ -> fail "mockchainFailsWithOptions: Did not fail"
+        Left err -> do
+          for_ coverageRef $ \ref -> modifyIORef ref (<> coverageFromBalanceTxError err)
+          handleError err
