@@ -440,15 +440,16 @@ instance TestingInterface TipJarModel where
     -- \^ Owner claims all funds and closes the tipjar
     deriving stock (Show, Eq)
 
-  initialState =
-    TipJarModel
-      { tmInitialized = False
-      , tmOwner = Nothing
-      , tmMessages = []
-      , tmValue = 0
-      , tmTxIn = Nothing
-      , tmHasBeenClaimed = False
-      }
+  initialize =
+    pure $
+      TipJarModel
+        { tmInitialized = False
+        , tmOwner = Nothing
+        , tmMessages = []
+        , tmValue = 0
+        , tmTxIn = Nothing
+        , tmHasBeenClaimed = False
+        }
 
   -- Generate actions: init-type actions TIGHT, spending actions BROAD.
   -- Init creates fresh UTxO (always succeeds on Cardano) - only when not initialized.

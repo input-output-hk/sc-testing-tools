@@ -734,14 +734,15 @@ instance TestingInterface KingModel where
     -- \^ Close the competition
     deriving stock (Show, Eq)
 
-  initialState =
-    KingModel
-      { kmInitialized = False
-      , kmTxIn = Nothing
-      , kmValue = 0
-      , kmCurrentKing = Nothing
-      , kmCompetitionClosed = False
-      }
+  initialize =
+    pure $
+      KingModel
+        { kmInitialized = False
+        , kmTxIn = Nothing
+        , kmValue = 0
+        , kmCurrentKing = Nothing
+        , kmCompetitionClosed = False
+        }
 
   -- Generate actions based on state
   -- Init-type actions (InitCompetition): TIGHT - only when not initialized

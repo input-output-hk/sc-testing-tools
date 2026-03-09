@@ -902,15 +902,16 @@ instance TestingInterface BankModel where
     | WithdrawAction C.Lovelace
     deriving stock (Show, Eq)
 
-  initialState =
-    BankModel
-      { bmBankTxIn = Nothing
-      , bmBankValue = 0
-      , bmAccountTxIn = Nothing
-      , bmAccountBalance = 0
-      , bmAccountOwner = Nothing
-      , bmInitialized = False
-      }
+  initialize =
+    pure $
+      BankModel
+        { bmBankTxIn = Nothing
+        , bmBankValue = 0
+        , bmAccountTxIn = Nothing
+        , bmAccountBalance = 0
+        , bmAccountOwner = Nothing
+        , bmInitialized = False
+        }
 
   -- Generate actions following PingPong pattern:
   -- - Init actions: TIGHT (only when not initialized) - creates fresh UTxOs

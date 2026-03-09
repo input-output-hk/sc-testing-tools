@@ -371,11 +371,12 @@ instance TestingInterface SellNftModel where
     -- \^ Buy one listing by index
     deriving stock (Show, Eq)
 
-  initialState =
-    SellNftModel
-      { smListings = []
-      , smInitialized = False
-      }
+  initialize =
+    pure $
+      SellNftModel
+        { smListings = []
+        , smInitialized = False
+        }
 
   -- Generate actions: all types in every state (weighted)
   -- Precondition filters invalid ones; this enables negative testing

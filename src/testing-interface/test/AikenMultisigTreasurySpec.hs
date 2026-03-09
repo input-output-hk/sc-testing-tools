@@ -641,17 +641,18 @@ instance TestingInterface MultisigModel where
     -- \^ Use the multisig (release funds)
     deriving stock (Show, Eq)
 
-  initialState =
-    MultisigModel
-      { mmInitialized = False
-      , mmTxIn = Nothing
-      , mmValue = 0
-      , mmRequiredSigners = []
-      , mmSignedUsers = []
-      , mmBeneficiary = Nothing
-      , mmReleaseValue = 0
-      , mmHasBeenUsed = False
-      }
+  initialize =
+    pure $
+      MultisigModel
+        { mmInitialized = False
+        , mmTxIn = Nothing
+        , mmValue = 0
+        , mmRequiredSigners = []
+        , mmSignedUsers = []
+        , mmBeneficiary = Nothing
+        , mmReleaseValue = 0
+        , mmHasBeenUsed = False
+        }
 
   -- Generate actions based on state
   -- Init actions: TIGHT - only generate when not initialized

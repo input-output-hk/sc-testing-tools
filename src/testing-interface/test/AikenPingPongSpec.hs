@@ -143,12 +143,13 @@ instance TestingInterface AikenPingPongModel where
     -- \^ Play a round (Ping, Pong, or Stop)
     deriving (Show, Eq)
 
-  initialState =
-    AikenPingPongModel
-      { apmState = PingPong.Pinged
-      , apmTxIn = Nothing
-      , apmValue = 10_000_000
-      }
+  initialize =
+    pure $
+      AikenPingPongModel
+        { apmState = PingPong.Pinged
+        , apmTxIn = Nothing
+        , apmValue = 10_000_000
+        }
 
   arbitraryAction model =
     case apmTxIn model of

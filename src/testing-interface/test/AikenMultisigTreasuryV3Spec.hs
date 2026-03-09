@@ -694,18 +694,19 @@ instance TestingInterface MultisigV3Model where
     -- \^ EXPLOIT: w1 signs twice and drains
     deriving stock (Show, Eq)
 
-  initialState =
-    MultisigV3Model
-      { mmv3Initialized = False
-      , mmv3TxIn = Nothing
-      , mmv3Value = 0
-      , mmv3RequiredSigners = []
-      , mmv3SignedUsers = []
-      , mmv3Beneficiary = Nothing
-      , mmv3ReleaseValue = 0
-      , mmv3HasBeenUsed = False
-      , mmv3HasValidationToken = False
-      }
+  initialize =
+    pure $
+      MultisigV3Model
+        { mmv3Initialized = False
+        , mmv3TxIn = Nothing
+        , mmv3Value = 0
+        , mmv3RequiredSigners = []
+        , mmv3SignedUsers = []
+        , mmv3Beneficiary = Nothing
+        , mmv3ReleaseValue = 0
+        , mmv3HasBeenUsed = False
+        , mmv3HasValidationToken = False
+        }
 
   -- Generate actions based on state
   -- Init actions: TIGHT - only generate when not initialized

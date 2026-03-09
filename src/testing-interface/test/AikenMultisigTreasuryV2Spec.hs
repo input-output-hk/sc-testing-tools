@@ -672,17 +672,18 @@ instance TestingInterface MultisigV2Model where
     -- \^ EXPLOIT: attacker forges token and drains
     deriving stock (Show, Eq)
 
-  initialState =
-    MultisigV2Model
-      { mmv2Initialized = False
-      , mmv2TxIn = Nothing
-      , mmv2Value = 0
-      , mmv2RequiredSigners = []
-      , mmv2SignedUsers = []
-      , mmv2Beneficiary = Nothing
-      , mmv2ReleaseValue = 0
-      , mmv2HasBeenUsed = False
-      }
+  initialize =
+    pure $
+      MultisigV2Model
+        { mmv2Initialized = False
+        , mmv2TxIn = Nothing
+        , mmv2Value = 0
+        , mmv2RequiredSigners = []
+        , mmv2SignedUsers = []
+        , mmv2Beneficiary = Nothing
+        , mmv2ReleaseValue = 0
+        , mmv2HasBeenUsed = False
+        }
 
   -- Generate actions based on state
   -- Init actions: TIGHT - only generate when not initialized
