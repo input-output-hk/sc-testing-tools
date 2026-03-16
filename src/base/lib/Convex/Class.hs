@@ -376,6 +376,7 @@ class (MonadBlockchain era m) => MonadMockchain era m where
 
 deriving newtype instance (MonadMockchain era m) => MonadMockchain era (MonadLogIgnoreT m)
 
+instance (MonadMockchain era m) => MonadMockchain era (MonadLogKatipT m)
 instance (MonadMockchain era m) => MonadMockchain era (ResultT m)
 instance (MonadMockchain era m) => MonadMockchain era (ReaderT e m)
 instance (MonadMockchain era m) => MonadMockchain era (ExceptT e m)
