@@ -55,6 +55,7 @@ import Convex.MockChain.Utils (mockchainSucceeds)
 import Convex.TestingInterface (
   RunOptions,
   TestingInterface (..),
+  ThreatModelsFor (..),
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel.Cardano.Api (dummyTxId)
@@ -511,6 +512,7 @@ instance TestingInterface VestingModel where
 
   monitoring _state _action prop = prop
 
+instance ThreatModelsFor VestingModel where
   -- Threat models are empty because vesting is a one-shot spend contract:
   -- - Lock: Creates script output with inline datum
   -- - Unlock: Spends script output, funds go to beneficiary (NO continuation)

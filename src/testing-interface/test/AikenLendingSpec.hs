@@ -74,6 +74,7 @@ import Convex.TestingInterface (
   Options (Options, params),
   RunOptions (mcOptions),
   TestingInterface (..),
+  ThreatModelsFor (..),
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel (SigningWallet (SignWith), ThreatModelEnv (..), runThreatModelMQuiet)
@@ -947,6 +948,7 @@ instance TestingInterface LendingModel where
 
   monitoring _state _action prop = prop
 
+instance ThreatModelsFor LendingModel where
   -- threatModels is empty - vulnerabilities are tested via expectedVulnerabilities
   -- or via standalone tests.
   threatModels = []
