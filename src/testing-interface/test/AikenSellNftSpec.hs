@@ -49,6 +49,7 @@ import Convex.PlutusLedger.V1 (transAddressInEra)
 import Convex.TestingInterface (
   RunOptions,
   TestingInterface (..),
+  ThreatModelsFor (..),
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
@@ -438,6 +439,7 @@ instance TestingInterface SellNftModel where
 
   monitoring _state _action prop = prop
 
+instance ThreatModelsFor SellNftModel where
   -- NOTE: threatModels is intentionally empty for sell_nft because:
   --
   -- 1. sell_nft is a "one-shot spend" pattern: ListNft creates script outputs

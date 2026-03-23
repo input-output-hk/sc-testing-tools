@@ -66,6 +66,7 @@ import Convex.MockChain.Utils (mockchainSucceeds)
 import Convex.TestingInterface (
   RunOptions (disableNegativeTesting),
   TestingInterface (..),
+  ThreatModelsFor (..),
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel.Cardano.Api (dummyTxId)
@@ -976,6 +977,7 @@ instance TestingInterface BankModel where
 
   monitoring _state _action prop = prop
 
+instance ThreatModelsFor BankModel where
   threatModels = [unprotectedScriptOutput, negativeIntegerAttack, valueUnderpaymentAttack, mutualExclusionAttack]
 
 -- ----------------------------------------------------------------------------

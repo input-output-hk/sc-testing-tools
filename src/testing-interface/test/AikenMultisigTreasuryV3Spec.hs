@@ -76,6 +76,7 @@ import Convex.TestingInterface (
   Options (Options, params),
   RunOptions (disableNegativeTesting, mcOptions),
   TestingInterface (..),
+  ThreatModelsFor (..),
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel.Cardano.Api (dummyTxId)
@@ -837,6 +838,7 @@ instance TestingInterface MultisigV3Model where
 
   monitoring _state _action prop = prop
 
+instance ThreatModelsFor MultisigV3Model where
   -- Note: threatModels empty for same reasons as v1/v2
   threatModels = []
 
