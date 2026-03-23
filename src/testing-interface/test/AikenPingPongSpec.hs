@@ -48,6 +48,7 @@ import Convex.MockChain.Defaults qualified as Defaults
 import Convex.TestingInterface (
   RunOptions,
   TestingInterface (..),
+  ThreatModelsFor (..),
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel.Cardano.Api (dummyTxId)
@@ -244,6 +245,7 @@ instance TestingInterface AikenPingPongModel where
 
   monitoring _state _action prop = prop
 
+instance ThreatModelsFor AikenPingPongModel where
   -- The secure Aiken validator should RESIST all these attacks
   threatModels = [unprotectedScriptOutput, largeValueAttackWith 10, largeDataAttackWith 10]
 

@@ -58,6 +58,7 @@ import Convex.TestingInterface (
   RunOptions (mcOptions),
   TestingInterface (..),
   TestingMonadT (..),
+  ThreatModelsFor (..),
   mockchainFailsWithOptions,
   mockchainSucceedsWithOptions,
   propRunActionsWithOptions,
@@ -210,6 +211,7 @@ instance TestingInterface PingPongModel where
 
   monitoring _state _action prop = prop
 
+instance ThreatModelsFor PingPongModel where
   threatModels = [basicThreatModel, unprotectedScriptOutput, largeValueAttackWith 10, largeDataAttackWith 10]
   expectedVulnerabilities = []
 

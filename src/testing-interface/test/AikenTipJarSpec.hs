@@ -48,6 +48,7 @@ import Convex.MockChain.Utils (mockchainSucceeds)
 import Convex.TestingInterface (
   RunOptions,
   TestingInterface (..),
+  ThreatModelsFor (..),
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel.Cardano.Api (dummyTxId)
@@ -550,6 +551,7 @@ instance TestingInterface TipJarModel where
 
   monitoring _state _action prop = prop
 
+instance ThreatModelsFor TipJarModel where
   -- Threat models to test vulnerability detection.
   -- Note: largeDataAttackWith, largeValueAttackWith, and datumByteBloatAttackWith
   -- all FAIL (detecting vulnerabilities), so only unprotectedScriptOutput is included.

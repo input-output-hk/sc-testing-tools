@@ -43,6 +43,7 @@ import Convex.MockChain.Utils (mockchainSucceeds)
 import Convex.TestingInterface (
   RunOptions,
   TestingInterface (..),
+  ThreatModelsFor (..),
   propRunActionsWithOptions,
  )
 import Convex.Utils (failOnError)
@@ -390,6 +391,7 @@ instance TestingInterface HelloWorldModel where
 
   monitoring _state _action prop = prop
 
+instance ThreatModelsFor HelloWorldModel where
   -- No threat models for this simple contract
   threatModels = []
 

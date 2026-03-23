@@ -65,6 +65,7 @@ import Convex.TestingInterface (
   Options (Options, params),
   RunOptions (disableNegativeTesting, mcOptions),
   TestingInterface (..),
+  ThreatModelsFor (..),
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel (SigningWallet (SignWith), ThreatModelEnv (..), runThreatModelM)
@@ -813,6 +814,7 @@ instance TestingInterface KingModel where
 
   monitoring _state _action prop = prop
 
+instance ThreatModelsFor KingModel where
   -- Threat models: OverthrowKing creates a continuation output
   threatModels = [unprotectedScriptOutput, largeDataAttackWith 10]
 

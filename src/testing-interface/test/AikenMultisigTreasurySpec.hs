@@ -61,6 +61,7 @@ import Convex.TestingInterface (
   Options (Options, params),
   RunOptions (mcOptions),
   TestingInterface (..),
+  ThreatModelsFor (..),
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel.Cardano.Api (dummyTxId)
@@ -726,6 +727,7 @@ instance TestingInterface MultisigModel where
 
   monitoring _state _action prop = prop
 
+instance ThreatModelsFor MultisigModel where
   -- NOTE: threatModels is empty for multisig because most action sequences
   -- end with UseMultisig (which doesn't create a script output). Threat models
   -- like unprotectedScriptOutput require a script output, causing 100% test discard.

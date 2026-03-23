@@ -62,6 +62,7 @@ import Convex.TestingInterface (
   Options (Options, params),
   RunOptions (mcOptions),
   TestingInterface (..),
+  ThreatModelsFor (..),
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel.Cardano.Api (dummyTxId)
@@ -79,6 +80,8 @@ import PlutusLedgerApi.V1 qualified as PV1
 import PlutusTx qualified
 import PlutusTx.Builtins qualified as PlutusTx
 
+import Convex.ThreatModel.LargeData (largeDataAttack)
+import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
 import System.IO.Unsafe (unsafePerformIO)
 import Test.QuickCheck.Monadic (monadicIO, monitor, run)
 import Test.Tasty (TestTree, testGroup)
@@ -735,7 +738,8 @@ instance TestingInterface PurchaseOfferModel where
 
   monitoring _state _action prop = prop
 
-  expectedVulnerabilities = [redeemerAssetSubstitution]
+instance ThreatModelsFor PurchaseOfferModel where
+  expectedVulnerabilities = [redeemerAssetSubstitution, timeBoundManipulation, largeDataAttack]
 
 -- ----------------------------------------------------------------------------
 -- Test tree
