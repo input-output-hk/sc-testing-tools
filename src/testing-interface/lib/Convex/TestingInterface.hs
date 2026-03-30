@@ -23,9 +23,11 @@ module Convex.TestingInterface (
   propRunActionsWithOptions,
   RunOptions (..),
   defaultRunOptions,
+  genAction,
 
   -- * The Testing Monad
   TestingMonadT (..),
+  runTestingMonadT,
   mockchainSucceedsWithOptions,
   mockchainFailsWithOptions,
   Options (..),
@@ -56,7 +58,7 @@ module Convex.TestingInterface (
   TestTree,
 ) where
 
-import Control.Monad (foldM, forM, unless, when)
+import Control.Monad (forM, unless, when)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Test.HUnit (Assertion)
 import Test.QuickCheck (Arbitrary (..), Gen, Property, counterexample, discard, elements, frequency, oneof, property)
@@ -139,16 +141,12 @@ class (Show state, Eq state, Show (Action state)) => TestingInterface state wher
   precondition :: state -> Action state -> Bool
   precondition _ _ = True
 
-  {- | Update the model state after an action is performed.
-  This should reflect the expected effect of the action on the contract state.
-  -}
-  nextState :: state -> Action state -> state
-
   {- | Perform the action on the real blockchain (mockchain).
   This should execute the actual transaction(s) that implement the action.
   The current model state is provided to allow access to tracked blockchain state.
+  The returned state should reflect the expected effect of the action on the contract state.
   -}
-  perform :: (MonadIO m) => state -> Action state -> TestingMonadT m ()
+  perform :: (MonadIO m) => state -> Action state -> TestingMonadT m state
 
   {- | Validate that the blockchain state matches the model state.
   Default: no validation (always succeeds).
@@ -258,17 +256,9 @@ suchThatMaybe gen p = go (100 :: Int)
     a <- gen
     if p a then pure (Just a) else go (retries - 1)
 
--- | Generate a list of valid actions
-genActions :: (TestingInterface state) => state -> Int -> Gen [Action state]
-genActions _ 0 = pure []
-genActions s n = do
-  maybeAction <- arbitraryAction s `suchThatMaybe` precondition s
-  case maybeAction of
-    Nothing -> pure [] -- Stop if no valid action can be generated
-    Just action -> do
-      let s' = nextState s action
-      actions <- genActions s' (n - 1)
-      pure (action : actions)
+-- | Generate a valid actions
+genAction :: (TestingInterface state, Monad m) => state -> PropertyM m (Maybe (Action state))
+genAction s = pick $ arbitraryAction s `suchThatMaybe` precondition s
 
 -- | Options for running property tests
 data RunOptions = RunOptions
@@ -350,17 +340,14 @@ negativeTest opts = monadicIO $ do
   (prefixResult, prefixState) <- runTestingMonadT params $ do
     initialState <- runInitialization @state opts
 
-    (actions, badAction) <- lift $ pick $ do
-      -- Generate a valid prefix (builds up state)
-      prefix <- genActions initialState 10
-      let finalState = foldl nextState initialState prefix
-      -- Generate an action that VIOLATES the precondition in that state
+    finalState <- runActions opts 10 initialState
+
+    -- Generate an action that VIOLATES the precondition in that state
+    lift $ pick $ do
       maybeInvalid <- arbitraryAction finalState `suchThatMaybe` (not . precondition finalState)
       case maybeInvalid of
         Nothing -> discard -- tell QuickCheck to skip this case
-        Just bad -> pure (prefix, bad)
-
-    ((,) badAction) <$> foldM (runAction opts) initialState actions
+        Just bad -> pure (bad, finalState)
 
   -- Phase 2: Run the bad action starting from the state left by the valid prefix
   case prefixResult of
@@ -408,9 +395,8 @@ positiveTest opts mGetTmResultsRef tms evs = monadicIO $ do
   let RunOptions{mcOptions = Options{coverageRef, params}} = opts
   result <- runTestingMonadT params $ do
     initialState <- runInitialization @state opts
-    actions <- lift $ pick $ genActions initialState 10
 
-    finalState <- foldM (runAction opts) initialState actions
+    finalState <- runActions opts 10 initialState
 
     -- Run threat models in isolation
     -- Note: runThreatModelCheck handles rebalancing failures internally (returns TMSkipped)
@@ -608,6 +594,20 @@ expectedVulnTestCase getTmResultsRef idx tm =
                             <> show total
                             <> " transactions applicable)"
 
+-- | Generate a number of actions (with a given maximum) and run them.
+runActions
+  :: (TestingInterface state, MonadIO m)
+  => RunOptions
+  -> Int
+  -> state
+  -> TestingMonadT (PropertyM m) state
+runActions _ 0 s = pure s
+runActions opts i s = do
+  mAction <- lift $ genAction s
+  case mAction of
+    Just action -> runAction opts s action >>= runActions opts (i - 1)
+    Nothing -> pure s
+
 -- | Execute a single action and update the model state
 runAction
   :: (TestingInterface state, MonadIO m)
@@ -627,10 +627,7 @@ runAction opts modelState action = do
       "Precondition failed for action: " ++ show action
 
   -- Perform the action on the blockchain
-  perform modelState action
-
-  -- Update model state
-  let modelState' = nextState modelState action
+  modelState' <- perform modelState action
 
   -- Validate blockchain state matches model
   valid <- validate modelState'

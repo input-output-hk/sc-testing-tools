@@ -766,22 +766,7 @@ instance TestingInterface KingModel where
   precondition model CloseCompetitionAction =
     not (kmCompetitionClosed model)
 
-  nextState model action = case action of
-    OverthrowKingAction newVal ->
-      model
-        { kmValue = newVal
-        , -- Alternate between w1 and w2 as king
-          kmCurrentKing =
-            if kmCurrentKing model == Just (walletPlutusAddress Wallet.w1)
-              then Just (walletPlutusAddress Wallet.w2)
-              else Just (walletPlutusAddress Wallet.w1)
-        }
-    CloseCompetitionAction ->
-      model
-        { kmCompetitionClosed = True
-        }
-
-  perform _model action = case action of
+  perform model action = case action of
     OverthrowKingAction newVal -> do
       result <- findKingUtxos
       case result of
@@ -798,6 +783,15 @@ instance TestingInterface KingModel where
               txBody = execBuildTx $ overthrowKing @C.ConwayEra Defaults.networkId txIn datum currentValLov challenger newVal
           -- Use w1 for balance because threat model rebalancer uses w1
           void $ balanceAndSubmit mempty Wallet.w1 txBody TrailingChange []
+      pure $
+        model
+          { kmValue = newVal
+          , -- Alternate between w1 and w2 as king
+            kmCurrentKing =
+              if kmCurrentKing model == Just (walletPlutusAddress Wallet.w1)
+                then Just (walletPlutusAddress Wallet.w2)
+                else Just (walletPlutusAddress Wallet.w1)
+          }
     CloseCompetitionAction -> do
       result <- findKingUtxos
       case result of
@@ -805,6 +799,10 @@ instance TestingInterface KingModel where
         ((txIn, value, datum) : _) -> do
           let txBody = execBuildTx $ closeCompetition @C.ConwayEra Defaults.networkId txIn datum value
           void $ balanceAndSubmit mempty Wallet.w1 txBody TrailingChange []
+      pure $
+        model
+          { kmCompetitionClosed = True
+          }
    where
     headMay [] = Nothing
     headMay (x : _) = Just x

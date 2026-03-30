@@ -397,20 +397,7 @@ instance TestingInterface SellNftModel where
   precondition model (BuySingle idx) =
     not (null (smListings model)) && idx >= 0 && idx < length (smListings model)
 
-  nextState model action = case action of
-    ListNft price ->
-      model
-        { smListings = smListings model ++ [(dummyTxIn, price)]
-        }
-    BuySingle idx ->
-      let listings = smListings model
-          newListings = take idx listings ++ drop (idx + 1) listings
-       in model{smListings = newListings}
-   where
-    -- Placeholder TxIn for model tracking (actual TxIn comes from blockchain)
-    dummyTxIn = C.TxIn (C.TxId "0000000000000000000000000000000000000000000000000000000000000000") (C.TxIx 0)
-
-  perform _model action = case action of
+  perform model action = case action of
     ListNft price -> do
       -- w2 is the seller (receives payment), but w1 submits the tx (pays fees)
       -- This ensures all transactions have a change output to w1, which the
@@ -419,6 +406,10 @@ instance TestingInterface SellNftModel where
       -- re-balancer uses w1 for re-signing. See TipJar's similar pattern.
       let txBody = execBuildTx $ listNft @C.ConwayEra Defaults.networkId Wallet.w2 price
       void $ balanceAndSubmit mempty Wallet.w1 txBody TrailingChange []
+      pure $
+        model
+          { smListings = smListings model ++ [(dummyTxIn, price)]
+          }
     BuySingle idx -> do
       result <- findSellNftUtxos
       case drop idx result of
@@ -430,6 +421,12 @@ instance TestingInterface SellNftModel where
               price = fromInteger (snPrice datum) :: C.Lovelace
               txBody = execBuildTx $ buyNft @C.ConwayEra txIn sellerAddr price
           void $ balanceAndSubmit mempty Wallet.w1 txBody TrailingChange []
+      let listings = smListings model
+          newListings = take idx listings ++ drop (idx + 1) listings
+       in pure $ model{smListings = newListings}
+   where
+    -- Placeholder TxIn for model tracking (actual TxIn comes from blockchain)
+    dummyTxIn = C.TxIn (C.TxId "0000000000000000000000000000000000000000000000000000000000000000") (C.TxIx 0)
 
   validate model = do
     result <- findSellNftUtxos
