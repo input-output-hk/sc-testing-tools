@@ -682,27 +682,7 @@ instance TestingInterface PurchaseOfferModel where
   precondition model (CreateOffer _) = not (pomInitialized model) && not (pomHasBeenFulfilled model)
   precondition model FulfillOffer = pomInitialized model && not (pomHasBeenFulfilled model)
 
-  nextState model action = case action of
-    CreateOffer amount ->
-      model
-        { pomInitialized = True
-        , pomTxIn = Just (C.TxIn dummyTxId (C.TxIx 0))
-        , pomValue = amount
-        , pomDesiredPolicyId = Just testPolicyIdBytes
-        , pomDesiredTokenName = Just Nothing -- Any token accepted (vulnerable!)
-        , pomHasBeenFulfilled = False
-        }
-    FulfillOffer ->
-      model
-        { pomInitialized = False
-        , pomTxIn = Nothing
-        , pomValue = 0
-        , pomDesiredPolicyId = Nothing
-        , pomDesiredTokenName = Nothing
-        , pomHasBeenFulfilled = True
-        }
-
-  perform _model action = case action of
+  perform model action = case action of
     CreateOffer amount -> do
       -- First, mint a worthless token for the attacker
       let mintTxBody = execBuildTx $ mintBothTokensToWallet (addressInEra Defaults.networkId Wallet.w1)
@@ -717,6 +697,15 @@ instance TestingInterface PurchaseOfferModel where
                 testPolicyIdBytes
                 Nothing -- Any token - VULNERABLE pattern
       void $ balanceAndSubmit mempty Wallet.w1 txBody TrailingChange []
+      pure $
+        model
+          { pomInitialized = True
+          , pomTxIn = Just (C.TxIn dummyTxId (C.TxIx 0))
+          , pomValue = amount
+          , pomDesiredPolicyId = Just testPolicyIdBytes
+          , pomDesiredTokenName = Just Nothing -- Any token accepted (vulnerable!)
+          , pomHasBeenFulfilled = False
+          }
     FulfillOffer -> do
       result <- findPurchaseOfferUtxos
       case result of
@@ -732,6 +721,15 @@ instance TestingInterface PurchaseOfferModel where
                     worthlessTokenName -- EXPLOIT: worthless token
                     -- NOTE: Using w1 for submission for threat model compatibility
           void $ balanceAndSubmit mempty Wallet.w1 txBody TrailingChange []
+      pure $
+        model
+          { pomInitialized = False
+          , pomTxIn = Nothing
+          , pomValue = 0
+          , pomDesiredPolicyId = Nothing
+          , pomDesiredTokenName = Nothing
+          , pomHasBeenFulfilled = True
+          }
 
   -- Simplified validation
   validate _model = pure True
