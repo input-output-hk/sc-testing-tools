@@ -38,7 +38,7 @@ common lang
     -Wredundant-constraints -Widentities
 
 library
-  import:         lang
+  import:        lang
 
   -- exposed-modules:
   --   Cardano.Api.Extras
@@ -49,7 +49,7 @@ library
   --   Convex.Query
   --   Convex.UTxOCompatibility
 
-  hs-source-dirs: lib
+  -- hs-source-dirs: lib
   build-depends:
     , aeson
     , base                >=4.14.0
