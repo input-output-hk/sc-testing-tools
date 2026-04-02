@@ -26,10 +26,10 @@ jobs:
           ghc-version: '9.6.6'
           cabal-version: '3.10.3.0'
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Cache .cabal
-        uses: actions/cache@v3
+        uses: actions/cache@v5
         with:
           path: ${{ steps.cabal-setup.outputs.cabal-store }}
           key: cabal-haddocks-${{ hashFiles('cabal.project') }}
@@ -40,7 +40,7 @@ jobs:
           cabal haddock-project --local --output=haddocks
 
       - name: Upload GH pages artifact
-        uses: actions/upload-pages-artifact@v3.0.1
+        uses: actions/upload-pages-artifact@v4.0.0
         with:
           path: haddocks
 
@@ -67,4 +67,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v2 # or the latest "vX.X.X" version tag for this action
+        uses: actions/deploy-pages@v5
