@@ -9,6 +9,7 @@
 module Escrow.Scripts (
   escrowValidatorScript,
   Escrow.EscrowParams (..),
+  saveEscrowValidatorScript,
 ) where
 
 import Cardano.Api qualified as C
