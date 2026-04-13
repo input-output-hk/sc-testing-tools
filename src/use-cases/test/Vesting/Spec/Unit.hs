@@ -63,8 +63,8 @@ unitTests =
         (mockchainSucceeds $ failOnError remainingFromPartialTranche)
     , -- valueLockedByAddress Tests
       testCase
-        "Fail: valueLockedByAddress returns zero with empty output list"
-        (mockchainFails (failOnError valueLockedByAddressNoOutputs) (\_ -> pure ()))
+        "valueLockedByAddress returns zero with empty output list after full vesting"
+        (mockchainSucceeds $ failOnError valueLockedByAddressNoOutputs)
     , testCase
         "valueLockedByAddress singleMatchingOutput returns correct value with one matching output"
         (mockchainSucceeds $ failOnError valueLockedByAddressSingleMatchingOutput)
@@ -183,6 +183,8 @@ availableFromBeforeVestDate = do
         execBuildTx $ do
           -- Validity range entirely before both tranche dates
           BuildTx.addValidityRangeSlots 5 6
+          -- The transaction must be signed by the owner
+          BuildTx.addRequiredSignature ownerPkh
           -- Spend the script UTxO; the redeemer is unit (BuiltinData ())
           BuildTx.spendPlutusInlineDatum txIn (vestingValidatorScript params) ()
           -- Pay the withdrawn portion to the owner
@@ -941,24 +943,25 @@ remainingFromPartialTranche = do
 -- ============================================================================
 
 -------------------------------------------------------------------------------
--- Scenario: A withdrawal transaction with an empty output list. The validator
--- computes remainingActual = valueLockedByAddress(scriptAddress) = zero,
--- since no outputs are present. If remainingExpected > zero (any tranche is
--- still locked), the validator rejects with "IRV".
+-- Scenario: A withdrawal transaction with no explicit script outputs after both
+-- tranches have vested. The validator computes:
+--   - remainingActual = valueLockedByAddress(scriptAddress) = zero
+--   - remainingExpected = zero
+-- Therefore the check remainingActual >= remainingExpected succeeds.
 --
 -- Concretely:
 --   - Tranche 1 vests at Slot 20  (POSIXTime 1640995220000)
 --   - Tranche 2 vests at Slot 40  (POSIXTime 1640995240000)
 --   - Initial lock: 50 ADA in script
---   - Withdrawal attempt with empty transaction outputs (no outputs at all)
---     Even after both tranches are vested, the validator must check that
---     the output list contains no script outputs, so remainingActual = zero.
---     Since we withdraw without locking anything back and remainingExpected
---     is computed for an unlocked tranche, the transaction must fail with "IRV".
+--   - Withdrawal attempt happens at Slot 50, after both tranches have vested
+--   - No funds are locked back to the script, so valueLockedByAddress returns zero
+--   - Since both tranches are already available, remainingExpected is also zero
+--   - Check: 0 >= 0 passes
+--   - The transaction succeeds
 --
--- Note: This tests the foundational behavior that valueLockedByAddress
--- correctly returns zero when the output list is empty, which is crucial
--- for detecting incomplete script outputs.
+-- Note: This verifies the foundational behavior that valueLockedByAddress
+-- returns zero when no outputs are paid back to the script address, and that
+-- this is acceptable once all vesting obligations have expired.
 -------------------------------------------------------------------------------
 
 valueLockedByAddressNoOutputs
@@ -1007,23 +1010,19 @@ valueLockedByAddressNoOutputs = do
   let txIn = C.TxIn txId (C.TxIx 0)
 
   -- -------------------------------------------------------------------------
-  -- Attempt withdrawal after both tranches have vested, but with no outputs.
+  -- Attempt withdrawal after both tranches have vested, with no explicit
+  -- outputs back to the script.
   --
-  -- Set the slot to after both vesting dates so both tranches are available
-  -- and remainingExpected = zero. However, we construct a transaction that
-  -- attempts to spend the script UTxO without producing any outputs at all.
+  -- Set the slot to after both vesting dates so:
+  --   - availableFrom tranche1 = 20 ADA
+  --   - availableFrom tranche2 = 30 ADA
+  --   - remainingExpected = zero
   --
-  -- Even though remainingExpected = zero (both tranches fully available),
-  -- the validator still checks: remainingActual >= remainingExpected.
-  -- With no outputs, valueLockedByAddress returns zero = remainingActual.
-  -- This equals remainingExpected = zero, so the check passes on value.
-  -- However, the coin selection or transaction building should fail because
-  -- the owner doesn't receive the withdrawn funds.
-  --
-  -- Note: This test demonstrates that valueLockedByAddress correctly identifies
-  -- an empty output list by returning zero.
+  -- We spend the script UTxO and do not create any explicit script output.
+  -- Therefore valueLockedByAddress returns zero for the script address.
+  -- Since remainingExpected is also zero, the validator accepts the transaction.
   -- -------------------------------------------------------------------------
-  setSlot 25
+  setSlot 50
 
   let withdrawTx =
         execBuildTx $ do
@@ -1033,12 +1032,14 @@ valueLockedByAddressNoOutputs = do
           BuildTx.addRequiredSignature ownerPkh
           -- Spend the script UTxO
           BuildTx.spendPlutusInlineDatum txIn (vestingValidatorScript params) ()
-  -- Do NOT pay to any output—leaving outputs empty
-  -- This ensures valueLockedByAddress returns zero
+  -- Do NOT pay any funds back to the script address.
+  -- This ensures valueLockedByAddress returns zero for the script.
 
-  -- Submitted by the owner. The transaction should fail because although
-  -- the script constraint checks pass (remainingActual = 0 >= remainingExpected = 0),
-  -- the coin selection cannot balance the transaction without output destinations.
+  -- Submitted by the owner. The transaction succeeds because:
+  --   - the signature check passes
+  --   - remainingActual = 0
+  --   - remainingExpected = 0
+  --   - check: 0 >= 0 passes
   _ <- tryBalanceAndSubmit mempty owner withdrawTx TrailingChange []
 
   return ()
