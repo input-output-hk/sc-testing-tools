@@ -18,6 +18,7 @@ import Convex.Tasty.Streaming.QCStats (
  )
 import Convex.Tasty.Streaming.SrcLoc (PackageRootOpt (..), callerPackageRoot)
 import Convex.Tasty.Streaming.TMSummary (
+  CoverageIndexStorage (..),
   TMRecorder,
   TMStoreOption (..),
   TraceRecorder (..),
@@ -132,6 +133,7 @@ streamingJsonReporter = TestReporter
   , Option (Proxy :: Proxy TMStoreOption)
   , Option (Proxy :: Proxy TMRecorder)
   , Option (Proxy :: Proxy TraceRecorder)
+  , Option (Proxy :: Proxy CoverageIndexStorage)
   , Option (Proxy :: Proxy TestMapRef)
   , Option (Proxy :: Proxy StreamingEnabledRef)
   , Option (Proxy :: Proxy OutputLockRef)
@@ -146,6 +148,7 @@ streamingJsonReporter = TestReporter
             QCStatsStoreOption mQCStatsStore = lookupOption opts
             TestMapRef mTestMapRef = lookupOption opts
             StreamingEnabledRef mEnabledRef = lookupOption opts
+            CoverageIndexStorage coverageIndex = lookupOption opts
 
         -- Signal that streaming is active so the TraceRecorder callback
         -- (which checks the same IORef) actually emits events.
@@ -182,7 +185,7 @@ streamingJsonReporter = TestReporter
 
         -- Emit suite_started with full test list
         let testInfos = map snd $ IntMap.toAscList testMap
-        emit $ SuiteStarted mPkgRoot testInfos
+        emit $ SuiteStarted mPkgRoot testInfos coverageIndex
 
         -- Track results for final summary
         resultsVar <- newTVarIO ([] :: [(Int, Result)])
@@ -320,9 +323,11 @@ listTestsJsonIngredient :: Ingredient
 listTestsJsonIngredient = TestManager
   [ Option (Proxy :: Proxy ListTestsJson)
   , Option (Proxy :: Proxy PackageRootOpt)
+  , Option (Proxy :: Proxy CoverageIndexStorage)
   ]
   $ \opts tree -> do
     let ListTestsJson enabled = lookupOption opts
+        CoverageIndexStorage coverageIndex = lookupOption opts
     if not enabled
       then Nothing
       else Just $ do
@@ -330,7 +335,7 @@ listTestsJsonIngredient = TestManager
         let PackageRootOpt mPkgRoot = lookupOption opts
         testMap <- buildTestMap opts tree
         let testInfos = map snd $ IntMap.toAscList testMap
-        emitEvent $ SuiteStarted mPkgRoot testInfos
+        emitEvent $ SuiteStarted mPkgRoot testInfos coverageIndex
         pure True
 
 -- | Default ingredients with streaming reporter added
@@ -397,7 +402,7 @@ defaultMainStreaming tree = do
   let traceRec =
         TraceRecorder
           { trEnabled = readIORef enabledRef
-          , recordIteration = \group category iterationJson -> do
+          , recordIteration = \group category covered iterationJson -> do
               enabled <- readIORef enabledRef
               when enabled $ do
                 testMap <- readIORef testMapRef
@@ -408,6 +413,7 @@ defaultMainStreaming tree = do
                       { ettTestId = testId
                       , ettCategory = Text.pack category
                       , ettTrace = iterationJson
+                      , ettCovered = covered
                       }
           }
   let treeWithOptions =

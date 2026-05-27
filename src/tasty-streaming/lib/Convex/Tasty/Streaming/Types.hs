@@ -10,7 +10,7 @@ module Convex.Tasty.Streaming.Types (
   MonitoringTableEntry (..),
 ) where
 
-import Convex.Tasty.Streaming.SrcLoc (SrcLocRange)
+import Convex.Tasty.Streaming.SrcLoc (SrcLocRange, groupRanges, ungroupRanges)
 import Convex.Tasty.Streaming.TMSummary (ThreatModelSummary)
 import Data.Aeson (FromJSON (..), ToJSON (..), Value, object, withObject, (.:), (.:?), (.=))
 import Data.Aeson.Types (Pair)
@@ -192,6 +192,7 @@ data Event
       'srcLocFile' values across packages in multi-package workspaces.
       -}
       , esTests :: ![TestInfo]
+      , edCoverageIndex :: ![SrcLocRange]
       }
   | TestStarted
       { etId :: !Int
@@ -212,6 +213,7 @@ data Event
   | TestTrace
       { ettTestId :: !Int
       , ettCategory :: !Text
+      , ettCovered :: ![SrcLocRange]
       , ettTrace :: !Value -- pre-serialized IterationTrace JSON
       }
   | SuiteDone
@@ -222,10 +224,11 @@ data Event
   deriving (Eq, Show, Generic)
 
 instance ToJSON Event where
-  toJSON (SuiteStarted mRoot ts) =
+  toJSON (SuiteStarted mRoot ts ci) =
     object $
       [ "event" .= ("suite_started" :: Text)
       , "tests" .= ts
+      , "coverageIndex" .= groupRanges ci
       ]
         <> maybe [] (\r -> ["packageRoot" .= r]) mRoot
   toJSON (TestStarted i) =
@@ -260,12 +263,13 @@ instance ToJSON Event where
     threatModelFields = maybe [] (\s -> ["threat_model" .= s])
     monitoringFields :: Maybe MonitoringStats -> [Pair]
     monitoringFields = maybe [] (\s -> ["monitoring_stats" .= s])
-  toJSON (TestTrace i cat trace) =
+  toJSON (TestTrace i cat cov trace) =
     object
       [ "event" .= ("test_trace" :: Text)
       , "id" .= i
       , "category" .= cat
       , "trace" .= trace
+      , "covered" .= groupRanges cov
       ]
   toJSON (SuiteDone p f dur) =
     object
@@ -283,6 +287,7 @@ instance FromJSON Event where
         SuiteStarted
           <$> o .:? "packageRoot"
           <*> o .: "tests"
+          <*> (ungroupRanges <$> o .: "coverageIndex")
       "test_started" ->
         TestStarted <$> o .: "id"
       "test_progress" ->
@@ -306,6 +311,7 @@ instance FromJSON Event where
         TestTrace
           <$> o .: "id"
           <*> o .: "category"
+          <*> (ungroupRanges <$> o .: "covered")
           <*> o .: "trace"
       "suite_done" ->
         SuiteDone

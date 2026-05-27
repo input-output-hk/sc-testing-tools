@@ -4,14 +4,15 @@ import Cardano.Api qualified as C
 import Convex.MockChain.Utils (mockchainFails)
 import Convex.Tasty.HUnit (testCase)
 import Convex.Tasty.Streaming (defaultMainStreaming)
+
 import Convex.TestingInterface (
-  CoverageConfig (..),
   Options,
   RunOptions (mcOptions),
+  defaultOptions,
+  defaultRunOptions,
   mockchainSucceedsWithOptions,
   modifyTransactionLimits,
-  withCoverage,
-  writeCoverageReport,
+  withCoverageIndices,
  )
 import Convex.Utils (failOnError)
 import Test.Tasty (TestTree, testGroup)
@@ -38,20 +39,16 @@ import Scripts (pingPongCovIdx)
 import Scripts qualified
 
 main :: IO ()
-main = withCoverage config $ \opts0 runOpts0 ->
+main =
   let
     -- Use 50000 byte limit because secure PingPong paths with datum-hash
     -- spends is large
-    opts = modifyTransactionLimits opts0 50_000
-    runOpts = runOpts0{mcOptions = opts}
+    opts = modifyTransactionLimits defaultOptions 50_000
+    runOpts = defaultRunOptions{mcOptions = opts}
    in
-    defaultMainStreaming (tests opts runOpts)
- where
-  config =
-    CoverageConfig
-      { coverageIndices = [pingPongCovIdx]
-      , coverageReport = writeCoverageReport "coverage-report.ignore.txt"
-      }
+    defaultMainStreaming $
+      withCoverageIndices [pingPongCovIdx] $
+        tests opts runOpts
 
 tests :: Options C.ConwayEra -> RunOptions -> TestTree
 tests opts runOpts =

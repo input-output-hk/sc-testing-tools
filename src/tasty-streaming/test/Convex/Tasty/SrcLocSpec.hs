@@ -239,7 +239,7 @@ suiteStartedWithPackageRoot = do
           , tiPath = ["group"]
           , tiSrcLoc = Nothing
           }
-      evt = SuiteStarted (Just "/abs/path/to/pkg") [info]
+      evt = SuiteStarted (Just "/abs/path/to/pkg") [info] []
       encoded = Aeson.encode evt
   -- The "packageRoot" key must be present at the top level.
   case Aeson.decode encoded :: Maybe Aeson.Value of
@@ -267,7 +267,7 @@ suiteStartedWithoutPackageRoot = do
           , tiPath = []
           , tiSrcLoc = Nothing
           }
-      evt = SuiteStarted Nothing [info]
+      evt = SuiteStarted Nothing [info] []
       encoded = Aeson.encode evt
   -- The "packageRoot" key must be absent (NOT "packageRoot": null).
   case Aeson.decode encoded :: Maybe Aeson.Value of

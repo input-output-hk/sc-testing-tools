@@ -36,14 +36,6 @@ main = defaultMainStreaming tests
 
 `defaultMainStreaming` behaves identically to `defaultMain` by default. The streaming features are only activated when their CLI flags are passed. Normal console output is unchanged.
 
-If you use a wrapper like `withCoverage`, just replace the `defaultMain` call inside it:
-
-```haskell
-main :: IO ()
-main = withCoverage config $ \opts runOpts ->
-  defaultMainStreaming (tests opts runOpts)
-```
-
 ### 3. Add the package to `cabal.project`
 
 ```

@@ -20,6 +20,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 
 -- Types from convex-tasty-streaming
+import Convex.Tasty.Streaming.SrcLoc (SrcLocRanges (..))
 import Convex.Tasty.Streaming.TMSummary (ThreatModelSummary (..))
 import Convex.Tasty.Streaming.Types (
   Event (..),
@@ -228,6 +229,22 @@ instance ToSchema MonitoringStats where
               ]
           & required .~ ["numTests", "numDiscarded", "labels", "classes", "tables"]
 
+instance ToSchema SrcLocRanges where
+  declareNamedSchema _ = do
+    pure $
+      NamedSchema (Just "SrcLocRanges") $
+        mempty
+          & type_ ?~ OpenApiObject
+          & properties
+            .~ InsOrdHashMap.fromList
+              [ ("file", Inline $ mempty & type_ ?~ OpenApiString)
+              , ("startLines", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject (Inline $ mempty & type_ ?~ OpenApiInteger))
+              , ("startCols", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject (Inline $ mempty & type_ ?~ OpenApiInteger))
+              , ("endLines", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject (Inline $ mempty & type_ ?~ OpenApiInteger))
+              , ("endCols", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject (Inline $ mempty & type_ ?~ OpenApiInteger))
+              ]
+          & required .~ ["file", "startLines", "startCols", "endLines", "endCols"]
+
 instance ToSchema Event where
   declareNamedSchema _ = do
     testInfoRef <- declareSchemaRef (Proxy @TestInfo)
@@ -235,6 +252,7 @@ instance ToSchema Event where
     threatModelSummaryRef <- declareSchemaRef (Proxy @ThreatModelSummary)
     monitoringStatsRef <- declareSchemaRef (Proxy @MonitoringStats)
     iterationTraceRef <- declareSchemaRef (Proxy @IterationTrace)
+    srcLocRanges <- declareSchemaRef (Proxy @SrcLocRanges)
 
     let suiteStarted =
           mempty
@@ -244,8 +262,9 @@ instance ToSchema Event where
                 [ ("event", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["suite_started"])
                 , ("packageRoot", Inline $ mempty & type_ ?~ OpenApiString) -- optional: absolute path to cabal package root
                 , ("tests", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject testInfoRef)
+                , ("coverageIndex", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject srcLocRanges)
                 ]
-            & required .~ ["event", "tests"]
+            & required .~ ["event", "tests", "coverageIndex"]
 
     let testStarted =
           mempty
@@ -296,9 +315,10 @@ instance ToSchema Event where
                 [ ("event", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["test_trace"])
                 , ("id", Inline $ mempty & type_ ?~ OpenApiInteger)
                 , ("category", Inline $ mempty & type_ ?~ OpenApiString)
+                , ("covered", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject srcLocRanges)
                 , ("trace", iterationTraceRef) -- pre-serialized but matches IterationTrace schema
                 ]
-            & required .~ ["event", "id", "category", "trace"]
+            & required .~ ["event", "id", "category", "covered", "trace"]
 
     let suiteDone =
           mempty
