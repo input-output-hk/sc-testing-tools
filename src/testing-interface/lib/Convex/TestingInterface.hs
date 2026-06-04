@@ -24,6 +24,7 @@ module Convex.TestingInterface (
   propRunActionsWithOptions,
   RunOptions (..),
   defaultRunOptions,
+  defaultMainTestingInterface,
   genAction,
   runActions,
 
@@ -87,6 +88,7 @@ import Convex.MonadLog (MonadLog)
 import Convex.NodeParams (NodeParams (..))
 import Convex.Tasty.Streaming.SrcLoc (withSrcLoc)
 import Convex.Tasty.Streaming.TMSummary (TMRecorder, ThreatModelSummary (..), TraceRecorder (..), tmRecord)
+import Convex.TestingInterface.Options (defaultMainTestingInterface)
 import Convex.TestingInterface.Trace (
   IterationStatus (..),
   IterationTrace (..),

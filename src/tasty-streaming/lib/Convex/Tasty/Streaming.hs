@@ -3,12 +3,13 @@ module Convex.Tasty.Streaming (
   listTestsJsonIngredient,
   streamingIngredients,
   defaultMainStreaming,
+  defaultMainStreamingWithIngredients,
 ) where
 
 import Control.Concurrent.Async (forConcurrently_)
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Concurrent.STM
-import Control.Monad (when)
+import Control.Monad (unless, when)
 import Convex.Tasty.Streaming.SrcLoc (PackageRootOpt (..), callerPackageRoot)
 import Convex.Tasty.Streaming.TMSummary (
   TMRecorder,
@@ -25,13 +26,19 @@ import Data.ByteString.Lazy.Char8 qualified as BL8
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
+import Data.IntSet qualified as IntSet
+import Data.Map.Strict qualified as Map
+import Data.Maybe (mapMaybe)
 import Data.Proxy (Proxy (..))
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Tagged (Tagged (..))
 import Data.Text qualified as Text
 import Data.Typeable (Typeable)
 import GHC.Stack (HasCallStack, withFrozenCallStack)
-import System.IO (BufferMode (..), hFlush, hSetBuffering, stdout)
-import Test.Tasty (TestTree, defaultMainWithIngredients, localOption)
+import System.Exit (exitFailure)
+import System.IO (BufferMode (..), hFlush, hPutStrLn, hSetBuffering, stderr, stdout)
+import Test.Tasty (defaultMainWithIngredients, localOption)
 import Test.Tasty.Ingredients (Ingredient (..))
 import Test.Tasty.Ingredients.ConsoleReporter (consoleTestReporter)
 import Test.Tasty.Options (IsOption (..), OptionDescription (..), lookupOption, mkFlagCLParser, safeRead)
@@ -41,7 +48,9 @@ import Test.Tasty.Runners (
   Progress (..),
   Result (..),
   Status (..),
+  TestTree (..),
   listingTests,
+  parseOptions,
  )
 
 -- | Command-line option to enable streaming JSON output
@@ -76,6 +85,45 @@ instance IsOption ListTestsJson where
   optionName = Tagged "list-tests-json"
   optionHelp = Tagged "List all tests as a JSON object and exit without running"
   optionCLParser = mkFlagCLParser mempty (ListTestsJson True)
+
+-- | Command-line option to run only tests whose Tasty IDs are selected.
+newtype TestIdFilter = TestIdFilter [Int]
+  deriving (Eq, Ord, Typeable)
+
+instance Monoid TestIdFilter where
+  mempty = TestIdFilter []
+
+instance Semigroup TestIdFilter where
+  TestIdFilter a <> TestIdFilter b = TestIdFilter (a <> b)
+
+instance IsOption TestIdFilter where
+  defaultValue = TestIdFilter []
+  parseValue raw = TestIdFilter <$> parseTestIds raw
+   where
+    parseTestIds s =
+      let tokens = map trim (splitOn ',' s)
+          nonEmpty = filter (not . null) tokens
+       in traverse parseOne nonEmpty
+    parseOne token =
+      case safeRead token :: Maybe Int of
+        Just n | n >= 0 -> Just n
+        _ -> Nothing
+    splitOn _ [] = []
+    splitOn delim s = case break (== delim) s of
+      (a, []) -> [a]
+      (a, _ : rest) -> a : splitOn delim rest
+    trim = dropWhile (== ' ') . reverse . dropWhile (== ' ') . reverse
+  optionName = Tagged "test-id"
+  optionHelp = Tagged "Run only tests whose Tasty IDs match these values (comma-separated); discover IDs with --list-tests-json"
+
+-- | Internal option carrying filtered->original test ID remapping.
+newtype TestIdRemap = TestIdRemap (Maybe (IntMap Int))
+
+instance IsOption TestIdRemap where
+  defaultValue = TestIdRemap Nothing
+  parseValue = const Nothing
+  optionName = Tagged "test-id-remap"
+  optionHelp = Tagged "internal: filtered-to-original test id remapping"
 
 {- | Internal option carrying a shared 'IORef Bool' that is set to 'True' by
 the streaming reporter when @--streaming-json@ is active.  The
@@ -120,6 +168,7 @@ streamingJsonReporter :: Ingredient
 streamingJsonReporter = TestReporter
   [ Option (Proxy :: Proxy StreamingJson)
   , Option (Proxy :: Proxy NoTrace)
+  , Option (Proxy :: Proxy TestIdRemap)
   , Option (Proxy :: Proxy TMStoreOption)
   , Option (Proxy :: Proxy TMRecorder)
   , Option (Proxy :: Proxy TraceRecorder)
@@ -171,7 +220,10 @@ streamingJsonReporter = TestReporter
         let PackageRootOpt mPkgRoot = lookupOption opts
 
         -- Emit suite_started with full test list
-        let testInfos = map snd $ IntMap.toAscList testMap
+        let TestIdRemap mRemap = lookupOption opts
+            remapId i = maybe i (IntMap.findWithDefault i i) mRemap
+            remapInfo ti = ti{tiId = remapId (tiId ti)}
+            testInfos = map (remapInfo . snd) $ IntMap.toAscList testMap
         emit $ SuiteStarted mPkgRoot testInfos
 
         -- Track results for final summary
@@ -187,7 +239,7 @@ streamingJsonReporter = TestReporter
               _ -> pure ()
 
           -- Emit test_started
-          emit $ TestStarted idx
+          emit $ TestStarted (remapId idx)
 
           -- Wait for completion, emitting progress events along the way
           let waitLoop lastSeen = do
@@ -205,7 +257,7 @@ streamingJsonReporter = TestReporter
                   Left p -> do
                     emit $
                       TestProgress
-                        { epId = idx
+                        { epId = remapId idx
                         , epMessage = Text.pack (progressText p)
                         , epPercent = progressPercent p
                         }
@@ -239,7 +291,7 @@ streamingJsonReporter = TestReporter
                       }
           emit $
             TestDone
-              { edId = idx
+              { edId = remapId idx
               , edOutcome = outcome
               , edDuration = resultTime result
               , edDescription = Text.pack (resultDescription result)
@@ -305,6 +357,7 @@ Activated via @--list-tests-json@.
 listTestsJsonIngredient :: Ingredient
 listTestsJsonIngredient = TestManager
   [ Option (Proxy :: Proxy ListTestsJson)
+  , Option (Proxy :: Proxy TestIdRemap)
   , Option (Proxy :: Proxy PackageRootOpt)
   ]
   $ \opts tree -> do
@@ -314,14 +367,73 @@ listTestsJsonIngredient = TestManager
       else Just $ do
         hSetBuffering stdout LineBuffering
         let PackageRootOpt mPkgRoot = lookupOption opts
+            TestIdRemap mRemap = lookupOption opts
+            remapId i = maybe i (IntMap.findWithDefault i i) mRemap
+            remapInfo ti = ti{tiId = remapId (tiId ti)}
         testMap <- buildTestMap opts tree
-        let testInfos = map snd $ IntMap.toAscList testMap
+        let testInfos = map (remapInfo . snd) $ IntMap.toAscList testMap
         emitEvent $ SuiteStarted mPkgRoot testInfos
         pure True
 
+-- | Option ingredient for selecting a subset of tests by Tasty ID.
+testIdFilterIngredient :: Ingredient
+testIdFilterIngredient =
+  TestManager
+    [Option (Proxy :: Proxy TestIdFilter)]
+    (\_ _ -> Nothing)
+
 -- | Default ingredients with streaming reporter added
 streamingIngredients :: [Ingredient]
-streamingIngredients = [listingTests, listTestsJsonIngredient, streamingJsonReporter, consoleTestReporter]
+streamingIngredients = [listingTests, testIdFilterIngredient, listTestsJsonIngredient, streamingJsonReporter, consoleTestReporter]
+
+filterTreeByPaths :: Set [String] -> TestTree -> Maybe TestTree
+filterTreeByPaths selected = go []
+ where
+  go path tree = case tree of
+    SingleTest name _t ->
+      let fullPath = path <> [name]
+       in if fullPath `Set.member` selected
+            then Just tree
+            else Nothing
+    TestGroup name children ->
+      let childPath = path <> [name]
+          keptChildren = mapMaybe (go childPath) children
+       in if null keptChildren
+            then Nothing
+            else Just (TestGroup name keptChildren)
+    PlusTestOptions f subtree ->
+      fmap (PlusTestOptions f) (go path subtree)
+    WithResource spec mkTree ->
+      Just (WithResource spec (\ioRes -> maybe (TestGroup "filtered-out" []) id (go path (mkTree ioRes))))
+    AskOptions k ->
+      Just (AskOptions (\opts -> maybe (TestGroup "filtered-out" []) id (go path (k opts))))
+    After dep expr subtree ->
+      fmap (After dep expr) (go path subtree)
+
+expandSelectedTestIds :: IntMap TestInfo -> IntSet.IntSet -> IntSet.IntSet
+expandSelectedTestIds testMap selectedIds =
+  IntSet.union selectedIds prerequisiteIds
+ where
+  pathToId =
+    Map.fromList
+      [ (tiPath ti <> [tiName ti], tiId ti)
+      | ti <- IntMap.elems testMap
+      ]
+  prerequisiteIds =
+    IntSet.fromList
+      [ positiveId
+      | selectedId <- IntSet.toList selectedIds
+      , Just positiveId <- [positiveTestIdFor selectedId]
+      ]
+  positiveTestIdFor selectedId = do
+    ti <- IntMap.lookup selectedId testMap
+    case tiPath ti of
+      [] -> Nothing
+      groupPath
+        | last groupPath == Text.pack "Threat models"
+            || last groupPath == Text.pack "Expected vulnerabilities" ->
+            Map.lookup (init groupPath <> [Text.pack "Positive tests"]) pathToId
+        | otherwise -> Nothing
 
 {- | Drop-in replacement for 'defaultMain' that supports @--streaming-json@.
 
@@ -357,7 +469,19 @@ be extracted), @packageRoot@ is omitted from the JSON output (consistent
 with the existing @Maybe@-as-absent-key convention).
 -}
 defaultMainStreaming :: (HasCallStack) => TestTree -> IO ()
-defaultMainStreaming tree = do
+defaultMainStreaming = defaultMainStreamingWithIngredients []
+
+{- | Variant of 'defaultMainStreaming' that allows callers to prepend
+additional ingredients (e.g. package-specific CLI option managers).
+
+The same internal streaming wiring is always installed (threat-model
+summary store, trace recorder, shared output lock, and package root
+capture from call-site), then Tasty runs with:
+
+@extraIngredients <> streamingIngredients@
+-}
+defaultMainStreamingWithIngredients :: (HasCallStack) => [Ingredient] -> TestTree -> IO ()
+defaultMainStreamingWithIngredients extraIngredients tree = do
   -- Capture the package root from the user's call site BEFORE doing any
   -- other work. 'withFrozenCallStack' freezes our caller's call stack so
   -- that inside 'callerPackageRoot' the top frame is the user's Main.hs
@@ -367,6 +491,7 @@ defaultMainStreaming tree = do
   let pkgRootOpt = PackageRootOpt (fmap Text.pack mPkgRoot)
   store <- newTMStore
   testMapRef <- newIORef IntMap.empty
+  testIdRemapRef <- newIORef IntMap.empty
   enabledRef <- newIORef False -- set to True by the reporter when --streaming-json is active
   -- Create a single shared output lock used by both the streaming reporter
   -- and the TraceRecorder so their NDJSON lines never interleave.
@@ -387,15 +512,17 @@ defaultMainStreaming tree = do
               when enabled $ do
                 testMap <- readIORef testMapRef
                 let testId = findTestId testMap group category
+                remap <- readIORef testIdRemapRef
+                let mappedId = IntMap.findWithDefault testId testId remap
                 withMVar outputLock $ \_ ->
                   emitEvent $
                     TestTrace
-                      { ettTestId = testId
+                      { ettTestId = mappedId
                       , ettCategory = Text.pack category
                       , ettTrace = iterationJson
                       }
           }
-  let tree' =
+  let baseTree =
         localOption pkgRootOpt $
           localOption (TMStoreOption (Just store)) $
             localOption (storeRecorder store) $
@@ -403,4 +530,39 @@ defaultMainStreaming tree = do
                 localOption (StreamingEnabledRef (Just enabledRef)) $
                   localOption (OutputLockRef (Just outputLock)) $
                     localOption traceRec tree
-  defaultMainWithIngredients streamingIngredients tree'
+
+  opts <- parseOptions (extraIngredients <> streamingIngredients) baseTree
+  let TestIdFilter requested = lookupOption opts
+      requestedIdSet = IntSet.fromList requested
+
+  tree' <-
+    if IntSet.null requestedIdSet
+      then pure baseTree
+      else do
+        fullMap <- buildTestMap opts baseTree
+        let unknown = IntSet.toAscList $ IntSet.difference requestedIdSet (IntSet.fromList (IntMap.keys fullMap))
+        unless (null unknown) $ do
+          hPutStrLn stderr $ "Unknown test id(s) for --test-id: " <> show unknown
+          hPutStrLn stderr "Use --list-tests-json to discover valid test IDs for this suite."
+          exitFailure
+
+        let selectedIdSet = expandSelectedTestIds fullMap requestedIdSet
+            selectedIds = IntSet.toAscList selectedIdSet
+            selectedInfos = map (fullMap IntMap.!) selectedIds
+            selectedPaths =
+              Set.fromList
+                [ map Text.unpack (tiPath ti <> [tiName ti])
+                | ti <- selectedInfos
+                ]
+            remap = IntMap.fromAscList (zip [0 ..] selectedIds)
+
+        writeIORef testIdRemapRef remap
+
+        case filterTreeByPaths selectedPaths baseTree of
+          Nothing -> do
+            hPutStrLn stderr "No tests remained after applying --test-id selection."
+            exitFailure
+          Just filteredTree ->
+            pure $ localOption (TestIdRemap (Just remap)) filteredTree
+
+  defaultMainWithIngredients (extraIngredients <> streamingIngredients) tree'

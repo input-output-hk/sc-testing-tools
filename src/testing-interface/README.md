@@ -132,11 +132,27 @@ threat models include:
 ### 4. Write Properties and Run Tests
 
 ```haskell
+import Convex.TestingInterface (defaultMainTestingInterface, propRunActions)
+import Test.Tasty (testGroup)
+
 main :: IO ()
-main = defaultMain $ testGroup "My Contract"
-  [ propRunActions @MyContractState "testing interface"
-  ]
+main =
+  defaultMainTestingInterface $
+    testGroup "My Contract"
+      [ propRunActions @MyContractState "testing interface"
+      ]
 ```
+
+Use `defaultMainTestingInterface` instead of `defaultMain`.
+It prepares the testing-interface runtime with package-specific options and enables
+streaming support from `convex-tasty-streaming`.
+
+This enables CLI options such as:
+
+- `--list-threat-models`
+- `--list-threat-models-json`
+- `--threat-model-name`
+- streaming options like `--streaming-json` and `--list-tests-json`
 
 `propRunActions` requires the `ThreatModelsFor` constraint. It automatically creates
 a test group containing:

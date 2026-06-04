@@ -5,8 +5,11 @@ module Convex.TestingInterface.Options (
   listThreatModelsIngredient,
   ListThreatModelsJson (..),
   listThreatModelsJsonIngredient,
+  testingInterfaceIngredients,
+  defaultMainTestingInterface,
 ) where
 
+import Convex.Tasty.Streaming (defaultMainStreamingWithIngredients)
 import Convex.ThreatModel.All (allThreatModelsNames)
 import Data.Aeson ((.=))
 import Data.Aeson qualified as Aeson
@@ -15,8 +18,10 @@ import Data.ByteString.Lazy.Char8 qualified as LBS
 import Data.Proxy (Proxy (..))
 import Data.Tagged (Tagged (..))
 import Data.Typeable (Typeable)
+import GHC.Stack (HasCallStack, withFrozenCallStack)
 import System.Exit (exitSuccess)
 import System.IO (BufferMode (..), hSetBuffering, stdout)
+import Test.Tasty (TestTree)
 import Test.Tasty.Ingredients (Ingredient (..))
 import Test.Tasty.Options (IsOption (..), OptionDescription (..), lookupOption, mkFlagCLParser, safeRead)
 
@@ -95,3 +100,16 @@ listThreatModelsJsonIngredient =
               hSetBuffering stdout LineBuffering
               LBS.putStrLn $ Aeson.encode $ Aeson.object [Key.fromString "threatModels" .= allThreatModelsNames]
               exitSuccess
+
+-- | Common testing-interface ingredients to combine with streaming defaults.
+testingInterfaceIngredients :: [Ingredient]
+testingInterfaceIngredients =
+  [ listThreatModelsIngredient
+  , listThreatModelsJsonIngredient
+  , threatModelNameFilterIngredient
+  ]
+
+-- | Default test-suite entrypoint for testing-interface packages.
+defaultMainTestingInterface :: (HasCallStack) => TestTree -> IO ()
+defaultMainTestingInterface =
+  withFrozenCallStack $ defaultMainStreamingWithIngredients testingInterfaceIngredients

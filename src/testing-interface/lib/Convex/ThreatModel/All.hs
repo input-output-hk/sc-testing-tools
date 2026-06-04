@@ -1,6 +1,6 @@
 module Convex.ThreatModel.All where
 
-import Convex.ThreatModel (ThreatModel)
+import Convex.ThreatModel (ThreatModel, getThreatModelName)
 import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
 import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
 import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
@@ -18,6 +18,7 @@ import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
 import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
 import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
 import Convex.ThreatModel.ValueUnderpayment (valueUnderpaymentAttack)
+import Data.Maybe (mapMaybe)
 
 {- | A list of all the threat models that don't take parameters.
 Almost all threat models in this library have versions without parameters, except @TokenForgery@.
@@ -45,23 +46,4 @@ allThreatModels =
   ]
 
 allThreatModelsNames :: [String]
-allThreatModelsNames =
-  [ "Datum List Bloat Attack"
-  , "Datum Byte Bloat Attack"
-  , "Double Satisfaction"
-  , "Duplicate List Entry Attack"
-  , "Input Duplication"
-  , "Invalid Datum Index Attack"
-  , "Large Data Attack"
-  , "Large Value Attack"
-  , "Missing Output Datum Attack"
-  , "Mutual Exclusion Attack"
-  , "Negative Integer Attack"
-  , "Output Datum Hash Missing Attack"
-  , "Redeemer Asset Substitution"
-  , "Self-Reference Injection"
-  , "Signatory Removal"
-  , "Time Bound Manipulation"
-  , "Unprotected Script Output"
-  , "Value Underpayment Attack"
-  ]
+allThreatModelsNames = mapMaybe getThreatModelName allThreatModels
