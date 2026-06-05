@@ -12,7 +12,7 @@ import Control.Monad (when)
 import Convex.Tasty.Streaming.QCStats (
   QCStatsRecorder,
   QCStatsStoreOption (..),
-  lookupQCStatsBySrcLoc,
+  lookupQCStatsByTestInfo,
   newQCStatsStore,
   storeQCStatsRecorder,
  )
@@ -237,8 +237,8 @@ streamingJsonReporter = TestReporter
           mSummary <- case mStore of
             Just store -> lookupThreatModelSummary store key
             Nothing -> pure Nothing
-          mMonitoring <- case (mQCStatsStore, testInfo >>= tiSrcLoc) of
-            (Just store, Just loc) -> lookupQCStatsBySrcLoc store loc
+          mMonitoring <- case (mQCStatsStore, testInfo) of
+            (Just store, Just ti) -> lookupQCStatsByTestInfo store ti
             _ -> pure Nothing
 
           -- Emit test_done

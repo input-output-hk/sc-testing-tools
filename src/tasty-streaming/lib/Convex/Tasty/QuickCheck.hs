@@ -34,15 +34,20 @@ range that the streaming ingredient will emit alongside the test.
 -}
 testProperty :: (HasCallStack, Testable a) => TestName -> a -> TestTree
 testProperty name prop =
-  withFrozenCallStack . withSrcLoc $ do
-    askOption $ \(SrcLocOpt mLoc) ->
-      askOption $ \(recorder :: QCStatsRecorder) ->
+  withFrozenCallStack
+    ( withSrcLoc $ do
         let baseProp = property prop
-            postTest =
-              QCP.callback $ QCP.PostTest QCP.NotCounterexample $ \st _ ->
-                recordQCStatsFromState recorder mLoc st
-            postFinalFailure =
-              QCP.callback $ QCP.PostFinalFailure QCP.NotCounterexample $ \st _ ->
-                recordQCStatsFromState recorder mLoc st
-            instrumented = postFinalFailure (postTest baseProp)
-         in QC.testProperty name instrumented
+        askOption $ \(SrcLocOpt mLoc) ->
+          case mLoc of
+            Nothing -> QC.testProperty name baseProp
+            Just _ ->
+              askOption $ \(recorder :: QCStatsRecorder) ->
+                let postTest =
+                      QCP.callback $ QCP.PostTest QCP.NotCounterexample $ \st _ ->
+                        recordQCStatsFromState recorder mLoc name st
+                    postFinalFailure =
+                      QCP.callback $ QCP.PostFinalFailure QCP.NotCounterexample $ \st _ ->
+                        recordQCStatsFromState recorder mLoc name st
+                    instrumented = postFinalFailure (postTest baseProp)
+                 in QC.testProperty name instrumented
+    )

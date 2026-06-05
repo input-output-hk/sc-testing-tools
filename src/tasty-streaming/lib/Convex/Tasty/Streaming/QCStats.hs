@@ -6,8 +6,9 @@ module Convex.Tasty.Streaming.QCStats (
   QCStatsStoreOption (..),
   newQCStatsStore,
   storeQCStatsRecorder,
+  mkQCStatsKey,
   lookupQCStats,
-  lookupQCStatsBySrcLoc,
+  lookupQCStatsByTestInfo,
   recordQCStatsFromState,
 ) where
 
@@ -18,6 +19,7 @@ import Convex.Tasty.Streaming.Types (
   MonitoringStats (..),
   MonitoringTableEntry (..),
   MonitoringTableStat (..),
+  TestInfo (..),
  )
 import Data.Foldable (for_)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
@@ -61,14 +63,23 @@ lookupQCStats :: QCStatsStore -> String -> IO (Maybe MonitoringStats)
 lookupQCStats (QCStatsStore ref) key =
   Map.lookup key <$> readIORef ref
 
-lookupQCStatsBySrcLoc :: QCStatsStore -> SrcLocRange -> IO (Maybe MonitoringStats)
-lookupQCStatsBySrcLoc store loc =
-  lookupQCStats store (srcLocKey loc)
+lookupQCStatsByTestInfo :: QCStatsStore -> TestInfo -> IO (Maybe MonitoringStats)
+lookupQCStatsByTestInfo store ti =
+  case tiSrcLoc ti of
+    Nothing -> pure Nothing
+    Just loc -> do
+      let fullKey = mkQCStatsKey loc (tiPath ti) (tiName ti)
+      mStats <- lookupQCStats store fullKey
+      case mStats of
+        Just stats -> pure (Just stats)
+        -- Backward-compatible fallback while recorder-side path propagation
+        -- is not yet universally available.
+        Nothing -> lookupQCStats store (mkQCStatsKey loc [] (tiName ti))
 
-recordQCStatsFromState :: QCStatsRecorder -> Maybe SrcLocRange -> QS.State -> IO ()
-recordQCStatsFromState recorder mLoc st =
+recordQCStatsFromState :: QCStatsRecorder -> Maybe SrcLocRange -> String -> QS.State -> IO ()
+recordQCStatsFromState recorder mLoc testName st =
   for_ mLoc $ \loc ->
-    qcRecordStats recorder (srcLocKey loc) (fromState st)
+    qcRecordStats recorder (mkQCStatsKey loc [] (T.pack testName)) (fromState st)
 
 srcLocKey :: SrcLocRange -> String
 srcLocKey SrcLocRange{slrFile, slrStartLine, slrStartCol, slrEndLine, slrEndCol} =
@@ -81,6 +92,13 @@ srcLocKey SrcLocRange{slrFile, slrStartLine, slrStartCol, slrEndLine, slrEndCol}
     <> show slrEndLine
     <> ":"
     <> show slrEndCol
+
+mkQCStatsKey :: SrcLocRange -> [T.Text] -> T.Text -> String
+mkQCStatsKey loc pathParts testName =
+  srcLocKey loc <> "#" <> concatMap encodePart (pathParts <> [testName])
+ where
+  encodePart part =
+    show (T.length part) <> ":" <> T.unpack part <> "|"
 
 fromState :: QS.State -> MonitoringStats
 fromState st =
