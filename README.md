@@ -373,7 +373,7 @@ For testing intentionally vulnerable contracts or documenting known issues, use
 `expectedVulnerabilities`:
 
 ```haskell
-instance TestingInterface VulnerableEscrowState where
+instance TestingInterface VulnerableContractState where
   -- ... other fields ...
 
   expectedVulnerabilities = [timeBoundManipulation]
