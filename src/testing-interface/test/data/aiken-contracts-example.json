@@ -573,31 +573,6 @@
       "hash": "b54a1ae16564f766493d93482e726e3d098371e49323b88cddf8d099"
     },
     {
-      "title": "ctf_vesting.ctf_vesting.spend",
-      "datum": {
-        "title": "datum_opt",
-        "schema": {
-          "$ref": "#/definitions/ctf_vesting~1Datum"
-        }
-      },
-      "redeemer": {
-        "title": "_redeemer",
-        "schema": {
-          "$ref": "#/definitions/Void"
-        }
-      },
-      "compiledCode": "59013801010029800aba2aba1aab9faab9eaab9dab9a48888896600264653001300700198039804000cc01c0092225980099b8748008c01cdd500144ca60026016003300b300c001acc004cdc3a400060106ea80122b300130093754009149a2c80522c80392225980099b8748000c02cdd500144cc89660026466446600400400244b30010018a508acc004cdc79bae30130010038a51899801001180a000a01e40486eb0c044c048c048c048c048c048c048c048c048c03cdd50041bae3001300e37540051325980099b8748008c038dd5000c4cdc49bad3011300f37540066eb4c044c03cdd5000c528201a3010300e37546002601c6ea8c040c044c044c044c044c044c044c044c038dd5003c5282018300e300c37540044601e60200031640283008375400516401830070013003375400f149a26cac80081",
-      "hash": "42bdc2a3244930bfe7e9d8ea84cfda270d97d22f62aac1d76740dfbd"
-    },
-    {
-      "title": "ctf_vesting.ctf_vesting.else",
-      "redeemer": {
-        "schema": {}
-      },
-      "compiledCode": "59013801010029800aba2aba1aab9faab9eaab9dab9a48888896600264653001300700198039804000cc01c0092225980099b8748008c01cdd500144ca60026016003300b300c001acc004cdc3a400060106ea80122b300130093754009149a2c80522c80392225980099b8748000c02cdd500144cc89660026466446600400400244b30010018a508acc004cdc79bae30130010038a51899801001180a000a01e40486eb0c044c048c048c048c048c048c048c048c048c03cdd50041bae3001300e37540051325980099b8748008c038dd5000c4cdc49bad3011300f37540066eb4c044c03cdd5000c528201a3010300e37546002601c6ea8c040c044c044c044c044c044c044c044c038dd5003c5282018300e300c37540044601e60200031640283008375400516401830070013003375400f149a26cac80081",
-      "hash": "42bdc2a3244930bfe7e9d8ea84cfda270d97d22f62aac1d76740dfbd"
-    },
-    {
       "title": "ping_pong.ping_pong.spend",
       "datum": {
         "title": "datum",
@@ -1394,27 +1369,6 @@
           "dataType": "constructor",
           "index": 1,
           "fields": []
-        }
-      ]
-    },
-    "ctf_vesting/Datum": {
-      "title": "Datum",
-      "description": "Datum for a vesting contract: locked until a certain time, for a specific beneficiary",
-      "anyOf": [
-        {
-          "title": "Datum",
-          "dataType": "constructor",
-          "index": 0,
-          "fields": [
-            {
-              "title": "lock_until",
-              "$ref": "#/definitions/Int"
-            },
-            {
-              "title": "beneficiary",
-              "$ref": "#/definitions/aiken~1crypto~1VerificationKeyHash"
-            }
-          ]
         }
       ]
     },

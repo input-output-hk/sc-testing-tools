@@ -136,7 +136,6 @@ test-suite convex-testing-interface-test
     AikenSpec
     AikenTipJarSpec
     AikenTipJarV2Spec
-    AikenVestingSpec
     BountySpec
     Paths_convex_testing_interface
     PingPongCoverageSpec

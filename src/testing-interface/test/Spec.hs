@@ -29,7 +29,6 @@ import AikenSellNftSpec (aikenSellNftTests)
 import AikenSpec (aikenTests)
 import AikenTipJarSpec (aikenTipJarTests)
 import AikenTipJarV2Spec (aikenTipJarV2Tests)
-import AikenVestingSpec (aikenVestingTests)
 import BountySpec (bountyTests)
 import PingPongCoverageSpec (pingPongCoverageTests)
 import PingPongSpec (pingPongTests)
@@ -84,5 +83,4 @@ tests opts runOpts =
     , aikenSellNftTests runOpts
     , aikenTipJarTests runOpts
     , aikenTipJarV2Tests runOpts
-    , aikenVestingTests runOpts
     ]

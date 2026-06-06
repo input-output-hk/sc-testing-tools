@@ -465,7 +465,6 @@ validators in `aiken-contracts-example/validators/`.
 | **AikenSpec**                 | Simple "check answer" validator (datum + redeemer == 43).                                              | Basic blueprint loading                                    |
 | **AikenPingPongSpec**         | Aiken version of the PingPong state machine.                                                           | Identical testing pattern across languages                 |
 | **AikenBankSpec**             | Two-validator bank + account with 4 progressive vulnerability levels.                                  | Multi-validator systems, parameterized scripts             |
-| **AikenVestingSpec**          | Time-locked vesting, vulnerable to time bound manipulation.                                            | Time-based vulnerabilities, `expectedVulnerabilities`      |
 | **AikenSellNftSpec**          | NFT marketplace where a single payment can satisfy multiple listings.                                  | Double satisfaction, `expectedVulnerabilities`              |
 | **AikenMultisigTreasurySpec** | 2-of-2 multisig (v1, v2, v3) vulnerable to signatory removal and output redirection.                   | Authorization vulnerabilities, `expectedVulnerabilities`   |
 | **AikenTipJarSpec**           | Tip jar accumulation pattern (v1, v2) with large data/value attacks.                                   | Combined `threatModels` and `expectedVulnerabilities`      |

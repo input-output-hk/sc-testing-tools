@@ -3,12 +3,12 @@
 {- | Threat model for detecting Time Bound Manipulation vulnerabilities.
 
 A Time Bound Manipulation vulnerability occurs when a validator checks the wrong
-bound of a transaction's validity range. The most common case is a vesting
-contract that should check the lower bound but mistakenly checks the upper bound.
+bound of a transaction's validity range. The most common case is a time-locked
+withdrawal that should check the lower bound but mistakenly checks the upper bound.
 
 == The Vulnerability ==
 
-Consider a vesting contract that should enforce: "funds can only be withdrawn
+Consider a time-locked withdrawal that should enforce: "funds can only be withdrawn
 after timestamp T". A correct implementation checks:
 
 @
@@ -33,7 +33,7 @@ The difference:
 
 == Consequences ==
 
-An attacker can withdraw vested funds before the vesting period ends by
+An attacker can withdraw funds before the time lock expires by
 constructing a transaction with:
 
 * Current time: before the deadline (e.g., slot 0)
