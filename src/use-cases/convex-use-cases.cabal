@@ -51,54 +51,6 @@ library
     , cardano-api
     , cardano-ledger-shelley
 
-test-suite convex-auction-test
-  import:         lang
-  type:           exitcode-stdio-1.0
-  hs-source-dirs: test
-  ghc-options:
-    -fobject-code -fno-ignore-interface-pragmas
-    -fno-omit-interface-pragmas -fno-specialise -Wno-unused-packages
-
-  main-is:        Auction/Spec/Spec.hs
-  other-modules:
-    Auction.Scripts
-    Auction.Spec.Attacks
-    Auction.Spec.Prop
-    Auction.Spec.Unit
-    Auction.Utils
-    Auction.Validator
-
-  build-depends:
-    , aeson
-    , base                                         >=4.14.0
-    , bytestring
-    , cardano-api
-    , cardano-ledger-api
-    , cardano-ledger-conway
-    , cardano-ledger-core
-    , cardano-ledger-shelley
-    , convex-base
-    , convex-coin-selection
-    , convex-mockchain
-    , convex-optics
-    , convex-tasty-streaming
-    , convex-testing-interface
-    , convex-use-cases
-    , convex-wallet
-    , katip
-    , lens
-    , mtl
-    , plutus-ledger-api
-    , plutus-ledger-api:plutus-ledger-api-testlib
-    , plutus-tx
-    , plutus-tx-plugin
-    , pretty-show
-    , prettyprinter
-    , QuickCheck
-    , tasty
-    , tasty-hunit
-    , tasty-quickcheck
-
 test-suite convex-escrow-test
   import:         lang
   type:           exitcode-stdio-1.0

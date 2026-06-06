@@ -99,8 +99,8 @@ Each line of output is a self-contained JSON object with an `event` field. Event
 {
   "event": "suite_started",
   "tests": [
-    {"id": 0, "name": "First bid equals minimum bid", "path": ["auction tests", "unit tests"]},
-    {"id": 1, "name": "Positive tests", "path": ["auction tests", "property-based tests"]}
+    {"id": 0, "name": "Deposit followed by withdraw", "path": ["escrow tests", "unit tests"]},
+    {"id": 1, "name": "Positive tests", "path": ["escrow tests", "property-based tests"]}
   ]
 }
 ```

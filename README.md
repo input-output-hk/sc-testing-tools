@@ -345,7 +345,7 @@ Enable threat models by implementing the `threatModels` field in your
 `TestingInterface` instance:
 
 ```haskell
-instance TestingInterface AuctionState where
+instance TestingInterface EscrowState where
   -- ... other fields ...
 
   threatModels =

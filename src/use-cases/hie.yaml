@@ -1,8 +1,5 @@
 cradle:
   cabal:
-    - path: "test/Auction"
-      component: "convex-use-cases:test:convex-auction-test"
-    
     - path: "test/Escrow"
       component: "convex-use-cases:test:convex-escrow-test"
     
