@@ -64,17 +64,17 @@ lookupQCStats (QCStatsStore ref) key =
   Map.lookup key <$> readIORef ref
 
 lookupQCStatsByTestInfo :: QCStatsStore -> TestInfo -> IO (Maybe MonitoringStats)
-lookupQCStatsByTestInfo store ti =
+lookupQCStatsByTestInfo (QCStatsStore ref) ti =
   case tiSrcLoc ti of
     Nothing -> pure Nothing
     Just loc -> do
+      m <- readIORef ref
       let fullKey = mkQCStatsKey loc (tiPath ti) (tiName ti)
-      mStats <- lookupQCStats store fullKey
-      case mStats of
-        Just stats -> pure (Just stats)
-        -- Backward-compatible fallback while recorder-side path propagation
-        -- is not yet universally available.
-        Nothing -> lookupQCStats store (mkQCStatsKey loc [] (tiName ti))
+          fallbackKey = mkQCStatsKey loc [] (tiName ti)
+      pure $
+        case Map.lookup fullKey m of
+          Just stats -> Just stats
+          Nothing -> Map.lookup fallbackKey m
 
 recordQCStatsFromState :: QCStatsRecorder -> Maybe SrcLocRange -> String -> QS.State -> IO ()
 recordQCStatsFromState recorder mLoc testName st =
