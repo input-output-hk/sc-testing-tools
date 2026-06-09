@@ -10,9 +10,11 @@ import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Concurrent.STM
 import Control.Monad (when)
 import Convex.Tasty.Streaming.QCStats (
+  QCStatsPathIndex,
   QCStatsRecorder,
   QCStatsStoreOption (..),
   lookupQCStatsByTestInfo,
+  mkQCStatsPathIndex,
   newQCStatsStore,
   storeQCStatsRecorder,
  )
@@ -129,6 +131,7 @@ streamingJsonReporter = TestReporter
   , Option (Proxy :: Proxy NoTrace)
   , Option (Proxy :: Proxy QCStatsStoreOption)
   , Option (Proxy :: Proxy QCStatsRecorder)
+  , Option (Proxy :: Proxy QCStatsPathIndex)
   , Option (Proxy :: Proxy TMStoreOption)
   , Option (Proxy :: Proxy TMRecorder)
   , Option (Proxy :: Proxy TraceRecorder)
@@ -410,7 +413,7 @@ defaultMainStreaming tree = do
                       , ettTrace = iterationJson
                       }
           }
-  let tree' =
+  let treeWithOptions =
         localOption pkgRootOpt $
           localOption (QCStatsStoreOption (Just qcStatsStore)) $
             localOption (storeQCStatsRecorder qcStatsStore) $
@@ -420,4 +423,7 @@ defaultMainStreaming tree = do
                     localOption (StreamingEnabledRef (Just enabledRef)) $
                       localOption (OutputLockRef (Just outputLock)) $
                         localOption traceRec tree
+  initialTestMap <- buildTestMap mempty treeWithOptions
+  let qcPathIndex = mkQCStatsPathIndex (IntMap.elems initialTestMap)
+      tree' = localOption qcPathIndex treeWithOptions
   defaultMainWithIngredients streamingIngredients tree'

@@ -16,7 +16,9 @@ import Convex.Tasty.Streaming.QCStats (
   QCStatsRecorder (..),
   lookupQCStatsByTestInfo,
   mkQCStatsKey,
+  mkQCStatsPathIndex,
   newQCStatsStore,
+  resolveQCStatsPath,
   storeQCStatsRecorder,
  )
 import Convex.Tasty.Streaming.SrcLoc (
@@ -55,7 +57,8 @@ tests =
     , testCase "MonitoringStats round-trip" monitoringStatsRoundTrip
     , testCase "TestDone round-trip with monitoring_stats" testDoneRoundTripWithMonitoring
     , testCase "QC stats key differs across test identities" qcStatsKeyDiffersAcrossTestIdentities
-    , testCase "QC stats lookup uses TestInfo fallback" qcStatsLookupUsesTestInfoFallback
+    , testCase "QC stats lookup requires full TestInfo identity" qcStatsLookupRequiresFullIdentity
+    , testCase "QC stats path resolver marks ambiguous identities" qcStatsPathResolverAmbiguousIdentity
     , testCase "callerPackageRoot resolves to convex-tasty-streaming" callerPackageRootResolvesToThisPackage
     , testCase "findPackageRootFromFile finds convex-tasty-streaming" findPackageRootFromFileFindsThisPackage
     ]
@@ -393,8 +396,8 @@ qcStatsKeyDiffersAcrossTestIdentities = do
   assertBool "Different groups must produce different keys" (keyA /= keyB)
   assertBool "Different test names must produce different keys" (keyA /= keyC)
 
-qcStatsLookupUsesTestInfoFallback :: Assertion
-qcStatsLookupUsesTestInfoFallback = do
+qcStatsLookupRequiresFullIdentity :: Assertion
+qcStatsLookupRequiresFullIdentity = do
   store <- newQCStatsStore
   let recorder = storeQCStatsRecorder store
       loc =
@@ -420,10 +423,44 @@ qcStatsLookupUsesTestInfoFallback = do
           , tiPath = ["group"]
           , tiSrcLoc = Just loc
           }
-  -- Simulate recorder-side write when only test name is available.
-  qcRecordStats recorder (mkQCStatsKey loc [] "leaf") stats
+  qcRecordStats recorder (mkQCStatsKey loc ["group"] "leaf") stats
   mFound <- lookupQCStatsByTestInfo store ti
-  assertEqual "lookup should find stats via name-only fallback" (Just stats) mFound
+  assertEqual "lookup should find stats for exact full identity" (Just stats) mFound
+
+  qcRecordStats recorder (mkQCStatsKey loc [] "leaf") stats
+  mStill <- lookupQCStatsByTestInfo store ti
+  assertEqual "lookup should ignore fallback identity writes" (Just stats) mStill
+
+qcStatsPathResolverAmbiguousIdentity :: Assertion
+qcStatsPathResolverAmbiguousIdentity = do
+  let loc =
+        SrcLocRange
+          { slrFile = "src/Foo.hs"
+          , slrStartLine = 10
+          , slrStartCol = 5
+          , slrEndLine = 10
+          , slrEndCol = 13
+          }
+      tiA =
+        TestInfo
+          { tiId = 1
+          , tiName = "leaf"
+          , tiPath = ["group-a"]
+          , tiSrcLoc = Just loc
+          }
+      tiB =
+        TestInfo
+          { tiId = 2
+          , tiName = "leaf"
+          , tiPath = ["group-b"]
+          , tiSrcLoc = Just loc
+          }
+      resolver = mkQCStatsPathIndex [tiA, tiB]
+
+  assertEqual
+    "resolver should refuse ambiguous srcLoc/name identities"
+    Nothing
+    (resolveQCStatsPath resolver (Just loc) "leaf")
 
 -- ---------------------------------------------------------------------------
 -- 11. callerPackageRoot end-to-end: when invoked from inside this test

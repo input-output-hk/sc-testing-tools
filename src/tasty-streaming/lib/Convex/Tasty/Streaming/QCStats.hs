@@ -4,8 +4,11 @@ module Convex.Tasty.Streaming.QCStats (
   QCStatsStore,
   QCStatsRecorder (..),
   QCStatsStoreOption (..),
+  QCStatsPathIndex (..),
   newQCStatsStore,
   storeQCStatsRecorder,
+  mkQCStatsPathIndex,
+  resolveQCStatsPath,
   mkQCStatsKey,
   lookupQCStats,
   lookupQCStatsByTestInfo,
@@ -40,6 +43,8 @@ newtype QCStatsRecorder = QCStatsRecorder
 
 newtype QCStatsStoreOption = QCStatsStoreOption (Maybe QCStatsStore)
 
+newtype QCStatsPathIndex = QCStatsPathIndex (Map String (Maybe [T.Text]))
+
 instance IsOption QCStatsRecorder where
   defaultValue = QCStatsRecorder (\_ _ -> pure ())
   parseValue = const Nothing
@@ -51,6 +56,12 @@ instance IsOption QCStatsStoreOption where
   parseValue = const Nothing
   optionName = Tagged "qc-stats-store"
   optionHelp = Tagged "internal: quickcheck monitoring stats store handle"
+
+instance IsOption QCStatsPathIndex where
+  defaultValue = QCStatsPathIndex Map.empty
+  parseValue = const Nothing
+  optionName = Tagged "qc-stats-path-index"
+  optionHelp = Tagged "internal: quickcheck monitoring stats path resolver"
 
 newQCStatsStore :: IO QCStatsStore
 newQCStatsStore = QCStatsStore <$> newIORef Map.empty
@@ -69,17 +80,33 @@ lookupQCStatsByTestInfo (QCStatsStore ref) ti =
     Nothing -> pure Nothing
     Just loc -> do
       m <- readIORef ref
-      let fullKey = mkQCStatsKey loc (tiPath ti) (tiName ti)
-          fallbackKey = mkQCStatsKey loc [] (tiName ti)
-      pure $
-        case Map.lookup fullKey m of
-          Just stats -> Just stats
-          Nothing -> Map.lookup fallbackKey m
+      pure $ Map.lookup (mkQCStatsKey loc (tiPath ti) (tiName ti)) m
 
-recordQCStatsFromState :: QCStatsRecorder -> Maybe SrcLocRange -> String -> QS.State -> IO ()
-recordQCStatsFromState recorder mLoc testName st =
-  for_ mLoc $ \loc ->
-    qcRecordStats recorder (mkQCStatsKey loc [] (T.pack testName)) (fromState st)
+mkQCStatsPathIndex :: [TestInfo] -> QCStatsPathIndex
+mkQCStatsPathIndex infos = QCStatsPathIndex (foldr insertInfo Map.empty infos)
+ where
+  insertInfo ti m =
+    case tiSrcLoc ti of
+      Nothing -> m
+      Just loc ->
+        let identity = mkQCStatsKey loc [] (tiName ti)
+            path = tiPath ti
+         in case Map.lookup identity m of
+              Nothing -> Map.insert identity (Just path) m
+              Just (Just existingPath)
+                | existingPath == path -> m
+                | otherwise -> Map.insert identity Nothing m
+              Just Nothing -> m
+
+resolveQCStatsPath :: QCStatsPathIndex -> Maybe SrcLocRange -> String -> Maybe [T.Text]
+resolveQCStatsPath (QCStatsPathIndex index) mLoc testName = do
+  loc <- mLoc
+  Map.lookup (mkQCStatsKey loc [] (T.pack testName)) index >>= id
+
+recordQCStatsFromState :: QCStatsRecorder -> Maybe SrcLocRange -> Maybe [T.Text] -> String -> QS.State -> IO ()
+recordQCStatsFromState recorder mLoc mPath testName st =
+  for_ ((,) <$> mLoc <*> mPath) $ \(loc, path) ->
+    qcRecordStats recorder (mkQCStatsKey loc path (T.pack testName)) (fromState st)
 
 srcLocKey :: SrcLocRange -> String
 srcLocKey SrcLocRange{slrFile, slrStartLine, slrStartCol, slrEndLine, slrEndCol} =
