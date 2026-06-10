@@ -102,8 +102,9 @@ Behavior notes:
 - Unknown IDs fail fast with a helpful error.
 - For threat-model and expected-vulnerability tests, required prerequisites
   (such as `Positive tests`) are included automatically.
-- In JSON outputs (`--list-tests-json` and `--streaming-json`), filtered runs
-  reindex selected tests to a dense ID range starting at `0`.
+- In JSON outputs (`--list-tests-json` and `--streaming-json`), `--test-id` runs preserve the 
+  original test IDs (so they match the IDs discovered via `--list-tests-json`), which may be 
+  sparse rather than reindexed.
 
 ### Stream test results
 

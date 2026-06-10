@@ -23,7 +23,7 @@ import System.Exit (exitSuccess)
 import System.IO (BufferMode (..), hSetBuffering, stdout)
 import Test.Tasty (TestTree)
 import Test.Tasty.Ingredients (Ingredient (..))
-import Test.Tasty.Options (IsOption (..), OptionDescription (..), lookupOption, mkFlagCLParser, safeRead)
+import Test.Tasty.Options (IsOption (..), OptionDescription (Option), lookupOption, mkFlagCLParser, safeRead)
 
 newtype ThreatModelNameFilter = ThreatModelNameFilter [String]
   deriving (Eq, Ord, Typeable)
@@ -41,8 +41,7 @@ instance IsOption ThreatModelNameFilter where
     parseThreatModelNames s =
       case s of
         "" -> []
-        _ -> map trim (splitOn ',' s)
-    splitOn _ [] = []
+        _ -> filter (not . null) $ map trim (splitOn ',' s)
     splitOn delim s = case break (== delim) s of
       (a, []) -> [a]
       (a, _ : rest) -> a : splitOn delim rest
