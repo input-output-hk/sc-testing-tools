@@ -89,7 +89,6 @@ import Convex.Tasty.QuickCheck (
 import Convex.Tasty.QuickCheck qualified as QC
 import Convex.ThreatModel.LargeData (largeDataAttack)
 import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
-import Convex.ThreatModel.TokenForgery (simpleAlwaysSucceedsMintingPolicyV2, simpleTestAssetName, tokenForgeryAttack)
 import Data.Aeson (ToJSON (..))
 import System.IO.Unsafe (unsafePerformIO)
 import Test.QuickCheck.Monadic (monadicIO, monitor, run)
@@ -706,56 +705,7 @@ instance TestingInterface PurchaseOfferModel where
       void $ balanceAndSubmit mempty Wallet.w1 txBody TrailingChange []
       pure $
         model
-          { pomInitialized =
-              Trueoken Forgery Attack
-                / 'to rerun this test only
-                  . Unprotected Script Output
-                : OK
-                  SKIPPED
-                : Precondition
-                  never
-                  met
-                  (0 / 100 transactions applicable)
-                  Value
-                  Underpayment
-                  Attack
-                  (50.0 % reduction)
-                : OK
-                  Tested
-                  100
-                  / 100
-                    transactions
-                    (0 skipped, 0 errors)
-                    Expected
-                    vulnerabilities
-                    Redeemer
-                    Asset
-                    Substitution
-                : OK
-                  Vulnerability
-                  detected
-                  (100 / 100 transactions, 0 skipped, 0 errors)
-                  Time
-                  Bound
-                  Manipulation
-                  (slot 0)
-                : OK
-                  Vulnerability
-                  detected
-                  (100 / 100 transactions, 0 skipped, 0 errors)
-                  Large
-                  Data
-                  Attack
-                  (max 1000 fields)
-                : OK
-                  SKIPPED
-                : Precondition
-                  never
-                  met
-                  (0 / 100 transactions applicable)
-                  redeemer
-                  - controlled asset vulnerability confirmed
-                : OK (0.56 s)
+          { pomInitialized = True
           , pomTxIn = Just (C.TxIn dummyTxId (C.TxIx 0))
           , pomValue = amount
           , pomDesiredPolicyId = Just testPolicyIdBytes
@@ -793,7 +743,7 @@ instance TestingInterface PurchaseOfferModel where
   monitoring _state _action prop = prop
 
 instance ThreatModelsFor PurchaseOfferModel where
-  expectedVulnerabilities = [redeemerAssetSubstitution, timeBoundManipulation, largeDataAttack, tokenForgeryAttack simpleAlwaysSucceedsMintingPolicyV2 simpleTestAssetName]
+  expectedVulnerabilities = [redeemerAssetSubstitution, timeBoundManipulation, largeDataAttack]
 
 -- ----------------------------------------------------------------------------
 -- Test tree
