@@ -22,10 +22,8 @@ module Convex.Tasty.QuickCheck (
 ) where
 
 import Convex.Tasty.Streaming.QCStats (
-  QCStatsPathIndex (..),
   QCStatsRecorder (..),
   recordQCStatsFromState,
-  resolveQCStatsPath,
  )
 import Convex.Tasty.Streaming.SrcLoc (SrcLocOpt (..), withSrcLoc)
 import GHC.Stack (HasCallStack, withFrozenCallStack)
@@ -47,13 +45,12 @@ testProperty name prop =
                 Nothing -> QC.testProperty name baseProp
                 Just _ ->
                   askOption $ \(recorder :: QCStatsRecorder) ->
-                    askOption $ \(pathIndex :: QCStatsPathIndex) ->
-                      let postTest =
-                            QCP.callback $ QCP.PostTest QCP.NotCounterexample $ \st _ ->
-                              recordQCStatsFromState recorder mLoc (resolveQCStatsPath pathIndex mLoc name) name st
-                          postFinalFailure =
-                            QCP.callback $ QCP.PostFinalFailure QCP.NotCounterexample $ \st _ ->
-                              recordQCStatsFromState recorder mLoc (resolveQCStatsPath pathIndex mLoc name) name st
-                          instrumented = postFinalFailure (postTest baseProp)
-                       in QC.testProperty name instrumented
+                    let postTest =
+                          QCP.callback $ QCP.PostTest QCP.NotCounterexample $ \st _ ->
+                            recordQCStatsFromState recorder mLoc name st
+                        postFinalFailure =
+                          QCP.callback $ QCP.PostFinalFailure QCP.NotCounterexample $ \st _ ->
+                            recordQCStatsFromState recorder mLoc name st
+                        instrumented = postFinalFailure (postTest baseProp)
+                     in QC.testProperty name instrumented
     )
