@@ -84,7 +84,7 @@ data SrcLocRange = SrcLocRange
   , slrEndLine :: !Int
   , slrEndCol :: !Int
   }
-  deriving (Eq, Show, Generic)
+  deriving (Eq, Ord, Show, Generic)
 
 instance ToJSON SrcLocRange where
   toJSON SrcLocRange{..} =

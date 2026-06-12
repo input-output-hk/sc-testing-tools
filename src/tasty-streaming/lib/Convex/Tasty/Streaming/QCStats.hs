@@ -37,25 +37,7 @@ data QCStatsKey = QCStatsKey
   { qskSrcLoc :: SrcLocRange
   , qskTestName :: T.Text
   }
-  deriving (Eq, Show)
-
-instance Ord QCStatsKey where
-  compare QCStatsKey{qskSrcLoc = lhsLoc, qskTestName = lhsName} QCStatsKey{qskSrcLoc = rhsLoc, qskTestName = rhsName} =
-    compare
-      ( slrFile lhsLoc
-      , slrStartLine lhsLoc
-      , slrStartCol lhsLoc
-      , slrEndLine lhsLoc
-      , slrEndCol lhsLoc
-      , lhsName
-      )
-      ( slrFile rhsLoc
-      , slrStartLine rhsLoc
-      , slrStartCol rhsLoc
-      , slrEndLine rhsLoc
-      , slrEndCol rhsLoc
-      , rhsName
-      )
+  deriving (Eq, Ord, Show)
 
 newtype QCStatsStore = QCStatsStore (IORef (Map QCStatsKey MonitoringStats))
 
