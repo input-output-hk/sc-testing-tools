@@ -1,5 +1,17 @@
 # Reference: Threat models — selection and wiring
 
+> **CARDINAL RULE — Deployment is an action, not setup.**
+>
+> Deploying the contract on-chain is THE initial action (or one of several, if multiple deployment shapes are tested). It MUST be part of the Action type — typically named `Start`, `Deploy`, `StartWithInlineDatum`, etc.
+>
+> `initialize` MUST be model-only: it sets up the in-memory bookkeeping and returns a zero state with `modelInitialized = False` (or equivalent flag). It MUST NOT submit any transaction, deploy any script, or touch the chain.
+>
+> The generator reads the model state and decides whether to emit a deploy action (when uninitialised) or a normal action (when initialised).
+>
+> If a proposed design has `initialize` deploying the contract, or has an Action type without a deploy action, the design is WRONG. STOP. Do not write code. Do not proceed. Re-read this rule.
+>
+> Every subagent dispatched from this skill MUST receive this rule verbatim in its prompt.
+
 How to pick built-in threat models for the contract under test, how
 to wire them into the `ThreatModelsFor` instance, and the inverted
 `expectedVulnerabilities` semantics. Loaded by subagents in the
@@ -7,11 +19,11 @@ Implemented phase and in the Green-maintenance verbs **add threat
 model** and **swap threat model**.
 
 Custom threat models are out of scope for this skill (§F is the only
-treatment). All facts here come from `chore/without-p` of
+treatment). All facts here come from `main` of
 `sc-testing-tools`. The authoritative module is
-[`Convex.ThreatModel.All`](https://github.com/input-output-hk/sc-testing-tools/blob/chore/without-p/src/testing-interface/lib/Convex/ThreatModel/All.hs);
+[`Convex.ThreatModel.All`](https://github.com/input-output-hk/sc-testing-tools/blob/main/src/testing-interface/lib/Convex/ThreatModel/All.hs);
 the per-attack modules under
-[`Convex.ThreatModel.*`](https://github.com/input-output-hk/sc-testing-tools/tree/chore/without-p/src/testing-interface/lib/Convex/ThreatModel)
+[`Convex.ThreatModel.*`](https://github.com/input-output-hk/sc-testing-tools/tree/main/src/testing-interface/lib/Convex/ThreatModel)
 expose the parameterised `…With` variants.
 
 ## §A. The parallel-world idea
@@ -77,7 +89,7 @@ diagnostic.
 ## §B. Catalog
 
 18 built-in attacks in
-[`allThreatModels`](https://github.com/input-output-hk/sc-testing-tools/blob/chore/without-p/src/testing-interface/lib/Convex/ThreatModel/All.hs)
+[`allThreatModels`](https://github.com/input-output-hk/sc-testing-tools/blob/main/src/testing-interface/lib/Convex/ThreatModel/All.hs)
 as non-parameterised `ThreatModel ()` values. Several have
 parameterised `…With` siblings exposed by individual modules.
 `tokenForgeryAttack` is NOT in `allThreatModels` (it needs a
@@ -127,6 +139,7 @@ callable forms.
 |---|---|---|
 | `doubleSatisfaction` | Duplicates a script input and checks whether a single output satisfies both. | Tx has at least one script input that could be confused with another contract's payment requirement. |
 | `mutualExclusionAttack` | Tests ordering / race-condition assumptions by permuting or pairing inputs. | Validator depends on input ordering or "one-of-N" exclusion. |
+| `invalidScriptPurposeAttack :: PlutusScript lang -> ThreatModel ()` | Probes script-purpose confusion (e.g. invoking the validator under a wrong purpose such as minting vs spending) against the supplied validator script. | Validator branches on `ScriptPurpose` or implicitly assumes a single purpose. Must supply the validator script. |
 
 ## §C. Decision tree
 
@@ -188,6 +201,28 @@ length checks.
 - `mutualExclusionAttack` — when the validator depends on a specific
   input ordering or a "one-of-N" invariant.
 
+### State-machine contracts with continuation outputs (PingPong-shape)
+
+Contracts that consume a script UTxO and produce a continuation
+output carrying a new datum (PingPong, state-machine validators,
+auction step machines, multisig advance-state, …) benefit from a
+specific bundle on top of the conservative defaults:
+
+- `invalidDatumIndexAttack` — probes datum-lookup-by-index patterns
+  with out-of-range indices.
+- `invalidScriptPurposeAttack <validatorScript>` — supplies the
+  validator's own script and exercises script-purpose confusion
+  (e.g. spending vs minting purpose). Requires the validator script
+  value at suite-construction time.
+- `missingOutputDatumAttack` — omits a required output datum on a
+  script output the validator expects.
+- `outputDatumHashMissingAttack` — omits the datum hash on a
+  hash-datum-style output.
+
+These four are in the canonical `PingPongSpec.hs` and any contract
+that maintains state through continuation outputs with datums should
+include them.
+
 ### Conservative default set
 
 When in doubt, start with this and let QuickCheck flag irrelevant
@@ -200,6 +235,15 @@ models as SKIPPED:
 , valueUnderpaymentAttack
 , largeDataAttackWith 10
 ]
+```
+
+For state-machine / continuation-output contracts, extend with:
+
+```haskell
+, invalidDatumIndexAttack
+, invalidScriptPurposeAttack myValidatorScript
+, missingOutputDatumAttack
+, outputDatumHashMissingAttack
 ```
 
 ## §D. Wiring
@@ -227,7 +271,7 @@ instance ThreatModelsFor MyModel where
 Notes:
 
 - Per-attack modules live under `Convex.ThreatModel.<Name>` on
-  [chore/without-p](https://github.com/input-output-hk/sc-testing-tools/tree/chore/without-p/src/testing-interface/lib/Convex/ThreatModel).
+  [main](https://github.com/input-output-hk/sc-testing-tools/tree/main/src/testing-interface/lib/Convex/ThreatModel).
 - `Convex.ThreatModel.All` only re-exports `allThreatModels`;
   individual names must be imported from per-attack modules. See
   `04-helpers-cheatsheet.md §E`.
@@ -263,12 +307,12 @@ only when the user explicitly asks. If they do, ask which models and
 why before writing.
 
 Examples that exercise this field heavily:
-[`AikenVestingSpec.hs`](https://github.com/input-output-hk/sc-testing-tools/blob/chore/without-p/src/testing-interface/test/AikenVestingSpec.hs),
-[`AikenSellNftSpec.hs`](https://github.com/input-output-hk/sc-testing-tools/blob/chore/without-p/src/testing-interface/test/AikenSellNftSpec.hs),
-[`AikenMultisigTreasurySpec.hs`](https://github.com/input-output-hk/sc-testing-tools/blob/chore/without-p/src/testing-interface/test/AikenMultisigTreasurySpec.hs)
+[`AikenVestingSpec.hs`](https://github.com/input-output-hk/sc-testing-tools/blob/main/src/testing-interface/test/AikenVestingSpec.hs),
+[`AikenSellNftSpec.hs`](https://github.com/input-output-hk/sc-testing-tools/blob/main/src/testing-interface/test/AikenSellNftSpec.hs),
+[`AikenMultisigTreasurySpec.hs`](https://github.com/input-output-hk/sc-testing-tools/blob/main/src/testing-interface/test/AikenMultisigTreasurySpec.hs)
 (and `V2` / `V3` variants),
-[`AikenKingOfCardanoSpec.hs`](https://github.com/input-output-hk/sc-testing-tools/blob/chore/without-p/src/testing-interface/test/AikenKingOfCardanoSpec.hs),
-[`AikenTipJarSpec.hs`](https://github.com/input-output-hk/sc-testing-tools/blob/chore/without-p/src/testing-interface/test/AikenTipJarSpec.hs).
+[`AikenKingOfCardanoSpec.hs`](https://github.com/input-output-hk/sc-testing-tools/blob/main/src/testing-interface/test/AikenKingOfCardanoSpec.hs),
+[`AikenTipJarSpec.hs`](https://github.com/input-output-hk/sc-testing-tools/blob/main/src/testing-interface/test/AikenTipJarSpec.hs).
 
 ## §F. Custom threat models
 
@@ -277,4 +321,4 @@ pattern, point them at the `ThreatModel` monad and its combinators
 (`anyInput`, `anyOutput`, `pickAny`, `shouldValidate`,
 `shouldNotValidate`, `Named`, plus `TxModifier` `Monoid` composition
 with `<>`). Documented under "Writing Custom Threat Models" in the
-[chore/without-p README](https://github.com/input-output-hk/sc-testing-tools/blob/chore/without-p/README.md).
+[main README](https://github.com/input-output-hk/sc-testing-tools/blob/main/README.md).

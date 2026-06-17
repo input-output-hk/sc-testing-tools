@@ -47,3 +47,6 @@ tmp/
 sss.json
 .claude/
 
+
+# Archived skill snapshots
+docs/skill-old/

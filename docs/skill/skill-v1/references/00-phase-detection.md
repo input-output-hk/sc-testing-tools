@@ -34,8 +34,7 @@ Before any grep or build, check `.skill-state.md` at the trial-repo root.
   (if any). Then proceed to that phase's entry section in `SKILL.md §4`.
 
 The notepad never overrides §0 guardrails. If a stale notepad records
-forbidden git operations or off-branch references, ignore those entries
-and continue.
+entries that conflict with §0, ignore those entries and continue.
 
 ## B. The seven checks, cheapest first
 
@@ -55,8 +54,10 @@ mapping in §D consumes the tuple of results.
    `build-wrapper:` line (schema in `SKILL.md §5`).
 3. **`cabal.project` contains the `sc-testing-tools` source-repo
    stanza.** Grep for `sc-testing-tools` near a `source-repository-package`
-   block; confirm the tag is on the `chore/without-p` branch by matching
-   the pinned commit hash documented in `02-project-setup.md §C.3`.
+   block; confirm the `source-repository-package` stanza for
+   `sc-testing-tools` exists and points at
+   `https://github.com/input-output-hk/sc-testing-tools.git` on `main`.
+   No hash match required.
 4. **A `.cabal` test stanza depends on `convex-testing-interface`.**
    Grep `*.cabal` files for that build-dep inside a `test-suite` stanza.
 5. **A `.hs` file under `test/` imports `Convex.TestingInterface`.**
