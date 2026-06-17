@@ -36,11 +36,14 @@ module Convex.Tasty.Streaming.SrcLoc (
   PackageRootOpt (..),
   callerPackageRoot,
   findPackageRootFromFile,
+  SrcLocRanges (..),
+  groupRanges,
+  ungroupRanges,
 ) where
 
 import Control.Exception (IOException, catch)
 import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.:), (.=))
-import Data.List (isSuffixOf)
+import Data.List (groupBy, isSuffixOf, sort, zip4)
 import Data.Tagged (Tagged (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -398,3 +401,58 @@ findPackageByName startDir pkgName relFile = go searchDepth startDir
   shouldSkip "dist" = True
   shouldSkip "node_modules" = True
   shouldSkip _ = False
+
+-- | Many ranges in one file, for more efficient JSON serialization
+data SrcLocRanges = SrcLocRanges
+  { slrsFile :: !Text
+  , slrsStartLines :: [Int]
+  , slrsStartCols :: [Int]
+  , slrsEndLines :: [Int]
+  , slrsEndCols :: [Int]
+  }
+  deriving (Eq, Show, Generic)
+
+instance ToJSON SrcLocRanges where
+  toJSON SrcLocRanges{..} =
+    object
+      [ "file" .= slrsFile
+      , "startLines" .= slrsStartLines
+      , "startCols" .= slrsStartCols
+      , "endLines" .= slrsEndLines
+      , "endCols" .= slrsEndCols
+      ]
+
+instance FromJSON SrcLocRanges where
+  parseJSON = withObject "SrcLocRanges" $ \o ->
+    SrcLocRanges
+      <$> o .: "file"
+      <*> o .: "startLines"
+      <*> o .: "startCols"
+      <*> o .: "endLines"
+      <*> o .: "endCols"
+
+groupRanges :: [SrcLocRange] -> [SrcLocRanges]
+groupRanges = map toRanges . groupBy (\a b -> slrFile a == slrFile b) . sort
+ where
+  toRanges :: [SrcLocRange] -> SrcLocRanges
+  toRanges rs@(r : _) =
+    SrcLocRanges
+      { slrsFile = slrFile r
+      , slrsStartLines = map slrStartLine rs
+      , slrsStartCols = map slrStartCol rs
+      , slrsEndLines = map slrEndLine rs
+      , slrsEndCols = map slrEndCol rs
+      }
+  toRanges [] = error "groupRanges: invalid groupBy result"
+
+ungroupRanges :: [SrcLocRanges] -> [SrcLocRange]
+ungroupRanges = concatMap go
+ where
+  allEqual xs = and (zipWith (==) xs (tail xs))
+  go SrcLocRanges{..} =
+    if allEqual (map length [slrsStartLines, slrsStartCols, slrsEndLines, slrsEndCols])
+      then
+        [ SrcLocRange slrsFile sl sc el ec
+        | (sl, sc, el, ec) <- zip4 slrsStartLines slrsStartCols slrsEndLines slrsEndCols
+        ]
+      else error "ungroupRanges: expected all 4 lists to have the same length"
