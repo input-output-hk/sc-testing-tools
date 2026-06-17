@@ -46,8 +46,8 @@ item only.
 
 1. GHC version pin matches §C.1.
 2. CHaP repository block present (§C.2).
-3. `sc-testing-tools` source-repo stanza pinned to `chore/without-p`
-   with BOTH `src/testing-interface` AND `src/tasty-streaming` subdirs
+3. `sc-testing-tools` source-repo stanza targets `main` with BOTH
+   `src/testing-interface` AND `src/tasty-streaming` subdirs
    (§C.3 — the second subdir is the easy thing to miss).
 4. `sc-tools` source-repo stanza (§C.4).
 5. Test-suite stanza depends on `convex-testing-interface` AND
@@ -80,11 +80,13 @@ repository cardano-haskell-packages
 source-repository-package
   type: git
   location: https://github.com/input-output-hk/sc-testing-tools.git
-  tag: 017066310f1f5387ec2c7848a50dac8da0de291f
+  tag: main
   subdir:
     src/tasty-streaming
     src/testing-interface
 ```
+
+Use the latest commit on `main` that builds cleanly. If `main` is broken, pin to the most recent green commit on `main`.
 
 **Critical:** `convex-tasty-streaming` is a transitive dependency that
 lives in the same monorepo and is not published to CHaP or Hackage. Its
@@ -92,8 +94,7 @@ lives in the same monorepo and is not published to CHaP or Hackage. Its
 solver fails to locate it when resolving the test-suite's build-depends.
 This is the single most common setup mistake.
 
-The pinned commit must be on `chore/without-p`. The hash above is the
-current pin.
+The stanza targets `main`.
 
 ### C.4 `sc-tools` source-repository-package
 
@@ -101,7 +102,7 @@ current pin.
 source-repository-package
   type: git
   location: https://github.com/input-output-hk/sc-tools.git
-  tag: c50e9edf2606d149820d41c2d4f82fae54eb21dd
+  tag: main
   subdir:
     src/base
     src/coin-selection
@@ -110,6 +111,8 @@ source-repository-package
     src/optics
     src/wallet
 ```
+
+Use the latest commit on `main` that builds cleanly. If `main` is broken, pin to the most recent green commit on `main`.
 
 The first `cabal build` will fail asking for `--sha256:` for each
 `source-repository-package`; paste the value cabal prints into the

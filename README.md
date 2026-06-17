@@ -2,6 +2,33 @@
 
 Property-based testing and threat modeling for Cardano smart contracts.
 
+## Agent skill: testing-interface
+
+This repo ships a skill (instruction set) that walks a coding agent through
+adding a `convex-testing-interface` property-test suite to a Cardano contract
+repo. It lives at [`docs/skill/skill-v1/`](docs/skill/skill-v1/).
+
+### Let your agent install it for you
+
+Paste this into your agent:
+
+```
+Install the testing-interface skill into this repo.
+
+Fetch docs/skill/skill-v1/ from
+https://github.com/input-output-hk/sc-testing-tools
+and put it in this repo at the location you use for local
+skills or instruction sets (e.g. .claude/skills/,
+.opencode/skills/, or whatever your tool uses).
+Name the destination folder `testing-interface` and include
+SKILL.md and the references/ folder.
+
+Then load the skill and follow it. 
+```
+
+See [`docs/skill/skill-v1/README.md`](docs/skill/skill-v1/README.md) for
+details and the manual-install recipe.
+
 ## What This Repository Is
 
 This repository provides `convex-testing-interface`, a property-based testing
