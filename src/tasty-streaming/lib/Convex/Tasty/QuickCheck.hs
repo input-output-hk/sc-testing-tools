@@ -21,9 +21,14 @@ module Convex.Tasty.QuickCheck (
   module Test.Tasty.QuickCheck,
 ) where
 
-import Convex.Tasty.Streaming.SrcLoc (withSrcLoc)
+import Convex.Tasty.Streaming.QCStats (
+  QCStatsRecorder (..),
+  recordQCStatsFromState,
+ )
+import Convex.Tasty.Streaming.SrcLoc (SrcLocOpt (..), withSrcLoc)
 import GHC.Stack (HasCallStack, withFrozenCallStack)
-import Test.Tasty (TestName, TestTree)
+import Test.QuickCheck.Property qualified as QCP
+import Test.Tasty (TestName, TestTree, askOption)
 import Test.Tasty.QuickCheck hiding (testProperty)
 import Test.Tasty.QuickCheck qualified as QC
 
@@ -32,4 +37,20 @@ range that the streaming ingredient will emit alongside the test.
 -}
 testProperty :: (HasCallStack, Testable a) => TestName -> a -> TestTree
 testProperty name prop =
-  withFrozenCallStack (withSrcLoc (QC.testProperty name prop))
+  withFrozenCallStack
+    ( withSrcLoc $
+        let baseProp = property prop
+         in askOption $ \(SrcLocOpt mLoc) ->
+              case mLoc of
+                Nothing -> QC.testProperty name baseProp
+                Just _ ->
+                  askOption $ \(recorder :: QCStatsRecorder) ->
+                    let postTest =
+                          QCP.callback $ QCP.PostTest QCP.NotCounterexample $ \st _ ->
+                            recordQCStatsFromState recorder mLoc name st
+                        postFinalFailure =
+                          QCP.callback $ QCP.PostFinalFailure QCP.NotCounterexample $ \st _ ->
+                            recordQCStatsFromState recorder mLoc name st
+                        instrumented = postFinalFailure (postTest baseProp)
+                     in QC.testProperty name instrumented
+    )

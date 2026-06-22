@@ -27,6 +27,12 @@
             "oneOf": [
                 {
                     "properties": {
+                        "coverageIndex": {
+                            "items": {
+                                "$ref": "#/$defs/SrcLocRanges"
+                            },
+                            "type": "array"
+                        },
                         "event": {
                             "enum": [
                                 "suite_started"
@@ -45,7 +51,8 @@
                     },
                     "required": [
                         "event",
-                        "tests"
+                        "tests",
+                        "coverageIndex"
                     ],
                     "type": "object"
                 },
@@ -115,6 +122,9 @@
                         "id": {
                             "type": "integer"
                         },
+                        "monitoring_stats": {
+                            "$ref": "#/$defs/MonitoringStats"
+                        },
                         "success": {
                             "type": "boolean"
                         },
@@ -136,6 +146,12 @@
                         "category": {
                             "type": "string"
                         },
+                        "covered": {
+                            "items": {
+                                "$ref": "#/$defs/SrcLocRanges"
+                            },
+                            "type": "array"
+                        },
                         "event": {
                             "enum": [
                                 "test_trace"
@@ -153,6 +169,7 @@
                         "event",
                         "id",
                         "category",
+                        "covered",
                         "trace"
                     ],
                     "type": "object"
@@ -285,6 +302,157 @@
                 "status",
                 "transitions",
                 "threatModels"
+            ],
+            "type": "object"
+        },
+        "MonitoringClassStat": {
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "percent": {
+                    "format": "double",
+                    "type": "number"
+                }
+            },
+            "required": [
+                "name",
+                "count",
+                "percent"
+            ],
+            "type": "object"
+        },
+        "MonitoringLabelStat": {
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "labels": {
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
+                },
+                "percent": {
+                    "format": "double",
+                    "type": "number"
+                }
+            },
+            "required": [
+                "labels",
+                "count",
+                "percent"
+            ],
+            "type": "object"
+        },
+        "MonitoringStats": {
+            "properties": {
+                "classes": {
+                    "items": {
+                        "$ref": "#/$defs/MonitoringClassStat"
+                    },
+                    "type": "array"
+                },
+                "labels": {
+                    "items": {
+                        "$ref": "#/$defs/MonitoringLabelStat"
+                    },
+                    "type": "array"
+                },
+                "numDiscarded": {
+                    "type": "integer"
+                },
+                "numTests": {
+                    "type": "integer"
+                },
+                "tables": {
+                    "items": {
+                        "$ref": "#/$defs/MonitoringTableStat"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": [
+                "numTests",
+                "numDiscarded",
+                "labels",
+                "classes",
+                "tables"
+            ],
+            "type": "object"
+        },
+        "MonitoringTableEntry": {
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "value": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "value",
+                "count"
+            ],
+            "type": "object"
+        },
+        "MonitoringTableStat": {
+            "properties": {
+                "entries": {
+                    "items": {
+                        "$ref": "#/$defs/MonitoringTableEntry"
+                    },
+                    "type": "array"
+                },
+                "name": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "name",
+                "entries"
+            ],
+            "type": "object"
+        },
+        "SrcLocRanges": {
+            "properties": {
+                "endCols": {
+                    "items": {
+                        "type": "integer"
+                    },
+                    "type": "array"
+                },
+                "endLines": {
+                    "items": {
+                        "type": "integer"
+                    },
+                    "type": "array"
+                },
+                "file": {
+                    "type": "string"
+                },
+                "startCols": {
+                    "items": {
+                        "type": "integer"
+                    },
+                    "type": "array"
+                },
+                "startLines": {
+                    "items": {
+                        "type": "integer"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": [
+                "file",
+                "startLines",
+                "startCols",
+                "endLines",
+                "endCols"
             ],
             "type": "object"
         },
@@ -1115,6 +1283,12 @@
     "oneOf": [
         {
             "properties": {
+                "coverageIndex": {
+                    "items": {
+                        "$ref": "#/$defs/SrcLocRanges"
+                    },
+                    "type": "array"
+                },
                 "event": {
                     "enum": [
                         "suite_started"
@@ -1133,7 +1307,8 @@
             },
             "required": [
                 "event",
-                "tests"
+                "tests",
+                "coverageIndex"
             ],
             "type": "object"
         },
@@ -1203,6 +1378,9 @@
                 "id": {
                     "type": "integer"
                 },
+                "monitoring_stats": {
+                    "$ref": "#/$defs/MonitoringStats"
+                },
                 "success": {
                     "type": "boolean"
                 },
@@ -1224,6 +1402,12 @@
                 "category": {
                     "type": "string"
                 },
+                "covered": {
+                    "items": {
+                        "$ref": "#/$defs/SrcLocRanges"
+                    },
+                    "type": "array"
+                },
                 "event": {
                     "enum": [
                         "test_trace"
@@ -1241,6 +1425,7 @@
                 "event",
                 "id",
                 "category",
+                "covered",
                 "trace"
             ],
             "type": "object"

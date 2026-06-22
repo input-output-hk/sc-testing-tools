@@ -10,8 +10,16 @@ import Control.Concurrent.Async (forConcurrently_)
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Concurrent.STM
 import Control.Monad (unless, when)
+import Convex.Tasty.Streaming.QCStats (
+  QCStatsRecorder,
+  QCStatsStoreOption (..),
+  lookupQCStatsByTestInfo,
+  newQCStatsStore,
+  storeQCStatsRecorder,
+ )
 import Convex.Tasty.Streaming.SrcLoc (PackageRootOpt (..), callerPackageRoot)
 import Convex.Tasty.Streaming.TMSummary (
+  CoverageIndexStorage (..),
   TMRecorder,
   TMStoreOption (..),
   TraceRecorder (..),
@@ -168,10 +176,13 @@ streamingJsonReporter :: Ingredient
 streamingJsonReporter = TestReporter
   [ Option (Proxy :: Proxy StreamingJson)
   , Option (Proxy :: Proxy NoTrace)
+  , Option (Proxy :: Proxy QCStatsStoreOption)
+  , Option (Proxy :: Proxy QCStatsRecorder)
   , Option (Proxy :: Proxy TestIdRemap)
   , Option (Proxy :: Proxy TMStoreOption)
   , Option (Proxy :: Proxy TMRecorder)
   , Option (Proxy :: Proxy TraceRecorder)
+  , Option (Proxy :: Proxy CoverageIndexStorage)
   , Option (Proxy :: Proxy TestMapRef)
   , Option (Proxy :: Proxy StreamingEnabledRef)
   , Option (Proxy :: Proxy OutputLockRef)
@@ -183,8 +194,10 @@ streamingJsonReporter = TestReporter
       then Nothing
       else Just $ \statusMap -> do
         let TMStoreOption mStore = lookupOption opts
+            QCStatsStoreOption mQCStatsStore = lookupOption opts
             TestMapRef mTestMapRef = lookupOption opts
             StreamingEnabledRef mEnabledRef = lookupOption opts
+            CoverageIndexStorage coverageIndex = lookupOption opts
 
         -- Signal that streaming is active so the TraceRecorder callback
         -- (which checks the same IORef) actually emits events.
@@ -224,7 +237,7 @@ streamingJsonReporter = TestReporter
             remapId i = maybe i (IntMap.findWithDefault i i) mRemap
             remapInfo ti = ti{tiId = remapId (tiId ti)}
             testInfos = map (remapInfo . snd) $ IntMap.toAscList testMap
-        emit $ SuiteStarted mPkgRoot testInfos
+        emit $ SuiteStarted mPkgRoot testInfos coverageIndex
 
         -- Track results for final summary
         resultsVar <- newTVarIO ([] :: [(Int, Result)])
@@ -279,6 +292,9 @@ streamingJsonReporter = TestReporter
           mSummary <- case mStore of
             Just store -> lookupThreatModelSummary store key
             Nothing -> pure Nothing
+          mMonitoring <- case (mQCStatsStore, testInfo) of
+            (Just store, Just ti) -> lookupQCStatsByTestInfo store ti
+            _ -> pure Nothing
 
           -- Emit test_done
           let outcome = case resultOutcome result of
@@ -296,6 +312,7 @@ streamingJsonReporter = TestReporter
               , edDuration = resultTime result
               , edDescription = Text.pack (resultDescription result)
               , edThreatModel = mSummary
+              , edMonitoringStats = mMonitoring
               }
 
         -- Emit suite_done summary
@@ -359,9 +376,11 @@ listTestsJsonIngredient = TestManager
   [ Option (Proxy :: Proxy ListTestsJson)
   , Option (Proxy :: Proxy TestIdRemap)
   , Option (Proxy :: Proxy PackageRootOpt)
+  , Option (Proxy :: Proxy CoverageIndexStorage)
   ]
   $ \opts tree -> do
     let ListTestsJson enabled = lookupOption opts
+        CoverageIndexStorage coverageIndex = lookupOption opts
     if not enabled
       then Nothing
       else Just $ do
@@ -372,7 +391,7 @@ listTestsJsonIngredient = TestManager
             remapInfo ti = ti{tiId = remapId (tiId ti)}
         testMap <- buildTestMap opts tree
         let testInfos = map (remapInfo . snd) $ IntMap.toAscList testMap
-        emitEvent $ SuiteStarted mPkgRoot testInfos
+        emitEvent $ SuiteStarted mPkgRoot testInfos coverageIndex
         pure True
 
 -- | Option ingredient for selecting a subset of tests by Tasty ID.
@@ -490,6 +509,7 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
   mPkgRoot <- withFrozenCallStack callerPackageRoot
   let pkgRootOpt = PackageRootOpt (fmap Text.pack mPkgRoot)
   store <- newTMStore
+  qcStatsStore <- newQCStatsStore
   testMapRef <- newIORef IntMap.empty
   testIdRemapRef <- newIORef IntMap.empty
   enabledRef <- newIORef False -- set to True by the reporter when --streaming-json is active
@@ -507,7 +527,7 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
   let traceRec =
         TraceRecorder
           { trEnabled = readIORef enabledRef
-          , recordIteration = \group category iterationJson -> do
+          , recordIteration = \group category covered iterationJson -> do
               enabled <- readIORef enabledRef
               when enabled $ do
                 testMap <- readIORef testMapRef
@@ -520,16 +540,19 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
                       { ettTestId = mappedId
                       , ettCategory = Text.pack category
                       , ettTrace = iterationJson
+                      , ettCovered = covered
                       }
           }
   let baseTree =
         localOption pkgRootOpt $
-          localOption (TMStoreOption (Just store)) $
-            localOption (storeRecorder store) $
-              localOption (TestMapRef (Just testMapRef)) $
-                localOption (StreamingEnabledRef (Just enabledRef)) $
-                  localOption (OutputLockRef (Just outputLock)) $
-                    localOption traceRec tree
+          localOption (QCStatsStoreOption (Just qcStatsStore)) $
+            localOption (storeQCStatsRecorder qcStatsStore) $
+              localOption (TMStoreOption (Just store)) $
+                localOption (storeRecorder store) $
+                  localOption (TestMapRef (Just testMapRef)) $
+                    localOption (StreamingEnabledRef (Just enabledRef)) $
+                      localOption (OutputLockRef (Just outputLock)) $
+                        localOption traceRec tree
 
   opts <- parseOptions (extraIngredients <> streamingIngredients) baseTree
   let TestIdFilter requested = lookupOption opts

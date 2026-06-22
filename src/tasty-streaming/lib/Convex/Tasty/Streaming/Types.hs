@@ -3,9 +3,14 @@ module Convex.Tasty.Streaming.Types (
   TestInfo (..),
   TestOutcome (..),
   FailureInfo (..),
+  MonitoringStats (..),
+  MonitoringLabelStat (..),
+  MonitoringClassStat (..),
+  MonitoringTableStat (..),
+  MonitoringTableEntry (..),
 ) where
 
-import Convex.Tasty.Streaming.SrcLoc (SrcLocRange)
+import Convex.Tasty.Streaming.SrcLoc (SrcLocRange, groupRanges, ungroupRanges)
 import Convex.Tasty.Streaming.TMSummary (ThreatModelSummary)
 import Data.Aeson (FromJSON (..), ToJSON (..), Value, object, withObject, (.:), (.:?), (.=))
 import Data.Aeson.Types (Pair)
@@ -67,6 +72,116 @@ instance FromJSON FailureInfo where
       <$> o .: "reason"
       <*> o .: "message"
 
+data MonitoringLabelStat = MonitoringLabelStat
+  { mlsLabels :: ![Text]
+  , mlsCount :: !Int
+  , mlsPercent :: !Double
+  }
+  deriving (Eq, Show, Generic)
+
+instance ToJSON MonitoringLabelStat where
+  toJSON (MonitoringLabelStat labels count percent) =
+    object
+      [ "labels" .= labels
+      , "count" .= count
+      , "percent" .= percent
+      ]
+
+instance FromJSON MonitoringLabelStat where
+  parseJSON = withObject "MonitoringLabelStat" $ \o ->
+    MonitoringLabelStat
+      <$> o .: "labels"
+      <*> o .: "count"
+      <*> o .: "percent"
+
+data MonitoringClassStat = MonitoringClassStat
+  { mcsName :: !Text
+  , mcsCount :: !Int
+  , mcsPercent :: !Double
+  }
+  deriving (Eq, Show, Generic)
+
+instance ToJSON MonitoringClassStat where
+  toJSON (MonitoringClassStat name count percent) =
+    object
+      [ "name" .= name
+      , "count" .= count
+      , "percent" .= percent
+      ]
+
+instance FromJSON MonitoringClassStat where
+  parseJSON = withObject "MonitoringClassStat" $ \o ->
+    MonitoringClassStat
+      <$> o .: "name"
+      <*> o .: "count"
+      <*> o .: "percent"
+
+data MonitoringTableEntry = MonitoringTableEntry
+  { mteValue :: !Text
+  , mteCount :: !Int
+  }
+  deriving (Eq, Show, Generic)
+
+instance ToJSON MonitoringTableEntry where
+  toJSON (MonitoringTableEntry value count) =
+    object
+      [ "value" .= value
+      , "count" .= count
+      ]
+
+instance FromJSON MonitoringTableEntry where
+  parseJSON = withObject "MonitoringTableEntry" $ \o ->
+    MonitoringTableEntry
+      <$> o .: "value"
+      <*> o .: "count"
+
+data MonitoringTableStat = MonitoringTableStat
+  { mtsName :: !Text
+  , mtsEntries :: ![MonitoringTableEntry]
+  }
+  deriving (Eq, Show, Generic)
+
+instance ToJSON MonitoringTableStat where
+  toJSON (MonitoringTableStat name entries) =
+    object
+      [ "name" .= name
+      , "entries" .= entries
+      ]
+
+instance FromJSON MonitoringTableStat where
+  parseJSON = withObject "MonitoringTableStat" $ \o ->
+    MonitoringTableStat
+      <$> o .: "name"
+      <*> o .: "entries"
+
+data MonitoringStats = MonitoringStats
+  { msNumTests :: !Int
+  , msNumDiscarded :: !Int
+  , msLabels :: ![MonitoringLabelStat]
+  , msClasses :: ![MonitoringClassStat]
+  , msTables :: ![MonitoringTableStat]
+  }
+  deriving (Eq, Show, Generic)
+
+instance ToJSON MonitoringStats where
+  toJSON (MonitoringStats numTests numDiscarded labels classes tables) =
+    object
+      [ "numTests" .= numTests
+      , "numDiscarded" .= numDiscarded
+      , "labels" .= labels
+      , "classes" .= classes
+      , "tables" .= tables
+      ]
+
+instance FromJSON MonitoringStats where
+  parseJSON = withObject "MonitoringStats" $ \o ->
+    MonitoringStats
+      <$> o .: "numTests"
+      <*> o .: "numDiscarded"
+      <*> o .: "labels"
+      <*> o .: "classes"
+      <*> o .: "tables"
+
 -- | A streaming event emitted as a single NDJSON line
 data Event
   = SuiteStarted
@@ -77,6 +192,7 @@ data Event
       'srcLocFile' values across packages in multi-package workspaces.
       -}
       , esTests :: ![TestInfo]
+      , edCoverageIndex :: ![SrcLocRange]
       }
   | TestStarted
       { etId :: !Int
@@ -92,10 +208,12 @@ data Event
       , edDuration :: !Double
       , edDescription :: !Text
       , edThreatModel :: !(Maybe ThreatModelSummary)
+      , edMonitoringStats :: !(Maybe MonitoringStats)
       }
   | TestTrace
       { ettTestId :: !Int
       , ettCategory :: !Text
+      , ettCovered :: ![SrcLocRange]
       , ettTrace :: !Value -- pre-serialized IterationTrace JSON
       }
   | SuiteDone
@@ -106,10 +224,11 @@ data Event
   deriving (Eq, Show, Generic)
 
 instance ToJSON Event where
-  toJSON (SuiteStarted mRoot ts) =
+  toJSON (SuiteStarted mRoot ts ci) =
     object $
       [ "event" .= ("suite_started" :: Text)
       , "tests" .= ts
+      , "coverageIndex" .= groupRanges ci
       ]
         <> maybe [] (\r -> ["packageRoot" .= r]) mRoot
   toJSON (TestStarted i) =
@@ -124,7 +243,7 @@ instance ToJSON Event where
       , "message" .= msg
       , "percent" .= pct
       ]
-  toJSON (TestDone i outcome dur desc mTm) =
+  toJSON (TestDone i outcome dur desc mTm mMonitoring) =
     object $
       [ "event" .= ("test_done" :: Text)
       , "id" .= i
@@ -133,6 +252,7 @@ instance ToJSON Event where
       ]
         <> outcomeFields outcome
         <> threatModelFields mTm
+        <> monitoringFields mMonitoring
    where
     outcomeFields TestSuccess = ["success" .= True]
     outcomeFields (TestFailure fi) =
@@ -141,12 +261,15 @@ instance ToJSON Event where
       ]
     threatModelFields :: Maybe ThreatModelSummary -> [Pair]
     threatModelFields = maybe [] (\s -> ["threat_model" .= s])
-  toJSON (TestTrace i cat trace) =
+    monitoringFields :: Maybe MonitoringStats -> [Pair]
+    monitoringFields = maybe [] (\s -> ["monitoring_stats" .= s])
+  toJSON (TestTrace i cat cov trace) =
     object
       [ "event" .= ("test_trace" :: Text)
       , "id" .= i
       , "category" .= cat
       , "trace" .= trace
+      , "covered" .= groupRanges cov
       ]
   toJSON (SuiteDone p f dur) =
     object
@@ -164,6 +287,7 @@ instance FromJSON Event where
         SuiteStarted
           <$> o .:? "packageRoot"
           <*> o .: "tests"
+          <*> (ungroupRanges <$> o .: "coverageIndex")
       "test_started" ->
         TestStarted <$> o .: "id"
       "test_progress" ->
@@ -181,11 +305,13 @@ instance FromJSON Event where
             then pure TestSuccess
             else TestFailure <$> o .: "failure"
         mTm <- o .:? "threat_model"
-        pure (TestDone eid outcome dur desc mTm)
+        mMonitoring <- o .:? "monitoring_stats"
+        pure (TestDone eid outcome dur desc mTm mMonitoring)
       "test_trace" ->
         TestTrace
           <$> o .: "id"
           <*> o .: "category"
+          <*> (ungroupRanges <$> o .: "covered")
           <*> o .: "trace"
       "suite_done" ->
         SuiteDone

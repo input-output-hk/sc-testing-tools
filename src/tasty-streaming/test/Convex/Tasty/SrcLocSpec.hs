@@ -12,6 +12,13 @@ module Convex.Tasty.SrcLocSpec (tests) where
 import Convex.Tasty.HUnit (Assertion, assertBool, assertEqual, assertFailure, testCase, (@?=))
 import Convex.Tasty.HUnit qualified as ConvexHU
 import Convex.Tasty.QuickCheck qualified as ConvexQC
+import Convex.Tasty.Streaming.QCStats (
+  QCStatsRecorder (..),
+  lookupQCStatsByTestInfo,
+  mkQCStatsKey,
+  newQCStatsStore,
+  storeQCStatsRecorder,
+ )
 import Convex.Tasty.Streaming.SrcLoc (
   SrcLocRange (..),
   callerPackageRoot,
@@ -19,7 +26,7 @@ import Convex.Tasty.Streaming.SrcLoc (
   withSrcLoc,
  )
 import Convex.Tasty.Streaming.TreeMap (buildTestMap)
-import Convex.Tasty.Streaming.Types (Event (..), TestInfo (..))
+import Convex.Tasty.Streaming.Types (Event (..), MonitoringStats (..), TestInfo (..), TestOutcome (..))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.IntMap.Strict qualified as IntMap
@@ -43,6 +50,12 @@ tests =
     , testCase "round-trip without srcLoc (key absent)" roundTripWithoutSrcLoc
     , testCase "SuiteStarted round-trip with packageRoot" suiteStartedWithPackageRoot
     , testCase "SuiteStarted without packageRoot (key absent)" suiteStartedWithoutPackageRoot
+    , testCase "TestDone without monitoring_stats omits key" testDoneWithoutMonitoringOmitKey
+    , testCase "TestDone with monitoring_stats includes key" testDoneWithMonitoringIncludesKey
+    , testCase "MonitoringStats round-trip" monitoringStatsRoundTrip
+    , testCase "TestDone round-trip with monitoring_stats" testDoneRoundTripWithMonitoring
+    , testCase "QC stats key differs across test identities" qcStatsKeyDiffersAcrossTestIdentities
+    , testCase "QC stats lookup uses srcLoc and test name" qcStatsLookupRequiresFullIdentity
     , testCase "callerPackageRoot resolves to convex-tasty-streaming" callerPackageRootResolvesToThisPackage
     , testCase "findPackageRootFromFile finds convex-tasty-streaming" findPackageRootFromFileFindsThisPackage
     ]
@@ -226,7 +239,7 @@ suiteStartedWithPackageRoot = do
           , tiPath = ["group"]
           , tiSrcLoc = Nothing
           }
-      evt = SuiteStarted (Just "/abs/path/to/pkg") [info]
+      evt = SuiteStarted (Just "/abs/path/to/pkg") [info] []
       encoded = Aeson.encode evt
   -- The "packageRoot" key must be present at the top level.
   case Aeson.decode encoded :: Maybe Aeson.Value of
@@ -254,7 +267,7 @@ suiteStartedWithoutPackageRoot = do
           , tiPath = []
           , tiSrcLoc = Nothing
           }
-      evt = SuiteStarted Nothing [info]
+      evt = SuiteStarted Nothing [info] []
       encoded = Aeson.encode evt
   -- The "packageRoot" key must be absent (NOT "packageRoot": null).
   case Aeson.decode encoded :: Maybe Aeson.Value of
@@ -270,7 +283,162 @@ suiteStartedWithoutPackageRoot = do
     Right evt' -> evt' @?= evt
 
 -- ---------------------------------------------------------------------------
--- 9. callerPackageRoot end-to-end: when invoked from inside this test
+-- 9. TestDone monitoring JSON coverage
+-- ---------------------------------------------------------------------------
+
+testDoneWithoutMonitoringOmitKey :: Assertion
+testDoneWithoutMonitoringOmitKey = do
+  let evt =
+        TestDone
+          { edId = 11
+          , edOutcome = TestSuccess
+          , edDuration = 0.5
+          , edDescription = "done"
+          , edThreatModel = Nothing
+          , edMonitoringStats = Nothing
+          }
+      encoded = Aeson.encode evt
+  case Aeson.decode encoded :: Maybe Aeson.Value of
+    Just (Aeson.Object o) ->
+      assertBool
+        "Encoded TestDone must omit monitoring_stats when edMonitoringStats is Nothing"
+        (not (KeyMap.member "monitoring_stats" o))
+    other ->
+      assertFailure $ "Expected JSON object, got: " <> show other
+
+testDoneWithMonitoringIncludesKey :: Assertion
+testDoneWithMonitoringIncludesKey = do
+  let stats =
+        MonitoringStats
+          { msNumTests = 10
+          , msNumDiscarded = 2
+          , msLabels = []
+          , msClasses = []
+          , msTables = []
+          }
+      evt =
+        TestDone
+          { edId = 12
+          , edOutcome = TestSuccess
+          , edDuration = 0.7
+          , edDescription = "done"
+          , edThreatModel = Nothing
+          , edMonitoringStats = Just stats
+          }
+      encoded = Aeson.encode evt
+  case Aeson.decode encoded :: Maybe Aeson.Value of
+    Just (Aeson.Object o) ->
+      assertBool
+        "Encoded TestDone must include monitoring_stats when edMonitoringStats is Just"
+        (KeyMap.member "monitoring_stats" o)
+    other ->
+      assertFailure $ "Expected JSON object, got: " <> show other
+
+monitoringStatsRoundTrip :: Assertion
+monitoringStatsRoundTrip = do
+  let stats =
+        MonitoringStats
+          { msNumTests = 42
+          , msNumDiscarded = 3
+          , msLabels = []
+          , msClasses = []
+          , msTables = []
+          }
+      encoded = Aeson.encode stats
+  case Aeson.eitherDecode encoded of
+    Left err -> assertFailure $ "decode failed: " <> err
+    Right stats' -> stats' @?= stats
+
+testDoneRoundTripWithMonitoring :: Assertion
+testDoneRoundTripWithMonitoring = do
+  let stats =
+        MonitoringStats
+          { msNumTests = 99
+          , msNumDiscarded = 4
+          , msLabels = []
+          , msClasses = []
+          , msTables = []
+          }
+      evt =
+        TestDone
+          { edId = 13
+          , edOutcome = TestSuccess
+          , edDuration = 1.3
+          , edDescription = "done with stats"
+          , edThreatModel = Nothing
+          , edMonitoringStats = Just stats
+          }
+      encoded = Aeson.encode evt
+  case Aeson.eitherDecode encoded of
+    Left err -> assertFailure $ "decode failed: " <> err
+    Right evt' -> evt' @?= evt
+
+-- ---------------------------------------------------------------------------
+-- 10. QC stats keying and lookup behavior
+-- ---------------------------------------------------------------------------
+
+qcStatsKeyDiffersAcrossTestIdentities :: Assertion
+qcStatsKeyDiffersAcrossTestIdentities = do
+  let loc =
+        SrcLocRange
+          { slrFile = "src/Foo.hs"
+          , slrStartLine = 10
+          , slrStartCol = 5
+          , slrEndLine = 10
+          , slrEndCol = 13
+          }
+      keyA = mkQCStatsKey loc "leaf"
+      keyB = mkQCStatsKey loc "leaf-2"
+      keyC =
+        mkQCStatsKey
+          SrcLocRange
+            { slrFile = "src/Other.hs"
+            , slrStartLine = 10
+            , slrStartCol = 5
+            , slrEndLine = 10
+            , slrEndCol = 13
+            }
+          "leaf"
+  assertBool "Different test names must produce different keys" (keyA /= keyB)
+  assertBool "Different source locations must produce different keys" (keyA /= keyC)
+
+qcStatsLookupRequiresFullIdentity :: Assertion
+qcStatsLookupRequiresFullIdentity = do
+  store <- newQCStatsStore
+  let recorder = storeQCStatsRecorder store
+      loc =
+        SrcLocRange
+          { slrFile = "src/Foo.hs"
+          , slrStartLine = 10
+          , slrStartCol = 5
+          , slrEndLine = 10
+          , slrEndCol = 13
+          }
+      stats =
+        MonitoringStats
+          { msNumTests = 42
+          , msNumDiscarded = 1
+          , msLabels = []
+          , msClasses = []
+          , msTables = []
+          }
+      ti =
+        TestInfo
+          { tiId = 7
+          , tiName = "leaf"
+          , tiPath = ["group"]
+          , tiSrcLoc = Just loc
+          }
+  qcRecordStats recorder (mkQCStatsKey loc "leaf") stats
+  mFound <- lookupQCStatsByTestInfo store ti
+  assertEqual "lookup should find stats for exact full identity" (Just stats) mFound
+
+  qcRecordStats recorder (mkQCStatsKey loc "leaf") stats
+  mStill <- lookupQCStatsByTestInfo store ti
+  assertEqual "lookup should remain stable for repeated writes" (Just stats) mStill
+
+-- ---------------------------------------------------------------------------
+-- 11. callerPackageRoot end-to-end: when invoked from inside this test
 --    suite, it must resolve to the package directory containing the
 --    convex-tasty-streaming.cabal file (this same package).
 -- ---------------------------------------------------------------------------
@@ -296,7 +464,7 @@ callerPackageRootResolvesToThisPackage = do
         ("src/tasty-streaming" `isSuffixOf` root)
 
 -- ---------------------------------------------------------------------------
--- 10. findPackageRootFromFile end-to-end: given a known package-relative
+-- 12. findPackageRootFromFile end-to-end: given a known package-relative
 --     path to a file inside convex-tasty-streaming, the helper must return
 --     the package directory.
 -- ---------------------------------------------------------------------------

@@ -95,7 +95,6 @@ library
     , tasty
     , tasty-expected-failure
     , tasty-hunit
-    , tasty-quickcheck
     , text
     , time
 
@@ -182,3 +181,4 @@ test-suite convex-testing-interface-test
     , tasty-expected-failure
     , tasty-hunit
     , tasty-quickcheck
+    , text
