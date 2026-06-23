@@ -24,6 +24,7 @@ module Convex.TestingInterface (
   propRunActionsWithOptions,
   RunOptions (..),
   defaultRunOptions,
+  defaultMainTestingInterface,
   genAction,
   runActions,
 
@@ -93,6 +94,7 @@ import Convex.MonadLog (MonadLog)
 import Convex.NodeParams (NodeParams (..))
 import Convex.Tasty.Streaming.SrcLoc (SrcLocRange (..), withSrcLoc)
 import Convex.Tasty.Streaming.TMSummary (CoverageIndexStorage (..), TMRecorder, ThreatModelSummary (..), TraceRecorder (..), tmRecord)
+import Convex.TestingInterface.Options (defaultMainTestingInterface)
 import Convex.TestingInterface.Trace (
   IterationStatus (..),
   IterationTrace (..),
@@ -114,7 +116,7 @@ import Data.Aeson.Key qualified as Key
 import Data.ByteString.Lazy.Char8 qualified as LBS
 import Data.Foldable (foldl', for_, traverse_)
 import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
-import Data.List (deleteFirstsBy)
+import Data.List (deleteFirstsBy, isPrefixOf)
 import Data.Map qualified as Map
 import Data.Maybe (catMaybes, fromMaybe)
 
@@ -301,6 +303,11 @@ data RunOptions = RunOptions
   {- ^ If @Just reason@, negative tests are skipped (shown as IGNORED) with the given reason.
   If @Nothing@, negative tests run normally. Default: @Nothing@.
   -}
+  , threatModelFilter :: [String]
+  {- ^ If non-empty, run only threat models whose names start with any value in this list.
+  This filter applies only to 'threatModels' and not to 'expectedVulnerabilities'.
+  If empty, all threat models run. Default: @[]@.
+  -}
   }
 
 defaultRunOptions :: RunOptions
@@ -310,7 +317,19 @@ defaultRunOptions =
     , maxActions = 10
     , mcOptions = defaultOptions
     , disableNegativeTesting = Nothing
+    , threatModelFilter = []
     }
+
+filterThreatModelsByOptions :: RunOptions -> [ThreatModel ()] -> [ThreatModel ()]
+filterThreatModelsByOptions RunOptions{threatModelFilter} =
+  filter matchesThreatModelFilter
+ where
+  matchesThreatModelFilter tm =
+    case threatModelFilter of
+      [] -> True
+      names ->
+        let tmName = fromMaybe "Unnamed" (getThreatModelName tm)
+         in any (`isPrefixOf` tmName) names
 
 {- | Main property for testing a testing interface.
 Generates random action sequences and checks that the implementation matches the model.
@@ -331,6 +350,7 @@ propRunActionsWithOptions groupName opts =
     withSrcLoc $
       askOption $ \(recorder :: TraceRecorder) ->
         let tms = threatModels @state
+            filteredTms = filterThreatModelsByOptions opts tms
             evs = expectedVulnerabilities @state
          in if null tms && null evs
               then
@@ -348,10 +368,10 @@ propRunActionsWithOptions groupName opts =
                   withResource (newIORef (0 :: Int)) (\_ -> pure ()) $ \getPosRef ->
                     withResource (newIORef (0 :: Int)) (\_ -> pure ()) $ \getNegRef ->
                       sequentialTestGroup groupName AllFinish $
-                        [ testProperty "Positive tests" (positiveTest @state opts groupName (Just getTmResultsRef) tms evs recorder getPosRef)
+                        [ testProperty "Positive tests" (positiveTest @state opts groupName (Just getTmResultsRef) filteredTms evs recorder getPosRef)
                         , negativeTestTree recorder getNegRef
                         ]
-                          <> threatModelGroup getTmResultsRef tms
+                          <> threatModelGroup getTmResultsRef filteredTms
                           <> expectedVulnGroup getTmResultsRef evs
  where
   negativeTestTree recorder getNegRef = case disableNegativeTesting opts of
@@ -602,7 +622,17 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
     let isTMFailed (TMFailed _) = True
         isTMFailed _ = False
         alreadyFailed name = any isTMFailed (fromMaybe [] (Map.lookup name existingResults))
-        tmsToRun = filter (not . alreadyFailed . fromMaybe "Unnamed" . getThreatModelName) tms
+
+        -- Only filter threat models (tms) for early-stop and optional name filtering;
+        -- expected vulnerabilities (evs) always run.
+        tmsToRun =
+          filter
+            ( \tm ->
+                let name = fromMaybe "Unnamed" (getThreatModelName tm)
+                 in not (alreadyFailed name)
+            )
+            (filterThreatModelsByOptions opts tms)
+
         allToRun = tmsToRun <> evs
     tmResultsWithCov <- liftIO $ forM allToRun $ \tm -> do
       let name = fromMaybe "Unnamed" (getThreatModelName tm)
@@ -680,7 +710,17 @@ positiveTestFast opts mGetTmResultsRef tms evs = do
     let isTMFailed (TMFailed _) = True
         isTMFailed _ = False
         alreadyFailed name = any isTMFailed (fromMaybe [] (Map.lookup name existingResults))
-        tmsToRun = filter (not . alreadyFailed . fromMaybe "Unnamed" . getThreatModelName) tms
+
+        -- Only filter threat models (tms) for early-stop and optional name filtering;
+        -- expected vulnerabilities (evs) always run.
+        tmsToRun =
+          filter
+            ( \tm ->
+                let name = fromMaybe "Unnamed" (getThreatModelName tm)
+                 in not (alreadyFailed name)
+            )
+            (filterThreatModelsByOptions opts tms)
+
         allToRun = tmsToRun <> evs
     tmResultsWithCov <- liftIO $ forM allToRun $ \tm -> do
       let name = fromMaybe "Unnamed" (getThreatModelName tm)

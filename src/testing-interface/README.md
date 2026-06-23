@@ -132,11 +132,27 @@ threat models include:
 ### 4. Write Properties and Run Tests
 
 ```haskell
+import Convex.TestingInterface (defaultMainTestingInterface, propRunActions)
+import Test.Tasty (testGroup)
+
 main :: IO ()
-main = defaultMain $ testGroup "My Contract"
-  [ propRunActions @MyContractState "testing interface"
-  ]
+main =
+  defaultMainTestingInterface $
+    testGroup "My Contract"
+      [ propRunActions @MyContractState "testing interface"
+      ]
 ```
+
+Use `defaultMainTestingInterface` instead of `defaultMain`.
+It prepares the testing-interface runtime with package-specific options and enables
+streaming support from `convex-tasty-streaming`.
+
+This enables CLI options such as:
+
+- `--list-threat-models`
+- `--list-threat-models-json`
+- `--threat-model-name`
+- streaming options like `--streaming-json` and `--list-tests-json`
 
 `propRunActions` requires the `ThreatModelsFor` constraint. It automatically creates
 a test group containing:
@@ -151,6 +167,34 @@ For custom options (verbosity, max actions, etc.):
 ```haskell
 propRunActionsWithOptions @MyContractState "testing interface" myRunOptions
 ```
+
+In this repository test suite, you can filter which threat models run from the CLI:
+
+**Step 1: Discover available threat models:**
+
+```bash
+cabal test convex-testing-interface-test --test-options='--list-threat-models'
+```
+
+This prints all available threat model names (one per line), which you can then copy/paste.
+
+**Step 2: Run one or more threat models:**
+
+```bash
+# Single threat model
+cabal test convex-testing-interface-test --test-options='--threat-model-name "Input Duplication" -p lending'
+
+# Multiple threat models (comma-separated)
+cabal test convex-testing-interface-test --test-options='--threat-model-name "Input Duplication, Unprotected Script Output" -p lending'
+```
+
+Notes:
+
+- Matching is prefix-based and case-sensitive.
+- For multiple threat models, use comma-separated values: `--threat-model-name "TM1, TM2, TM3"`
+- This filter applies only to `threatModels` and does not affect `expectedVulnerabilities`.
+- Threat model execution still happens during `Positive tests`, so this option narrows execution but does not decouple it from the positive-test phase.
+- Empty filter (no `--threat-model-name` option) runs all threat models (default behavior).
 
 ## Architecture
 

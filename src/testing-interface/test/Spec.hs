@@ -3,19 +3,22 @@
 import Cardano.Api qualified as C
 import Convex.MockChain.Utils (mockchainFails)
 import Convex.Tasty.HUnit (testCase)
-import Convex.Tasty.Streaming (defaultMainStreaming)
-
 import Convex.TestingInterface (
   Options,
-  RunOptions (mcOptions),
+  RunOptions (mcOptions, threatModelFilter),
+  defaultMainTestingInterface,
   defaultOptions,
   defaultRunOptions,
   mockchainSucceedsWithOptions,
   modifyTransactionLimits,
   withCoverageIndices,
  )
+
+import Convex.TestingInterface.Options (
+  ThreatModelNameFilter (..),
+ )
 import Convex.Utils (failOnError)
-import Test.Tasty (TestTree, testGroup)
+import Test.Tasty (TestTree, askOption, testGroup)
 
 import AikenBankSpec (aikenBankTests)
 import AikenHelloWorldSpec (aikenHelloWorldTests)
@@ -46,9 +49,12 @@ main =
     opts = modifyTransactionLimits defaultOptions 50_000
     runOpts = defaultRunOptions{mcOptions = opts}
    in
-    defaultMainStreaming $
-      withCoverageIndices [pingPongCovIdx] $
-        tests opts runOpts
+    defaultMainTestingInterface $
+      withCoverageIndices
+        [pingPongCovIdx]
+        ( askOption $ \(ThreatModelNameFilter tmNameFilter) ->
+            tests opts runOpts{threatModelFilter = tmNameFilter}
+        )
 
 tests :: Options C.ConwayEra -> RunOptions -> TestTree
 tests opts runOpts =

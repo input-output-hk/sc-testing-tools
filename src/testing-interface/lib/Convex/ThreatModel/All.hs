@@ -1,6 +1,6 @@
 module Convex.ThreatModel.All where
 
-import Convex.ThreatModel (ThreatModel)
+import Convex.ThreatModel (ThreatModel, getThreatModelName)
 import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
 import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
 import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
@@ -16,8 +16,10 @@ import Convex.ThreatModel.RedeemerAssetSubstitution (redeemerAssetSubstitution)
 import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
 import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
 import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
+import Convex.ThreatModel.TokenForgery (simpleAlwaysSucceedsMintingPolicyV2, simpleTestAssetName, tokenForgeryAttack)
 import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
 import Convex.ThreatModel.ValueUnderpayment (valueUnderpaymentAttack)
+import Data.Maybe (mapMaybe)
 
 {- | A list of all the threat models that don't take parameters.
 Almost all threat models in this library have versions without parameters, except @TokenForgery@.
@@ -40,6 +42,10 @@ allThreatModels =
   , selfReferenceInjection
   , signatoryRemoval
   , timeBoundManipulation
+  , tokenForgeryAttack simpleAlwaysSucceedsMintingPolicyV2 simpleTestAssetName
   , unprotectedScriptOutput
   , valueUnderpaymentAttack
   ]
+
+allThreatModelsNames :: [String]
+allThreatModelsNames = mapMaybe getThreatModelName allThreatModels
