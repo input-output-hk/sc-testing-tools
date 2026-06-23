@@ -115,18 +115,22 @@ If you don't override `threatModels`, the default runs **all** built-in threat m
 (from `allThreatModels`) minus any listed in `expectedVulnerabilities`. The built-in
 threat models include:
 
-- `unprotectedScriptOutput` -- outputs can be redirected away from the script
-- `doubleSatisfaction` -- a single input satisfies multiple scripts
-- `largeDataAttack` / `largeValueAttack` -- bloated datums or values are accepted
-- `inputDuplication` -- duplicate inputs are accepted
-- `signatoryRemoval` -- required signatories can be removed
 - `datumListBloatAttack` / `datumByteBloatAttack` -- datum bloating variants
+- `doubleSatisfaction` -- a single input satisfies multiple scripts
 - `duplicateListEntryAttack` -- duplicate list entries in datums
+- `inputDuplication` -- duplicate inputs are accepted
+- `invalidDatumIndexAttack` -- invalid datum index attacks
+- `largeDataAttack` / `largeValueAttack` -- bloated datums or values are accepted
+- `missingOutputDatumAttack` -- missing output datum attacks
 - `mutualExclusionAttack` -- mutual exclusion violations
 - `negativeIntegerAttack` -- negative integers where positives are expected
+- `outputDatumHashMissingAttack` -- output datum hash missing attacks
 - `redeemerAssetSubstitution` -- redeemer assets can be substituted
 - `selfReferenceInjection` -- self-referencing datum injection
+- `signatoryRemoval` -- required signatories can be removed
 - `timeBoundManipulation` -- time bound manipulation
+- `tokenForgeryAttack` -- token forgery attacks
+- `unprotectedScriptOutput` -- outputs can be redirected away from the script
 - `valueUnderpaymentAttack` -- value underpayment
 
 ### 4. Write Properties and Run Tests
@@ -149,10 +153,12 @@ streaming support from `convex-tasty-streaming`.
 
 This enables CLI options such as:
 
-- `--list-threat-models`
-- `--list-threat-models-json`
-- `--threat-model-name`
-- streaming options like `--streaming-json` and `--list-tests-json`
+- `--list-threat-models` -- list all available threat models
+- `--list-threat-models-json` -- list all available threat models as JSON
+- `--threat-model-name` -- filter threat models by name (prefix-based)
+- `--list-tests-json` -- list all available tests as JSON
+- `--test-id` -- run only specific tests by their IDs
+- `--streaming-json` -- stream test results as NDJSON
 
 `propRunActions` requires the `ThreatModelsFor` constraint. It automatically creates
 a test group containing:
@@ -188,7 +194,33 @@ cabal test convex-testing-interface-test --test-options='--threat-model-name "In
 cabal test convex-testing-interface-test --test-options='--threat-model-name "Input Duplication, Unprotected Script Output" -p lending'
 ```
 
-Notes:
+### Run Tests by ID
+
+You can run only specific tests by their IDs using `--test-id` (comma-separated):
+
+```bash
+# Run a single test by ID
+cabal test convex-testing-interface-test --test-options='--test-id 0'
+
+# Run multiple tests by ID
+cabal test convex-testing-interface-test --test-options='--test-id 0,3,7'
+```
+
+Recommended workflow:
+
+1. Use `--list-tests-json` to discover available test IDs:
+   ```bash
+   cabal test convex-testing-interface-test --test-options='--list-tests-json'
+   ```
+2. Re-run with `--test-id` using the IDs you want.
+
+Behavior notes:
+
+- Unknown IDs fail fast with a helpful error.
+- For threat-model and expected-vulnerability tests, required prerequisites (such as `Positive tests`) are included automatically.
+- Test IDs in JSON outputs preserve the original IDs from `--list-tests-json`, which may be sparse.
+
+### Threat Model Filtering Notes
 
 - Matching is prefix-based and case-sensitive.
 - For multiple threat models, use comma-separated values: `--threat-model-name "TM1, TM2, TM3"`
