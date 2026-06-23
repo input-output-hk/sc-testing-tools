@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/input-output-hk/sc-tools-experiments/scripts/list-test-suites.schema.json",
+  "title": "list-test-suites output",
+  "description": "JSON Schema for the default (non-`--tsv`) stdout of scripts/list-test-suites.sh. The tool scans a root directory for cabal projects and emits, per project, its packages and their test suites together with the commands to run / stream / discover each suite, plus any orphan .cabal files referenced by no project.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["root", "projects", "orphans"],
+  "properties": {
+    "root": {
+      "type": "string",
+      "description": "Absolute path to the scanned root directory."
+    },
+    "projects": {
+      "type": "array",
+      "description": "One entry per discovered cabal project file (plus one synthetic implicit project when no cabal.project exists).",
+      "items": { "$ref": "#/$defs/project" }
+    },
+    "orphans": {
+      "type": "array",
+      "description": ".cabal files found under root but referenced by no project's packages: list.",
+      "items": { "$ref": "#/$defs/orphan" }
+    }
+  },
+  "$defs": {
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectFile", "packages"],
+      "properties": {
+        "projectFile": {
+          "type": ["string", "null"],
+          "description": "Project file path relative to root (e.g. \"cabal.project\", \"cabal.project.schema-gen\"), or null for the implicit project when no cabal.project is present."
+        },
+        "packages": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/package" }
+        }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "cabalFile", "packageDir", "testSuites"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Package name from the .cabal `name:` field."
+        },
+        "cabalFile": {
+          "type": "string",
+          "description": "Path to the .cabal file, relative to root."
+        },
+        "packageDir": {
+          "type": "string",
+          "description": "Directory containing the .cabal file, relative to root."
+        },
+        "testSuites": {
+          "type": "array",
+          "description": "Test-suite stanzas in the package. Empty array when the package defines none.",
+          "items": { "$ref": "#/$defs/testSuite" }
+        }
+      }
+    },
+    "testSuite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "mainIs",
+        "entryPoint",
+        "runTestsCommand",
+        "streamTestsCommand",
+        "discoverCommand"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "test-suite stanza name."
+        },
+        "mainIs": {
+          "type": "string",
+          "description": "main-is path relative to the package dir, or the literal \"MISSING\" if the file could not be resolved on disk."
+        },
+        "entryPoint": {
+          "type": "string",
+          "enum": ["STREAMING", "upstream", "unknown", "MISSING"],
+          "description": "Classification of the suite's main module: STREAMING (uses defaultMainStreaming from convex-tasty-streaming), upstream (plain tasty defaultMain), unknown (neither detected), MISSING (main-is file absent)."
+        },
+        "runTestsCommand": {
+          "type": "string",
+          "description": "Command to build & run the suite. Always present. Carries --project-file=<file> iff the package is exclusively owned by a non-default project."
+        },
+        "streamTestsCommand": {
+          "type": ["string", "null"],
+          "description": "Command to run with streaming JSON output (--test-options=--streaming-json). Non-null ONLY for STREAMING suites; null otherwise."
+        },
+        "discoverCommand": {
+          "type": ["string", "null"],
+          "description": "Command to statically list tests as JSON (--test-options=--list-tests-json). Non-null ONLY for STREAMING suites; null otherwise."
+        }
+      },
+      "comment": "Invariant: streamTestsCommand and discoverCommand are strings iff entryPoint == \"STREAMING\", else null. The --streaming-json / --list-tests-json ingredients are provided only by the convex-tasty-streaming library.",
+      "if": {
+        "properties": { "entryPoint": { "const": "STREAMING" } }
+      },
+      "then": {
+        "properties": {
+          "streamTestsCommand": { "type": "string" },
+          "discoverCommand": { "type": "string" }
+        }
+      },
+      "else": {
+        "properties": {
+          "streamTestsCommand": { "type": "null" },
+          "discoverCommand": { "type": "null" }
+        }
+      }
+    },
+    "orphan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cabalFile", "packageDir"],
+      "properties": {
+        "cabalFile": {
+          "type": "string",
+          "description": "Path to the orphan .cabal file, relative to root."
+        },
+        "packageDir": {
+          "type": "string",
+          "description": "Directory containing the orphan .cabal file, relative to root."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "root": "/abs/path/to/repo",
+      "projects": [
+        {
+          "projectFile": "cabal.project",
+          "packages": [
+            {
+              "name": "convex-tasty-streaming",
+              "cabalFile": "src/tasty-streaming/convex-tasty-streaming.cabal",
+              "packageDir": "src/tasty-streaming",
+              "testSuites": [
+                {
+                  "name": "convex-tasty-streaming-test",
+                  "mainIs": "test/Spec.hs",
+                  "entryPoint": "STREAMING",
+                  "runTestsCommand": "cabal test convex-tasty-streaming-test",
+                  "streamTestsCommand": "cabal test convex-tasty-streaming-test --test-options=--streaming-json",
+                  "discoverCommand": "cabal test convex-tasty-streaming-test --test-options=--list-tests-json"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "projectFile": "cabal.project.schema-gen",
+          "packages": [
+            {
+              "name": "convex-schema-gen",
+              "cabalFile": "src/schema-gen/convex-schema-gen.cabal",
+              "packageDir": "src/schema-gen",
+              "testSuites": [
+                {
+                  "name": "convex-schema-gen-plain-test",
+                  "mainIs": "test-plain/Spec.hs",
+                  "entryPoint": "upstream",
+                  "runTestsCommand": "cabal test convex-schema-gen-plain-test --project-file=cabal.project.schema-gen",
+                  "streamTestsCommand": null,
+                  "discoverCommand": null
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "orphans": [
+        {
+          "cabalFile": "extras/leftover.cabal",
+          "packageDir": "extras"
+        }
+      ]
+    }
+  ]
+}

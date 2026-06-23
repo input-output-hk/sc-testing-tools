@@ -40,3 +40,24 @@ executable gen-schema
     , base               >=4.14.0
     , bytestring
     , convex-schema-gen
+
+test-suite convex-schema-gen-streaming-test
+  import:         lang
+  type:           exitcode-stdio-1.0
+  hs-source-dirs: test-streaming
+  main-is:        Spec.hs
+  build-depends:
+    , base                    >=4.14.0
+    , convex-tasty-streaming
+    , tasty
+    , tasty-hunit
+
+test-suite convex-schema-gen-plain-test
+  import:         lang
+  type:           exitcode-stdio-1.0
+  hs-source-dirs: test-plain
+  main-is:        Spec.hs
+  build-depends:
+    , base         >=4.14.0
+    , tasty
+    , tasty-hunit
