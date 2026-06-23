@@ -45,8 +45,6 @@ tmp/
 # MacOS
 **/.DS_Store
 sss.json
+ss.json
 .claude/
-
-
-# Archived skill snapshots
-docs/skill-old/
+docs/skill-old
