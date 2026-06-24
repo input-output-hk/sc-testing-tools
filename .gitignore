@@ -44,7 +44,5 @@ tmp/
 
 # MacOS
 **/.DS_Store
-sss.json
-ss.json
 .claude/
 docs/skill-old
