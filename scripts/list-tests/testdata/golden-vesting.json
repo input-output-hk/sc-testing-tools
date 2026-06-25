@@ -1,0 +1,309 @@
+{
+  "root": "<ROOT>",
+  "grammar": "scripts/list-tests/node_modules/tree-sitter-haskell/tree-sitter-haskell.wasm",
+  "suites": [
+    {
+      "suite": "convex-vesting-test",
+      "package": "src/use-cases",
+      "entryFile": "src/use-cases/test/Vesting/Spec/Spec.hs",
+      "entryPoint": "STREAMING",
+      "tree": {
+        "kind": "group",
+        "label": "vesting tests",
+        "source": "parsed",
+        "file": "src/use-cases/test/Vesting/Spec/Spec.hs",
+        "line": 50,
+        "children": [
+          {
+            "kind": "group",
+            "label": "unit tests",
+            "source": "parsed",
+            "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+            "line": 33,
+            "children": [
+              {
+                "kind": "test",
+                "label": "Fail: Withdrawal attempt before tranche 1 vesting date",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 36
+              },
+              {
+                "kind": "test",
+                "label": "Withdrawal exactly at tranche 1 vesting date",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 39
+              },
+              {
+                "kind": "test",
+                "label": "Withdrawal entirely after both tranche vesting dates",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 42
+              },
+              {
+                "kind": "test",
+                "label": "Fail: Withdrawal with validity range overlapping but not contained within tranche 1 vesting date",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 45
+              },
+              {
+                "kind": "test",
+                "label": "Fail: Withdrawal with degenerate single-point validity range before vesting dates",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 48
+              },
+              {
+                "kind": "test",
+                "label": "Fail: remainingFrom returns full vAmount when validity range precedes both vesting dates",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 52
+              },
+              {
+                "kind": "test",
+                "label": "remainingFrom returns zero when validity range lies entirely after both vesting dates",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 55
+              },
+              {
+                "kind": "test",
+                "label": "remainingFrom atVestDate returns zero when validity range starts exactly at vesting date",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 58
+              },
+              {
+                "kind": "test",
+                "label": "remainingFrom partialTranche returns correct remainder when validity range falls between vesting dates",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 61
+              },
+              {
+                "kind": "test",
+                "label": "valueLockedByAddress returns zero with empty output list after full vesting",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 65
+              },
+              {
+                "kind": "test",
+                "label": "valueLockedByAddress singleMatchingOutput returns correct value with one matching output",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 68
+              },
+              {
+                "kind": "test",
+                "label": "valueLockedByAddress multipleMatchingOutputs sums all matching outputs correctly",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 71
+              },
+              {
+                "kind": "test",
+                "label": "Fail: valueLockedByAddress returns zero when no outputs match the target address",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 74
+              },
+              {
+                "kind": "test",
+                "label": "valueLockedByAddress mixedOutputs correctly sums only matching outputs when some outputs go to other addresses",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 77
+              },
+              {
+                "kind": "test",
+                "label": "Fail: validator missingOwnerSignature rejects an otherwise valid withdrawal",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 81
+              },
+              {
+                "kind": "test",
+                "label": "validator ownerSignaturePresent accepts a valid signed withdrawal",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 84
+              },
+              {
+                "kind": "test",
+                "label": "Fail: validator rejects an otherwise valid withdrawal signed only by a non-owner",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 87
+              },
+              {
+                "kind": "test",
+                "label": "Fail: validator scriptOutputToWrongAddress rejects withdrawal with remaining funds to wrong address",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 91
+              },
+              {
+                "kind": "test",
+                "label": "validator multipleScriptOutputs accepts withdrawal with remaining value split across multiple script outputs",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 94
+              },
+              {
+                "kind": "test",
+                "label": "Fail: validator noScriptOutputs rejects withdrawal with no outputs to script address",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 97
+              },
+              {
+                "kind": "test",
+                "label": "validator twoTransactionWithdrawals accepts sequential withdrawals for each tranche",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 100
+              },
+              {
+                "kind": "test",
+                "label": "validator threeTransactionWithdrawals accepts gradual withdrawals across three transactions",
+                "source": "parsed",
+                "file": "src/use-cases/test/Vesting/Spec/Unit.hs",
+                "line": 103
+              }
+            ]
+          },
+          {
+            "kind": "group",
+            "label": "property-based tests",
+            "source": "parsed",
+            "file": "src/use-cases/test/Vesting/Spec/Prop.hs",
+            "line": 47,
+            "children": [
+              {
+                "kind": "group",
+                "label": "Property-based test vesting script",
+                "source": "synthesized",
+                "testingInterface": true,
+                "pendingExpansion": false,
+                "note": "runtime-generated by propRunActionsWithOptions (TestingInterface); shape/order known statically",
+                "model": "VestingModel",
+                "file": "src/use-cases/test/Vesting/Spec/Prop.hs",
+                "line": 49,
+                "children": [
+                  {
+                    "kind": "test",
+                    "label": "Positive tests",
+                    "source": "synthesized",
+                    "testingInterface": true,
+                    "role": "positive",
+                    "pendingExpansion": false,
+                    "note": "positive property run (testProperty)"
+                  },
+                  {
+                    "kind": "test",
+                    "label": "Negative tests",
+                    "source": "synthesized",
+                    "testingInterface": true,
+                    "role": "negative",
+                    "pendingExpansion": false,
+                    "note": "negative property run (testProperty)"
+                  },
+                  {
+                    "kind": "group",
+                    "label": "Threat models",
+                    "source": "synthesized",
+                    "testingInterface": true,
+                    "role": "threat-models-group",
+                    "pendingExpansion": false,
+                    "children": [
+                      {
+                        "kind": "test",
+                        "label": "largeValueAttackWith 10",
+                        "source": "synthesized",
+                        "testingInterface": true,
+                        "role": "threat-model",
+                        "pendingExpansion": false,
+                        "note": "best-guess label from source; real rendered name comes from getThreatModelName (fallback \"Threat model 1\")"
+                      },
+                      {
+                        "kind": "test",
+                        "label": "mutualExclusionAttack",
+                        "source": "synthesized",
+                        "testingInterface": true,
+                        "role": "threat-model",
+                        "pendingExpansion": false,
+                        "note": "best-guess label from source; real rendered name comes from getThreatModelName (fallback \"Threat model 2\")"
+                      },
+                      {
+                        "kind": "test",
+                        "label": "signatoryRemoval",
+                        "source": "synthesized",
+                        "testingInterface": true,
+                        "role": "threat-model",
+                        "pendingExpansion": false,
+                        "note": "best-guess label from source; real rendered name comes from getThreatModelName (fallback \"Threat model 3\")"
+                      },
+                      {
+                        "kind": "test",
+                        "label": "tokenForgeryAttack simpleAlwaysSucceedsMintingPolicyV2 simpleTestAssetName",
+                        "source": "synthesized",
+                        "testingInterface": true,
+                        "role": "threat-model",
+                        "pendingExpansion": false,
+                        "note": "best-guess label from source; real rendered name comes from getThreatModelName (fallback \"Threat model 4\")"
+                      },
+                      {
+                        "kind": "test",
+                        "label": "unprotectedScriptOutput",
+                        "source": "synthesized",
+                        "testingInterface": true,
+                        "role": "threat-model",
+                        "pendingExpansion": false,
+                        "note": "best-guess label from source; real rendered name comes from getThreatModelName (fallback \"Threat model 5\")"
+                      },
+                      {
+                        "kind": "test",
+                        "label": "valueUnderpaymentAttack",
+                        "source": "synthesized",
+                        "testingInterface": true,
+                        "role": "threat-model",
+                        "pendingExpansion": false,
+                        "note": "best-guess label from source; real rendered name comes from getThreatModelName (fallback \"Threat model 6\")"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "group",
+                    "label": "Expected vulnerabilities",
+                    "source": "synthesized",
+                    "testingInterface": true,
+                    "role": "expected-vulnerabilities-group",
+                    "pendingExpansion": false,
+                    "children": [
+                      {
+                        "kind": "test",
+                        "label": "timeBoundManipulation",
+                        "source": "synthesized",
+                        "testingInterface": true,
+                        "role": "threat-model",
+                        "pendingExpansion": false,
+                        "note": "best-guess label from source; real rendered name comes from getThreatModelName (fallback \"Expected vulnerability 1\")"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "entryBinding": "main",
+      "crossFileFollows": 2
+    }
+  ]
+}
