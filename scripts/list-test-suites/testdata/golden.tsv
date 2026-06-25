@@ -1,0 +1,8 @@
+convex-tasty-streaming-test	./src/tasty-streaming	./src/tasty-streaming/test/Spec.hs	STREAMING	test
+convex-auction-test	./src/use-cases	./src/use-cases/test/Auction/Spec/Spec.hs	STREAMING	test
+convex-escrow-test	./src/use-cases	./src/use-cases/test/Escrow/Spec/Spec.hs	STREAMING	test
+convex-multiplayerpingpong-test	./src/use-cases	./src/use-cases/test/MultiPlayerPingPong/Spec/Spec.hs	STREAMING	test
+convex-vesting-test	./src/use-cases	./src/use-cases/test/Vesting/Spec/Spec.hs	STREAMING	test
+convex-testing-interface-test	./src/testing-interface	./src/testing-interface/test/Spec.hs	STREAMING	test
+convex-schema-gen-streaming-test	./src/schema-gen	./src/schema-gen/test-streaming/Spec.hs	STREAMING	test-streaming
+convex-schema-gen-plain-test	./src/schema-gen	./src/schema-gen/test-plain/Spec.hs	upstream	test-plain

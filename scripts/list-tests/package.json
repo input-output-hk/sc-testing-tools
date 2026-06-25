@@ -1,0 +1,25 @@
+{
+  "name": "list-tests",
+  "version": "1.0.0",
+  "description": "Static (no-compile) tasty test-tree discovery for sc-tools .hs test suites, via tree-sitter-haskell (WASM). Tier-1 best-effort approximation; the streaming --list-tests-json output is the authoritative tier.",
+  "main": "list-tests.js",
+  "bin": {
+    "list-tests": "list-tests.js"
+  },
+  "scripts": {
+    "start": "node list-tests.js",
+    "test": "bash test-list-tests.sh"
+  },
+  "keywords": [
+    "tasty",
+    "tree-sitter",
+    "haskell",
+    "test-discovery",
+    "sc-tools"
+  ],
+  "license": "Apache-2.0",
+  "dependencies": {
+    "tree-sitter-haskell": "^0.23.1",
+    "web-tree-sitter": "^0.26.9"
+  }
+}

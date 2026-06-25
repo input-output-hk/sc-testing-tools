@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # test-list-test-suites.sh
 #
-# Independent, hermetic black-box test harness for scripts/list-test-suites.sh
-# (issue #64 project discovery).  Does NOT compile anything; builds synthetic
+# Independent, hermetic black-box test harness for scripts/list-test-suites/list-test-suites.sh
+# (list-test-suites project discovery).  Does NOT compile anything; builds synthetic
 # fixture repos in temp dirs.  Requires jq.
 #
-# Run:  bash scripts/test-list-test-suites.sh
+# Run:  bash scripts/list-test-suites/test-list-test-suites.sh
 # Exit: 0 if all pass, 1 if any fail.
 
 set -uo pipefail
@@ -15,9 +15,9 @@ set -uo pipefail
 # ---------------------------------------------------------------------------
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$HERE/list-test-suites.sh"
-REPO="$(cd "$HERE/.." && pwd)"
+REPO="$(cd "$HERE/../.." && pwd)"
 # Golden TSV baseline. Prefer the stable copy committed inside the repo
-# (scripts/testdata/golden.tsv) so the harness passes on a fresh checkout
+# (scripts/list-test-suites/testdata/golden.tsv) so the harness passes on a fresh checkout
 # without manual /tmp seeding. Fall back to the legacy /tmp location, and if
 # neither exists, regenerate one at runtime from the current script so the
 # harness is fully self-sufficient.
@@ -226,6 +226,24 @@ assert_contains "A8 testing-interface-test streamTestsCommand has streaming-json
 ti_disc="$(printf '%s' "$A_JSON" | "$JQ" -r '[.projects[].packages[].testSuites[] | select(.name=="convex-testing-interface-test") | .discoverCommand][0]')"
 assert_contains "A8 testing-interface-test discoverCommand has list-tests-json" "$ti_disc" "--test-options=--list-tests-json"
 
+# A9: hsSourceDirs is emitted for EVERY suite, always as an array of strings.
+# (Guards the new field's presence + type across the whole real repo output.)
+a9_total="$(printf '%s' "$A_JSON" | "$JQ" -r '[.projects[].packages[].testSuites[]] | length')"
+a9_arrays="$(printf '%s' "$A_JSON" | "$JQ" -r '[.projects[].packages[].testSuites[] | select((.hsSourceDirs|type)=="array")] | length')"
+assert_eq "A9 every suite has hsSourceDirs array" "$a9_total" "$a9_arrays"
+a9_bad="$(printf '%s' "$A_JSON" | "$JQ" -r '[.projects[].packages[].testSuites[] | select((.hsSourceDirs|all(type=="string"))|not)] | length')"
+assert_eq "A9 hsSourceDirs items all strings" "0" "$a9_bad"
+
+# A9: spot-check known suites' hsSourceDirs values (relative, as written).
+sg_stream_hsd="$(printf '%s' "$A_JSON" | "$JQ" -c '[.projects[].packages[].testSuites[] | select(.name=="convex-schema-gen-streaming-test") | .hsSourceDirs][0]')"
+assert_eq "A9 schema-gen-streaming hsSourceDirs == [test-streaming]" '["test-streaming"]' "$sg_stream_hsd"
+sg_plain_hsd="$(printf '%s' "$A_JSON" | "$JQ" -c '[.projects[].packages[].testSuites[] | select(.name=="convex-schema-gen-plain-test") | .hsSourceDirs][0]')"
+assert_eq "A9 schema-gen-plain hsSourceDirs == [test-plain]" '["test-plain"]' "$sg_plain_hsd"
+ti_hsd="$(printf '%s' "$A_JSON" | "$JQ" -c '[.projects[].packages[].testSuites[] | select(.name=="convex-testing-interface-test") | .hsSourceDirs][0]')"
+assert_eq "A9 testing-interface hsSourceDirs == [test]" '["test"]' "$ti_hsd"
+vest_hsd="$(printf '%s' "$A_JSON" | "$JQ" -c '[.projects[].packages[].testSuites[] | select(.name=="convex-vesting-test") | .hsSourceDirs][0]')"
+assert_eq "A9 vesting hsSourceDirs == [test]" '["test"]' "$vest_hsd"
+
 # ===========================================================================
 # Section B: synthetic fixtures
 # ===========================================================================
@@ -248,6 +266,30 @@ b1sc="$(printf '%s' "$RUN_OUT" | "$JQ" -r '.projects[].packages[].testSuites[].s
 assert_contains "B1 streamTestsCommand has streaming-json" "$b1sc" "--test-options=--streaming-json"
 b1rc="$(printf '%s' "$RUN_OUT" | "$JQ" -r '.projects[].packages[].testSuites[].runTestsCommand')"
 assert_not_contains "B1 runTestsCommand no --test-options" "$b1rc" "--test-options"
+# hs-source-dirs is "." in this fixture -> hsSourceDirs == ["."].
+b1hsd="$(printf '%s' "$RUN_OUT" | "$JQ" -c '.projects[].packages[].testSuites[].hsSourceDirs')"
+assert_eq "B1 hsSourceDirs == [.]" '["."]' "$b1hsd"
+# --tsv: hs-source-dirs is the trailing column.
+run --tsv "$d"
+b1tsv_col="$(printf '%s' "$RUN_OUT" | awk -F'\t' 'NR==1{print $5}')"
+assert_eq "B1 tsv trailing column is hs-source-dirs" "." "$b1tsv_col"
+
+# --- B1b multiple hs-source-dirs: array order preserved + ';'-joined in TSV ---
+d="$(fx)"; mkdir -p "$d/p/src" "$d/p/test"
+cat > "$d/p/p.cabal" <<'EOF'
+name: pkg-multi
+test-suite multi-test
+  main-is: Spec.hs
+  hs-source-dirs: src/use-cases/test, test
+EOF
+echo 'main = defaultMainStreaming undefined' > "$d/p/test/Spec.hs"
+run "$d"
+assert_valid_json "B1b multi hs-source-dirs valid JSON" "$RUN_OUT"
+b1bhsd="$(printf '%s' "$RUN_OUT" | "$JQ" -c '.projects[].packages[].testSuites[].hsSourceDirs')"
+assert_eq "B1b hsSourceDirs preserves order" '["src/use-cases/test","test"]' "$b1bhsd"
+run --tsv "$d"
+b1btsv_col="$(printf '%s' "$RUN_OUT" | awk -F'\t' 'NR==1{print $5}')"
+assert_eq "B1b tsv joins multiple dirs with ';'" "src/use-cases/test;test" "$b1btsv_col"
 
 # --- B2 upstream defaultMain ---
 d="$(fx)"; mkdir -p "$d/p"
@@ -651,7 +693,7 @@ assert_eq "D3 only local package present" "pkg-srp" "$d3pkgs"
 
 # ===========================================================================
 # Section S: JSON Schema conformance
-# (validates the tool's REAL output against scripts/list-test-suites.schema.json
+# (validates the tool's REAL output against scripts/list-test-suites/list-test-suites.schema.json
 #  so the schema cannot silently drift from the tool)
 # ===========================================================================
 echo "${C_YEL}== S. JSON Schema conformance ==${C_RST}"
@@ -679,7 +721,8 @@ def chk:
   (.orphans[] | if (has("cabalFile") and has("packageDir")) then empty else "orphan missing keys" end),
   ( .projects[].packages[].testSuites[] |
     . as $s |
-    (if (["name","mainIs","entryPoint","runTestsCommand","streamTestsCommand","discoverCommand"]|all(. as $k| $s|has($k))) then empty else "suite missing field(s)" end),
+    (if (["name","mainIs","entryPoint","runTestsCommand","streamTestsCommand","discoverCommand","hsSourceDirs"]|all(. as $k| $s|has($k))) then empty else "suite missing field(s)" end),
+    (if (.hsSourceDirs|type)=="array" and (.hsSourceDirs|all(type=="string")) then empty else "hsSourceDirs not array of strings for \(.name)" end),
     (if (.entryPoint|IN("STREAMING","upstream","unknown","MISSING")) then empty else "bad entryPoint \(.entryPoint)" end),
     (if (.runTestsCommand|type)=="string" then empty else "runTestsCommand not string" end),
     (if .entryPoint=="STREAMING"

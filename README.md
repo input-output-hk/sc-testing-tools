@@ -109,7 +109,7 @@ cabal test all
 ```
 
 To inspect a repository's test suites and project layout *without* compiling,
-use `scripts/list-test-suites.sh`. It statically lists every test suite, how to
+use `scripts/list-test-suites/list-test-suites.sh`. It statically lists every test suite, how to
 run or discover it, and the surrounding `cabal.project` structure — handy for
 editor and IDE integrations. It needs no `nix develop` (and runs faster outside
 it); see [scripts/README.md](scripts/README.md) for details.

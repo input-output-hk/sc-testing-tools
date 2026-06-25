@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/input-output-hk/sc-tools-experiments/scripts/list-test-suites.schema.json",
+  "$id": "https://github.com/input-output-hk/sc-tools-experiments/scripts/list-test-suites/list-test-suites.schema.json",
   "title": "list-test-suites output",
-  "description": "JSON Schema for the default (non-`--tsv`) stdout of scripts/list-test-suites.sh. The tool scans a root directory for cabal projects and emits, per project, its packages and their test suites together with the commands to run / stream / discover each suite, plus any orphan .cabal files referenced by no project.",
+  "description": "JSON Schema for the default (non-`--tsv`) stdout of scripts/list-test-suites/list-test-suites.sh. The tool scans a root directory for cabal projects and emits, per project, its packages and their test suites together with the commands to run / stream / discover each suite, plus any orphan .cabal files referenced by no project.",
   "type": "object",
   "additionalProperties": false,
   "required": ["root", "projects", "orphans"],
@@ -71,7 +71,8 @@
         "entryPoint",
         "runTestsCommand",
         "streamTestsCommand",
-        "discoverCommand"
+        "discoverCommand",
+        "hsSourceDirs"
       ],
       "properties": {
         "name": {
@@ -98,6 +99,11 @@
         "discoverCommand": {
           "type": ["string", "null"],
           "description": "Command to statically list tests as JSON (--test-options=--list-tests-json). Non-null ONLY for STREAMING suites; null otherwise."
+        },
+        "hsSourceDirs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "The test-suite stanza's hs-source-dirs, as written in the .cabal (relative, order preserved). Defaults to [\".\"] when the stanza declares none. Used by downstream tooling to map modules to files."
         }
       },
       "comment": "Invariant: streamTestsCommand and discoverCommand are strings iff entryPoint == \"STREAMING\", else null. The --streaming-json / --list-tests-json ingredients are provided only by the convex-tasty-streaming library.",
@@ -151,7 +157,8 @@
                   "entryPoint": "STREAMING",
                   "runTestsCommand": "cabal test convex-tasty-streaming-test",
                   "streamTestsCommand": "cabal test convex-tasty-streaming-test --test-options=--streaming-json",
-                  "discoverCommand": "cabal test convex-tasty-streaming-test --test-options=--list-tests-json"
+                  "discoverCommand": "cabal test convex-tasty-streaming-test --test-options=--list-tests-json",
+                  "hsSourceDirs": ["test"]
                 }
               ]
             }
@@ -171,7 +178,8 @@
                   "entryPoint": "upstream",
                   "runTestsCommand": "cabal test convex-schema-gen-plain-test --project-file=cabal.project.schema-gen",
                   "streamTestsCommand": null,
-                  "discoverCommand": null
+                  "discoverCommand": null,
+                  "hsSourceDirs": ["test-plain"]
                 }
               ]
             }
