@@ -44,6 +44,15 @@
           "enum": ["STREAMING", "upstream", "unknown", "MISSING"],
           "description": "Classification of the suite's main module, propagated from the list-test-suites tool: STREAMING (defaultMainStreaming / defaultMainTestingInterface), upstream (plain tasty defaultMain), unknown, or MISSING (main-is absent)."
         },
+        "entryBinding": {
+          "type": "string",
+          "description": "Binding name selected as the suite entry symbol inside `entryFile` (typically `main`)."
+        },
+        "crossFileFollows": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many cross-file reference follows were performed while extracting this suite's tree."
+        },
         "tree": {
           "description": "Root node of the extracted test tree, or null when no tree could be extracted (e.g. MISSING entry file). See the `note` field for the reason.",
           "oneOf": [
