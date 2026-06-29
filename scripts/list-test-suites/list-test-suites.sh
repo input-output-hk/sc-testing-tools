@@ -7,9 +7,13 @@
 #
 # Usage:
 #   list-test-suites.sh [ROOT] [--tsv]
+#   list-test-suites.sh --check-health
 #
-#   ROOT   Directory to scan (positional, default ".").
-#   --tsv  Emit the legacy flat 4-column TSV instead of JSON.
+#   ROOT            Directory to scan (positional, default ".").
+#   --tsv           Emit the legacy flat 4-column TSV instead of JSON.
+#   --check-health  Verify required external dependencies are present, print a
+#                   per-dependency report, then exit (0 if all required deps are
+#                   present, 1 if any are missing). Does NOT do discovery.
 #
 # Default output is single-line JSON to stdout (pipe to `jq .` for pretty
 # printing). This tool has NO jq dependency. Shape:
@@ -20,7 +24,10 @@
 #   }
 # Each package: { name, cabalFile, packageDir, testSuites[] }.
 # Each suite:   { name, mainIs, entryPoint,
-#                 runTestsCommand, streamTestsCommand, discoverCommand }.
+#                 runTestsCommand, streamTestsCommand, discoverCommand,
+#                 hsSourceDirs }.
+#   - hsSourceDirs      JSON array of the stanza's hs-source-dirs (relative, as
+#                       written; ["."] when the stanza declares none).
 #   - entryPoint        is one of: STREAMING | upstream | unknown | MISSING
 #   - runTestsCommand   ALWAYS a string: `cabal test <suite> [--project-file=X]`.
 #   - streamTestsCommand / discoverCommand are strings ONLY for STREAMING suites
@@ -31,7 +38,9 @@
 # A package may appear under multiple projects (e.g. via "import:").
 #
 # --tsv output (legacy, tab-separated):
-#   <suite-name>\t<package-dir>\t<main-path>\t<entry-point>
+#   <suite-name>\t<package-dir>\t<main-path>\t<entry-point>\t<hs-source-dirs>
+#   <hs-source-dirs> is the trailing column: the stanza's hs-source-dirs joined
+#   with ';' (relative, as written; "." when the stanza declares none).
 #
 # Exit codes:
 #   0  success
@@ -41,7 +50,73 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Argument parsing: [ROOT] [--tsv]
+# --check-health: verify the external commands this tool actually invokes.
+# Version strings are shown for INFO only; no minimum version is ever enforced.
+# The ONLY failure cause is an ABSENT required dependency. Optional deps that
+# are absent are reported but never affect the exit code.
+# ---------------------------------------------------------------------------
+
+# probe_version <cmd> : best-effort one-line version string, or "" if none.
+# Guarded so a misbehaving probe can never abort the script under `set -e`.
+probe_version() {
+  local cmd="$1" v=""
+  case "$cmd" in
+    bash) v="$(bash --version 2>/dev/null | head -n1 || true)" ;;
+    *)    v="$("$cmd" --version 2>/dev/null | head -n1 || true)" ;;
+  esac
+  printf '%s' "$v"
+}
+
+# report_dep <required|optional> <cmd> [optional-note]
+# Prints one aligned line; returns 1 (to the caller's tally) only when a
+# REQUIRED dep is missing.
+HEALTH_MISSING=0
+report_dep() {
+  local kind="$1" cmd="$2" note="${3:-}"
+  local tag ver
+  if command -v "$cmd" >/dev/null 2>&1; then
+    ver="$(probe_version "$cmd")"
+    [[ -z "$ver" ]] && ver="(present)"
+    printf '[  OK  ] %-10s %s\n' "$cmd" "$ver"
+  else
+    if [[ "$kind" == "required" ]]; then
+      tag="[MISSING]"
+      HEALTH_MISSING=$((HEALTH_MISSING + 1))
+    else
+      tag="[ WARN ]"
+    fi
+    if [[ -n "$note" ]]; then
+      printf '%s %-10s %s\n' "$tag" "$cmd" "$note"
+    else
+      printf '%s %-10s\n' "$tag" "$cmd"
+    fi
+  fi
+}
+
+run_check_health() {
+  echo "list-test-suites — dependency health check"
+  echo
+  echo "Required (commands this tool invokes):"
+  # These are the external commands actually used by this script.
+  for c in bash find grep sed awk sort dirname head wc tr; do
+    report_dep required "$c"
+  done
+  echo
+  echo "Optional (not invoked by the tool itself):"
+  report_dep optional jq    "(optional — used by the test harness / examples only)"
+  report_dep optional cabal "(optional — only needed to RUN the emitted 'cabal test ...' commands)"
+  echo
+  if [[ $HEALTH_MISSING -eq 0 ]]; then
+    echo "All required dependencies present."
+    return 0
+  else
+    echo "Missing $HEALTH_MISSING required dependencies."
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing: [ROOT] [--tsv] | --check-health
 # ---------------------------------------------------------------------------
 ROOT="."
 ROOT_SET=0
@@ -49,12 +124,16 @@ EMIT_TSV=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --check-health)
+      run_check_health
+      exit $?
+      ;;
     --tsv)
       EMIT_TSV=1
       shift
       ;;
     -h|--help)
-      sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     --*|-*)
@@ -101,10 +180,16 @@ mapfile -t CABAL_FILES < <(
 read -r -d '' AWK_PROG <<'AWK' || true
     function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
 
-    function emit(    n, paths, i, p, found) {
+    function emit(    n, paths, i, p, found, dirs) {
       if (suite == "") return
+      # dirs: the hs-source-dirs as written in the stanza, with the cabal
+      # separators (whitespace / commas) normalised to single spaces so the
+      # downstream bash can re-split deterministically. Preserves order.
+      dirs = src_dirs
+      gsub(/[[:space:],]+/, " ", dirs)
+      sub(/^ /, "", dirs); sub(/ $/, "", dirs)
       if (main_is == "") {
-        print suite "\t" pkg_dir "\t" "MISSING" "\t" "MISSING"
+        print suite "\t" pkg_dir "\t" "MISSING" "\t" "MISSING" "\t" dirs
         return
       }
       n = split(src_dirs, paths, /[[:space:],]+/)
@@ -114,7 +199,7 @@ read -r -d '' AWK_PROG <<'AWK' || true
         p = pkg_dir "/" paths[i] "/" main_is
         if (system("test -f \"" p "\"") == 0) { found = p; break }
       }
-      print suite "\t" pkg_dir "\t" (found != "" ? found : "MISSING") "\t" "PENDING"
+      print suite "\t" pkg_dir "\t" (found != "" ? found : "MISSING") "\t" "PENDING" "\t" dirs
     }
 
     /^[a-zA-Z]/ {
@@ -167,19 +252,21 @@ classify_entry() {
 }
 
 # parse_suites_for_cabal <cabal_file>
-# emits rows: <suite>\t<pkg_dir>\t<main_path>\t<entryPoint>
+# emits rows: <suite>\t<pkg_dir>\t<main_path>\t<entryPoint>\t<hs_source_dirs>
+# where <hs_source_dirs> is the stanza's hs-source-dirs, space-separated and in
+# written order (default "." when the stanza declares none).
 parse_suites_for_cabal() {
   local cabal_file="$1"
   local pkg_dir
   pkg_dir="$(dirname "$cabal_file")"
   awk -v pkg_dir="$pkg_dir" "$AWK_PROG" "$cabal_file" \
-  | while IFS=$'\t' read -r suite pdir main_path _pending; do
+  | while IFS=$'\t' read -r suite pdir main_path _pending src_dirs; do
       if [[ "$main_path" == "MISSING" ]]; then
-        printf '%s\t%s\t%s\t%s\n' "$suite" "$pdir" "MISSING" "MISSING"
+        printf '%s\t%s\t%s\t%s\t%s\n' "$suite" "$pdir" "MISSING" "MISSING" "$src_dirs"
       else
         local entry
         entry="$(classify_entry "$main_path")"
-        printf '%s\t%s\t%s\t%s\n' "$suite" "$pdir" "$main_path" "$entry"
+        printf '%s\t%s\t%s\t%s\t%s\n' "$suite" "$pdir" "$main_path" "$entry" "$src_dirs"
       fi
     done
 }
@@ -207,7 +294,14 @@ if [[ $EMIT_TSV -eq 1 ]]; then
     cabal_file="${h%%:*}"
     if [[ -n "${seen_cabal[$cabal_file]:-}" ]]; then continue; fi
     seen_cabal[$cabal_file]=1
-    parse_suites_for_cabal "$cabal_file"
+    # parse_suites_for_cabal emits the hs-source-dirs (5th column) space-
+    # separated; for TSV we present them ';'-joined as a single column so the
+    # column count stays fixed even with multiple dirs.
+    parse_suites_for_cabal "$cabal_file" \
+    | while IFS=$'\t' read -r suite pdir main_path entry src_dirs; do
+        printf '%s\t%s\t%s\t%s\t%s\n' \
+          "$suite" "$pdir" "$main_path" "$entry" "${src_dirs// /;}"
+      done
   done
   exit 0
 fi
@@ -250,6 +344,19 @@ json_str() {
   s="${s//$'\b'/\\b}"      # backspace
   s="${s//$'\f'/\\f}"      # form feed
   printf '"%s"' "$s"
+}
+
+# json_str_array <item...> : emit a JSON array of strings from the given args,
+# each JSON-escaped via json_str. Zero args -> "[]". Order is preserved.
+json_str_array() {
+  local out="[" first=1 item
+  for item in "$@"; do
+    [[ $first -eq 0 ]] && out+=","
+    first=0
+    out+="$(json_str "$item")"
+  done
+  out+="]"
+  printf '%s' "$out"
 }
 
 # --- cabal.project discovery + parsing -----------------------------------
@@ -482,14 +589,15 @@ done
 # files it owns (in CABAL_FILES order for determinism).
 
 emit_suite_json() {
-  # args: suite_name main_is entry_point run_cmd stream_cmd discover_cmd
+  # args: suite_name main_is entry_point run_cmd stream_cmd discover_cmd hs_dirs_json
   # stream_cmd / discover_cmd may be the sentinel "__NULL__" -> JSON null.
-  local sname="$1" mis="$2" ep="$3" rcmd="$4" scmd="$5" dcmd="$6"
+  # hs_dirs_json is a ready-made JSON array string (see json_str_array).
+  local sname="$1" mis="$2" ep="$3" rcmd="$4" scmd="$5" dcmd="$6" hsdirs="$7"
   local sval dval
   if [[ "$scmd" == "__NULL__" ]]; then sval="null"; else sval="$(json_str "$scmd")"; fi
   if [[ "$dcmd" == "__NULL__" ]]; then dval="null"; else dval="$(json_str "$dcmd")"; fi
-  printf '{"name":%s,"mainIs":%s,"entryPoint":%s,"runTestsCommand":%s,"streamTestsCommand":%s,"discoverCommand":%s}' \
-    "$(json_str "$sname")" "$(json_str "$mis")" "$(json_str "$ep")" "$(json_str "$rcmd")" "$sval" "$dval"
+  printf '{"name":%s,"mainIs":%s,"entryPoint":%s,"runTestsCommand":%s,"streamTestsCommand":%s,"discoverCommand":%s,"hsSourceDirs":%s}' \
+    "$(json_str "$sname")" "$(json_str "$mis")" "$(json_str "$ep")" "$(json_str "$rcmd")" "$sval" "$dval" "$hsdirs"
 }
 
 # Build the whole compact JSON document and emit it on stdout.
@@ -545,7 +653,7 @@ build_json() {
       printf '"testSuites":['
 
       local suite_first=1
-      while IFS=$'\t' read -r suite _pdir main_path entry; do
+      while IFS=$'\t' read -r suite _pdir main_path entry src_dirs; do
         [[ -z "$suite" ]] && continue
         ANY_SUITE=1
 
@@ -556,6 +664,14 @@ build_json() {
         else
           mis="${main_path#$pdir/}"
         fi
+
+        # hsSourceDirs: split the space-separated dirs (as written in the
+        # stanza, default ".") into a JSON array of strings, order preserved.
+        local hs_dirs_json
+        # word-split on spaces (dirs were normalised to single spaces by awk);
+        # safe because cabal hs-source-dirs tokens cannot contain spaces.
+        # shellcheck disable=SC2086
+        hs_dirs_json="$(json_str_array $src_dirs)"
 
         local run_cmd="cabal test ${suite}${flagstr}"
         local stream_cmd discover_cmd
@@ -575,7 +691,7 @@ build_json() {
 
         [[ $suite_first -eq 0 ]] && printf ','
         suite_first=0
-        emit_suite_json "$suite" "$mis" "$entry" "$run_cmd" "$stream_cmd" "$discover_cmd"
+        emit_suite_json "$suite" "$mis" "$entry" "$run_cmd" "$stream_cmd" "$discover_cmd" "$hs_dirs_json"
       done < <(parse_suites_for_cabal "$cab")
 
       printf ']}'

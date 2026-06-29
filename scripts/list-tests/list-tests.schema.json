@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/input-output-hk/sc-tools-experiments/scripts/list-tests/list-tests.schema.json",
+  "title": "list-tests output",
+  "description": "JSON Schema for the stdout of scripts/list-tests/list-tests.js. The tool statically extracts (no compilation) a best-effort tasty test tree for every test suite reported by scripts/list-test-suites/list-test-suites.sh, using tree-sitter-haskell (WASM). This is the Tier-1 approximation; the authoritative tree comes from the streaming --list-tests-json output, which replaces this output entirely.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["root", "suites"],
+  "properties": {
+    "root": {
+      "type": "string",
+      "description": "Absolute path to the scanned root directory in live output. Version-controlled golden files normalize this to the literal \"<ROOT>\" for portability; the test harness applies the same normalization to live output before diffing."
+    },
+    "grammar": {
+      "type": "string",
+      "description": "Path to the tree-sitter-haskell WASM grammar used for parsing, relative to root. Stable across machines."
+    },
+    "suites": {
+      "type": "array",
+      "description": "One entry per test suite discovered by the list-test-suites tool (optionally filtered by --suite).",
+      "items": { "$ref": "#/$defs/suite" }
+    }
+  },
+  "$defs": {
+    "suite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["suite", "package", "entryFile", "entryPoint", "tree"],
+      "properties": {
+        "suite": {
+          "type": "string",
+          "description": "test-suite stanza name (e.g. \"convex-vesting-test\")."
+        },
+        "package": {
+          "type": "string",
+          "description": "Package directory containing the suite, relative to root."
+        },
+        "entryFile": {
+          "type": "string",
+          "description": "main-is entry file for the suite, relative to root, or the literal \"MISSING\" when the file could not be resolved."
+        },
+        "entryPoint": {
+          "type": "string",
+          "enum": ["STREAMING", "upstream", "unknown", "MISSING"],
+          "description": "Classification of the suite's main module, propagated from the list-test-suites tool: STREAMING (defaultMainStreaming / defaultMainTestingInterface), upstream (plain tasty defaultMain), unknown, or MISSING (main-is absent)."
+        },
+        "entryBinding": {
+          "type": "string",
+          "description": "Binding name selected as the suite entry symbol inside `entryFile` (typically `main`)."
+        },
+        "crossFileFollows": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many cross-file reference follows were performed while extracting this suite's tree."
+        },
+        "tree": {
+          "description": "Root node of the extracted test tree, or null when no tree could be extracted (e.g. MISSING entry file). See the `note` field for the reason.",
+          "oneOf": [
+            { "$ref": "#/$defs/node" },
+            { "type": "null" }
+          ]
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional human-readable note explaining a null/partial tree or other caveat."
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "label", "source"],
+      "if": {
+        "properties": { "kind": { "const": "group" } }
+      },
+      "then": {
+        "required": ["children"]
+      },
+      "else": {
+        "not": { "required": ["children"] }
+      },
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["group", "test", "placeholder"],
+          "description": "group = a testGroup container; test = a leaf test case; placeholder = a node standing in for content that cannot be statically enumerated (e.g. dynamically generated content)."
+        },
+        "label": {
+          "type": ["string", "null"],
+          "description": "The node's label as written in the source. May be null when the label is not a string literal (a non-literal expression the static extractor cannot resolve)."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["parsed", "synthesized", "dynamic"],
+          "description": "Provenance of the node: parsed (read directly from the .hs source), synthesized (constructed by the extractor from a known pattern such as the TestingInterface tree), or dynamic (a placeholder for content produced at runtime)."
+        },
+        "testingInterface": {
+          "type": "boolean",
+          "description": "Present and true on nodes that belong to a TestingInterface (propRunActions*) synthesized subtree (the top synthesized group and all of its descendants). Lets the extension render/treat them specially. Omitted on plain parsed/literal nodes."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["positive", "negative", "threat-models-group", "expected-vulnerabilities-group", "threat-model"],
+          "description": "Semantic role of a node within a TestingInterface subtree, for the extension to label/icon. positive = the \"Positive tests\" leaf; negative = the \"Negative tests\" leaf; threat-models-group = the \"Threat models\" group; expected-vulnerabilities-group = the \"Expected vulnerabilities\" group; threat-model = the individual leaves under BOTH groups (expected-vulnerability leaves are structurally identical to threat-model leaves, so they share role=threat-model; the parent group's role carries the distinction). Omitted on nodes without a special role."
+        },
+        "pendingExpansion": {
+          "type": "boolean",
+          "description": "Present and true on provisional nodes whose real/expanded content arrives only when the slow --list-tests command runs: unresolved cross-project/cross-package references, dynamic placeholders, the synthesized threat-model/expected-vulnerability leaves (whose real names from getThreatModelName we can't statically know), and the synthesized top group (names/shape change after --list-tests)."
+        },
+        "file": {
+          "type": "string",
+          "description": "Source file the node was extracted from, relative to root. Stable across machines. Omitted on some synthesized/placeholder nodes."
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1-based line number of the node in `file`. Omitted on synthesized/placeholder nodes that have no single source location."
+        },
+        "model": {
+          "type": "string",
+          "description": "Optional model/type name associated with a synthesized group (e.g. the contract state type that drives Threat Models)."
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional human-readable note about how this node was produced or why it is a placeholder."
+        },
+        "children": {
+          "type": "array",
+          "description": "Child nodes. Present ONLY on group nodes; its absence is the signal that a node is a leaf. Leaf nodes (kind \"test\" or \"placeholder\") MUST NOT carry a `children` key at all. Enforced by the conditional (if kind==\"group\" then children is required, else children is forbidden).",
+          "items": { "$ref": "#/$defs/node" }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "root": "<ROOT>",
+      "grammar": "scripts/list-tests/node_modules/tree-sitter-haskell/tree-sitter-haskell.wasm",
+      "suites": [
+        {
+          "suite": "convex-schema-gen-streaming-test",
+          "package": "src/schema-gen",
+          "entryFile": "src/schema-gen/test-streaming/Spec.hs",
+          "entryPoint": "STREAMING",
+          "tree": {
+            "kind": "group",
+            "label": "convex-schema-gen-streaming",
+            "source": "parsed",
+            "file": "src/schema-gen/test-streaming/Spec.hs",
+            "line": 16,
+            "children": [
+              {
+                "kind": "test",
+                "label": "dummy",
+                "source": "parsed",
+                "file": "src/schema-gen/test-streaming/Spec.hs",
+                "line": 18
+              }
+            ]
+          }
+        },
+        {
+          "suite": "convex-vesting-test",
+          "package": "src/use-cases",
+          "entryFile": "src/use-cases/test/Vesting/Spec/Spec.hs",
+          "entryPoint": "STREAMING",
+          "tree": {
+            "kind": "group",
+            "label": "Property-based test vesting script",
+            "source": "synthesized",
+            "testingInterface": true,
+            "pendingExpansion": true,
+            "model": "VestingModel",
+            "file": "src/use-cases/test/Vesting/Spec/Prop.hs",
+            "line": 49,
+            "children": [
+              {
+                "kind": "test",
+                "label": "Positive tests",
+                "source": "synthesized",
+                "testingInterface": true,
+                "role": "positive"
+              },
+              {
+                "kind": "test",
+                "label": "Negative tests",
+                "source": "synthesized",
+                "testingInterface": true,
+                "role": "negative"
+              },
+              {
+                "kind": "group",
+                "label": "Threat models",
+                "source": "synthesized",
+                "testingInterface": true,
+                "role": "threat-models-group",
+                "children": [
+                  {
+                    "kind": "test",
+                    "label": "unprotectedScriptOutput",
+                    "source": "synthesized",
+                    "testingInterface": true,
+                    "role": "threat-model",
+                    "pendingExpansion": true
+                  }
+                ]
+              },
+              {
+                "kind": "group",
+                "label": "Expected vulnerabilities",
+                "source": "synthesized",
+                "testingInterface": true,
+                "role": "expected-vulnerabilities-group",
+                "children": [
+                  {
+                    "kind": "test",
+                    "label": "timeBoundManipulation",
+                    "source": "synthesized",
+                    "testingInterface": true,
+                    "role": "threat-model",
+                    "pendingExpansion": true
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

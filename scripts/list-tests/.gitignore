@@ -1,0 +1,7 @@
+# npm-installed dependencies — restored with `npm install --ignore-scripts`.
+# Not committed.
+node_modules/
+
+# npm logs / caches
+npm-debug.log*
+.npm/

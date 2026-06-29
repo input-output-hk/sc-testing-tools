@@ -1,0 +1,30 @@
+{
+  "root": "<ROOT>",
+  "grammar": "scripts/list-tests/node_modules/tree-sitter-haskell/tree-sitter-haskell.wasm",
+  "suites": [
+    {
+      "suite": "convex-schema-gen-plain-test",
+      "package": "src/schema-gen",
+      "entryFile": "src/schema-gen/test-plain/Spec.hs",
+      "entryPoint": "upstream",
+      "tree": {
+        "kind": "group",
+        "label": "convex-schema-gen-plain",
+        "source": "parsed",
+        "file": "src/schema-gen/test-plain/Spec.hs",
+        "line": 14,
+        "children": [
+          {
+            "kind": "test",
+            "label": "dummy",
+            "source": "parsed",
+            "file": "src/schema-gen/test-plain/Spec.hs",
+            "line": 16
+          }
+        ]
+      },
+      "entryBinding": "main",
+      "crossFileFollows": 0
+    }
+  ]
+}
