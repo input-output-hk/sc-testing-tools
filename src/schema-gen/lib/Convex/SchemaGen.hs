@@ -757,6 +757,7 @@ instance ToSchema ThreatModelTrace where
     txRef <- declareSchemaRef (Proxy @TxSummary)
     outcomeRef <- declareSchemaRef (Proxy @ThreatModelTraceOutcome)
     txModRef <- declareSchemaRef (Proxy @TxMod)
+    srcLocRanges <- declareSchemaRef (Proxy @SrcLocRanges)
     pure $
       NamedSchema (Just "ThreatModelTrace") $
         mempty
@@ -769,8 +770,9 @@ instance ToSchema ThreatModelTrace where
               , ("originalTx", txRef)
               , ("modifiedTx", Inline $ mempty & nullable ?~ True & allOf ?~ [txRef])
               , ("outcome", outcomeRef)
+              , ("covered", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject srcLocRanges)
               ]
-          & required .~ ["name", "targetTxIndex", "modifications", "originalTx", "modifiedTx", "outcome"]
+          & required .~ ["name", "targetTxIndex", "modifications", "originalTx", "modifiedTx", "outcome", "covered"]
 
 instance ToSchema IterationTrace where
   declareNamedSchema _ = do

@@ -640,11 +640,7 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
         runMockchainIO (runThreatModelCheckTraced AutoSign tm envs) params state0
       pure (name, outcome, traceEntries, mcsCoverageData tmFinalState)
 
-    let tmResults = [(n, o) | (n, o, _, _) <- tmResultsWithCov]
-        tmTracedResults = [(n, o, entries) | (n, o, entries, _) <- tmResultsWithCov]
-        tmCoverage = mconcat [cov | (_, _, _, cov) <- tmResultsWithCov]
-
-    pure (finalState, transitions, tmResults, tmTracedResults, tmCoverage)
+    pure (finalState, transitions, tmResultsWithCov)
 
   case result of
     (Left err, MockChainState{mcsCoverageData}) -> do
@@ -659,8 +655,8 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
               }
       run $ recordIteration recorder groupName "positive" (covDataToSrcLocRanges covData) (toJSON trace)
       pure (property False)
-    (Right (finalState, transitions, tmResults, tmTracedResults, tmCoverage), MockChainState{mcsCoverageData}) -> do
-      let covData = mcsCoverageData <> tmCoverage
+    (Right (finalState, transitions, tmResultsWithCov), MockChainState{mcsCoverageData}) -> do
+      let covData = mcsCoverageData <> mconcat [cov | (_, _, _, cov) <- tmResultsWithCov]
       monitor (counterexample $ "Final state: " ++ show finalState)
       traverse_ (\ref -> liftIO $ modifyIORef ref (<> covData)) coverageRef
       case mGetTmResultsRef of
@@ -668,11 +664,11 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
           tmRef <- getTmResultsRef
           modifyIORef tmRef $ \existing ->
             foldl'
-              (\m (name, outcome) -> Map.insertWith (<>) name [outcome] m)
+              (\m (name, outcome, _, _) -> Map.insertWith (<>) name [outcome] m)
               existing
-              tmResults
+              tmResultsWithCov
         Nothing -> pure ()
-      let tmTraces = toThreatModelTraces tmTracedResults
+      let tmTraces = toThreatModelTraces tmResultsWithCov
           trace =
             IterationTrace
               { itIndex = iterIdx
@@ -680,7 +676,7 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
               , itTransitions = transitions
               , itThreatModels = tmTraces
               }
-      run $ recordIteration recorder groupName "positive" (covDataToSrcLocRanges covData) (toJSON trace)
+      run $ recordIteration recorder groupName "positive" (covDataToSrcLocRanges mcsCoverageData) (toJSON trace)
       pure (property True)
 
 -- | Fast path: runs 'runActions' (no UTxO snapshots, no tx summaries, no JSON).
@@ -1047,10 +1043,10 @@ Each 'ThreatModelCheckEntry' (one per 'Validate' call) produces a
 'ThreatModelTrace' with the actual modifications, original\/modified
 transactions, and outcome.
 -}
-toThreatModelTraces :: [(String, ThreatModelOutcome, [ThreatModelCheckEntry])] -> [ThreatModelTrace]
+toThreatModelTraces :: [(String, ThreatModelOutcome, [ThreatModelCheckEntry], CoverageData)] -> [ThreatModelTrace]
 toThreatModelTraces results = concatMap go results
  where
-  go (name, outcome, []) =
+  go (name, outcome, [], covData) =
     -- No Validate calls: emit a single lightweight trace with just the outcome
     [ ThreatModelTrace
         { tmtName = T.pack name
@@ -1059,9 +1055,10 @@ toThreatModelTraces results = concatMap go results
         , tmtOriginalTx = emptyTxSummary
         , tmtModifiedTx = Nothing
         , tmtOutcome = outcomeToTrace outcome
+        , tmtCovered = covDataToSrcLocRanges covData
         }
     ]
-  go (name, outcome, entries) =
+  go (name, outcome, entries, covData) =
     -- One ThreatModelTrace per Validate call
     [ ThreatModelTrace
         { tmtName = T.pack name
@@ -1072,6 +1069,7 @@ toThreatModelTraces results = concatMap go results
             Just tx -> Just (summarizeTx tx (tmceModifiedUtxo entry))
             Nothing -> Nothing
         , tmtOutcome = outcomeToTrace outcome
+        , tmtCovered = covDataToSrcLocRanges covData
         }
     | entry <- entries
     ]

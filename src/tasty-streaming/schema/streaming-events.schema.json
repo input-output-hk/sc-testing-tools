@@ -542,6 +542,12 @@
         },
         "ThreatModelTrace": {
             "properties": {
+                "covered": {
+                    "items": {
+                        "$ref": "#/$defs/SrcLocRanges"
+                    },
+                    "type": "array"
+                },
                 "modifications": {
                     "items": {
                         "$ref": "#/$defs/TxMod"
@@ -575,7 +581,8 @@
                 "modifications",
                 "originalTx",
                 "modifiedTx",
-                "outcome"
+                "outcome",
+                "covered"
             ],
             "type": "object"
         },
