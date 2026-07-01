@@ -542,6 +542,12 @@
         },
         "ThreatModelTrace": {
             "properties": {
+                "covered": {
+                    "items": {
+                        "$ref": "#/$defs/SrcLocRanges"
+                    },
+                    "type": "array"
+                },
                 "modifications": {
                     "items": {
                         "$ref": "#/$defs/TxMod"
@@ -567,15 +573,20 @@
                 },
                 "targetTxIndex": {
                     "type": "integer"
+                },
+                "testId": {
+                    "type": "integer"
                 }
             },
             "required": [
                 "name",
+                "testId",
                 "targetTxIndex",
                 "modifications",
                 "originalTx",
                 "modifiedTx",
-                "outcome"
+                "outcome",
+                "covered"
             ],
             "type": "object"
         },

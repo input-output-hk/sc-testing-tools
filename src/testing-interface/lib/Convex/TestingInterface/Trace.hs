@@ -29,6 +29,7 @@ module Convex.TestingInterface.Trace (
   ThreatModelTraceOutcome (..),
 ) where
 
+import Convex.Tasty.Streaming.SrcLoc (SrcLocRange, groupRanges)
 import Data.Aeson (ToJSON (..), Value, object, (.=))
 import Data.Text (Text)
 import GHC.Generics (Generic)
@@ -183,6 +184,8 @@ in this iteration.
 data ThreatModelTrace = ThreatModelTrace
   { tmtName :: !Text
   -- ^ Name of the threat model (e.g. "unprotectedScriptOutput")
+  , tmtTestId :: !Int
+  -- ^ Test id of the threat model
   , tmtTargetTxIndex :: !Int
   -- ^ Index into 'itTransitions' identifying which transaction was targeted
   , tmtModifications :: ![Value]
@@ -192,6 +195,9 @@ data ThreatModelTrace = ThreatModelTrace
   , tmtModifiedTx :: !(Maybe TxSummary)
   -- ^ The modified transaction, @Nothing@ if the modification couldn't produce a valid tx body
   , tmtOutcome :: !ThreatModelTraceOutcome
+  -- ^ The outcome of running the treat model
+  , tmtCovered :: [SrcLocRange]
+  -- ^ The code ranges covered by running this threat model
   }
   deriving (Eq, Show, Generic)
 
@@ -288,11 +294,13 @@ instance ToJSON ThreatModelTrace where
   toJSON t =
     object
       [ "name" .= tmtName t
+      , "testId" .= tmtTestId t
       , "targetTxIndex" .= tmtTargetTxIndex t
       , "modifications" .= tmtModifications t
       , "originalTx" .= tmtOriginalTx t
       , "modifiedTx" .= tmtModifiedTx t
       , "outcome" .= tmtOutcome t
+      , "covered" .= groupRanges (tmtCovered t)
       ]
 
 instance ToJSON ThreatModelTraceOutcome where

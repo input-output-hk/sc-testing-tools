@@ -17,17 +17,17 @@ import Test.Tasty.Runners (Ap (..), TreeFold (..), foldTestTree, trivialFold)
 The indices correspond to the order tests appear during a fold of the TestTree,
 which is the same order Tasty uses when building the StatusMap.
 -}
-buildTestMap :: OptionSet -> TestTree -> IO (IntMap TestInfo)
-buildTestMap opts tree = do
+buildTestMap :: OptionSet -> (Int -> Int) -> TestTree -> IO (IntMap TestInfo)
+buildTestMap opts remapId tree = do
   counterRef <- newIORef (0 :: Int)
-  let Ap action = foldTestTree (mkFold counterRef) opts tree
+  let Ap action = foldTestTree (mkFold remapId counterRef) opts tree
   action
 
-mkFold :: IORef Int -> TreeFold (Ap IO (IntMap TestInfo))
-mkFold counterRef =
+mkFold :: (Int -> Int) -> IORef Int -> TreeFold (Ap IO (IntMap TestInfo))
+mkFold remapId counterRef =
   (trivialFold :: TreeFold (Ap IO (IntMap TestInfo)))
     { foldSingle = \opts name _ -> Ap $ do
-        idx <- readIORef counterRef
+        idx <- remapId <$> readIORef counterRef
         modifyIORef' counterRef (+ 1)
         let SrcLocOpt mLoc = lookupOption opts
             info =
