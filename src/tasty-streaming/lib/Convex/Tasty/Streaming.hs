@@ -36,7 +36,7 @@ import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet qualified as IntSet
 import Data.Map.Strict qualified as Map
-import Data.Maybe (mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Proxy (Proxy (..))
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -219,7 +219,9 @@ streamingJsonReporter = TestReporter
         let emit evt = withMVar outputLock $ \_ -> emitEvent evt
 
         -- Build the test index -> metadata map
-        testMap <- buildTestMap opts tree
+        let TestIdRemap mRemap = lookupOption opts
+            remapId i = maybe i (IntMap.findWithDefault i i) mRemap
+        testMap <- buildTestMap opts remapId tree
 
         -- Populate the shared test map ref so TraceRecorder can resolve IDs
         case mTestMapRef of
@@ -233,10 +235,7 @@ streamingJsonReporter = TestReporter
         let PackageRootOpt mPkgRoot = lookupOption opts
 
         -- Emit suite_started with full test list
-        let TestIdRemap mRemap = lookupOption opts
-            remapId i = maybe i (IntMap.findWithDefault i i) mRemap
-            remapInfo ti = ti{tiId = remapId (tiId ti)}
-            testInfos = map (remapInfo . snd) $ IntMap.toAscList testMap
+        let testInfos = snd <$> IntMap.toAscList testMap
         emit $ SuiteStarted mPkgRoot testInfos coverageIndex
 
         -- Track results for final summary
@@ -349,7 +348,7 @@ Searches the test map for a 'TestInfo' whose path contains the group name
 and whose name matches the category (e.g. \"Positive tests\", \"Negative tests\").
 Returns @-1@ as a fallback when the test is not found.
 -}
-findTestId :: IntMap TestInfo -> String -> String -> Int
+findTestId :: IntMap TestInfo -> String -> String -> Maybe Int
 findTestId testMap group category =
   let categoryName = case category of
         "positive" -> "Positive tests"
@@ -364,8 +363,8 @@ findTestId testMap group category =
             )
             testMap
    in case matches of
-        ((testId, _) : _) -> testId
-        [] -> -1 -- fallback: test not found
+        ((testId, _) : _) -> Just testId
+        [] -> Nothing
 
 {- | Ingredient that lists the test tree as JSON and exits without running tests.
 
@@ -388,9 +387,8 @@ listTestsJsonIngredient = TestManager
         let PackageRootOpt mPkgRoot = lookupOption opts
             TestIdRemap mRemap = lookupOption opts
             remapId i = maybe i (IntMap.findWithDefault i i) mRemap
-            remapInfo ti = ti{tiId = remapId (tiId ti)}
-        testMap <- buildTestMap opts tree
-        let testInfos = map (remapInfo . snd) $ IntMap.toAscList testMap
+        testMap <- buildTestMap opts remapId tree
+        let testInfos = snd <$> IntMap.toAscList testMap
         emitEvent $ SuiteStarted mPkgRoot testInfos coverageIndex
         pure True
 
@@ -532,16 +530,17 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
               when enabled $ do
                 testMap <- readIORef testMapRef
                 let testId = findTestId testMap group category
-                remap <- readIORef testIdRemapRef
-                let mappedId = IntMap.findWithDefault testId testId remap
                 withMVar outputLock $ \_ ->
                   emitEvent $
                     TestTrace
-                      { ettTestId = mappedId
+                      { ettTestId = fromMaybe (-1) testId
                       , ettCategory = Text.pack category
                       , ettTrace = iterationJson
                       , ettCovered = covered
                       }
+          , findTestIdIO = \group category -> do
+              testMap <- readIORef testMapRef
+              pure $ findTestId testMap group category
           }
   let baseTree =
         localOption pkgRootOpt $
@@ -562,7 +561,7 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
     if IntSet.null requestedIdSet
       then pure baseTree
       else do
-        fullMap <- buildTestMap opts baseTree
+        fullMap <- buildTestMap opts id baseTree
         let unknown = IntSet.toAscList $ IntSet.difference requestedIdSet (IntSet.fromList (IntMap.keys fullMap))
         unless (null unknown) $ do
           hPutStrLn stderr $ "Unknown test id(s) for --test-id: " <> show unknown

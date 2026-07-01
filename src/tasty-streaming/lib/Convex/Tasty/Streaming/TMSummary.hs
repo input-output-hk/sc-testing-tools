@@ -118,10 +118,11 @@ data TraceRecorder = TraceRecorder
   -- ^ Whether test bodies should collect detailed traces.
   , recordIteration :: String -> String -> [SrcLocRange] -> Value -> IO ()
   -- ^ Emit a single iteration trace event.
+  , findTestIdIO :: String -> String -> IO (Maybe Int)
   }
 
 instance IsOption TraceRecorder where
-  defaultValue = TraceRecorder (pure False) (\_ _ _ _ -> pure ())
+  defaultValue = TraceRecorder (pure False) (\_ _ _ _ -> pure ()) (\_ _ -> pure Nothing)
   parseValue = const Nothing
   optionName = Tagged "trace-recorder"
   optionHelp = Tagged "internal: iteration trace recorder"

@@ -668,8 +668,8 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
               existing
               tmResultsWithCov
         Nothing -> pure ()
-      let tmTraces = toThreatModelTraces tmResultsWithCov
-          trace =
+      tmTraces <- liftIO $ toThreatModelTraces (findTestIdIO recorder groupName) tmResultsWithCov
+      let trace =
             IterationTrace
               { itIndex = iterIdx
               , itStatus = IterationSuccess
@@ -1043,36 +1043,47 @@ Each 'ThreatModelCheckEntry' (one per 'Validate' call) produces a
 'ThreatModelTrace' with the actual modifications, original\/modified
 transactions, and outcome.
 -}
-toThreatModelTraces :: [(String, ThreatModelOutcome, [ThreatModelCheckEntry], CoverageData)] -> [ThreatModelTrace]
-toThreatModelTraces results = concatMap go results
+toThreatModelTraces
+  :: (String -> IO (Maybe Int))
+  -> [(String, ThreatModelOutcome, [ThreatModelCheckEntry], CoverageData)]
+  -> IO [ThreatModelTrace]
+toThreatModelTraces findTestId results = concat <$> traverse go results
  where
-  go (name, outcome, [], covData) =
+  go (name, outcome, [], covData) = do
+    mtestId <- findTestId name
     -- No Validate calls: emit a single lightweight trace with just the outcome
-    [ ThreatModelTrace
-        { tmtName = T.pack name
-        , tmtTargetTxIndex = 0
-        , tmtModifications = []
-        , tmtOriginalTx = emptyTxSummary
-        , tmtModifiedTx = Nothing
-        , tmtOutcome = outcomeToTrace outcome
-        , tmtCovered = covDataToSrcLocRanges covData
-        }
-    ]
-  go (name, outcome, entries, covData) =
+    pure
+      [ ThreatModelTrace
+          { tmtName = T.pack name
+          , tmtTestId = testId
+          , tmtTargetTxIndex = 0
+          , tmtModifications = []
+          , tmtOriginalTx = emptyTxSummary
+          , tmtModifiedTx = Nothing
+          , tmtOutcome = outcomeToTrace outcome
+          , tmtCovered = covDataToSrcLocRanges covData
+          }
+      | Just testId <- [mtestId]
+      ]
+  go (name, outcome, entries, covData) = do
+    mtestId <- findTestId name
     -- One ThreatModelTrace per Validate call
-    [ ThreatModelTrace
-        { tmtName = T.pack name
-        , tmtTargetTxIndex = tmceEnvIndex entry
-        , tmtModifications = renderModifications (tmceModifications entry)
-        , tmtOriginalTx = summarizeTx (tmceOriginalTx entry) (tmceOriginalUtxo entry)
-        , tmtModifiedTx = case tmceModifiedTx entry of
-            Just tx -> Just (summarizeTx tx (tmceModifiedUtxo entry))
-            Nothing -> Nothing
-        , tmtOutcome = outcomeToTrace outcome
-        , tmtCovered = covDataToSrcLocRanges covData
-        }
-    | entry <- entries
-    ]
+    pure
+      [ ThreatModelTrace
+          { tmtName = T.pack name
+          , tmtTestId = testId
+          , tmtTargetTxIndex = tmceEnvIndex entry
+          , tmtModifications = renderModifications (tmceModifications entry)
+          , tmtOriginalTx = summarizeTx (tmceOriginalTx entry) (tmceOriginalUtxo entry)
+          , tmtModifiedTx = case tmceModifiedTx entry of
+              Just tx -> Just (summarizeTx tx (tmceModifiedUtxo entry))
+              Nothing -> Nothing
+          , tmtOutcome = outcomeToTrace outcome
+          , tmtCovered = covDataToSrcLocRanges covData
+          }
+      | entry <- entries
+      , Just testId <- [mtestId]
+      ]
 
   outcomeToTrace TMPassed = TMTOPassed
   outcomeToTrace (TMFailed msg) = TMTOFailed (T.pack msg)

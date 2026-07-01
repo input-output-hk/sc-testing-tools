@@ -184,6 +184,8 @@ in this iteration.
 data ThreatModelTrace = ThreatModelTrace
   { tmtName :: !Text
   -- ^ Name of the threat model (e.g. "unprotectedScriptOutput")
+  , tmtTestId :: !Int
+  -- ^ Test id of the threat model
   , tmtTargetTxIndex :: !Int
   -- ^ Index into 'itTransitions' identifying which transaction was targeted
   , tmtModifications :: ![Value]
@@ -292,6 +294,7 @@ instance ToJSON ThreatModelTrace where
   toJSON t =
     object
       [ "name" .= tmtName t
+      , "testId" .= tmtTestId t
       , "targetTxIndex" .= tmtTargetTxIndex t
       , "modifications" .= tmtModifications t
       , "originalTx" .= tmtOriginalTx t
