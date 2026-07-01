@@ -12,22 +12,25 @@ import Test.Tasty (TestTree)
 import Test.Tasty.Options (OptionSet, lookupOption)
 import Test.Tasty.Runners (Ap (..), TreeFold (..), foldTestTree, trivialFold)
 
-{- | Build a mapping from StatusMap integer indices to test metadata.
+{- | Build a mapping from test indices to test metadata.
 
 The indices correspond to the order tests appear during a fold of the TestTree,
 which is the same order Tasty uses when building the StatusMap.
+
+Test ids correspond to StatusMap indices when there's no test filtering with --test-id.
+If --test-id options are used then the passed remapId will convert StatusMap indices to test indices.
 -}
-buildTestMap :: OptionSet -> TestTree -> IO (IntMap TestInfo)
-buildTestMap opts tree = do
+buildTestMap :: OptionSet -> (Int -> Int) -> TestTree -> IO (IntMap TestInfo)
+buildTestMap opts remapId tree = do
   counterRef <- newIORef (0 :: Int)
-  let Ap action = foldTestTree (mkFold counterRef) opts tree
+  let Ap action = foldTestTree (mkFold remapId counterRef) opts tree
   action
 
-mkFold :: IORef Int -> TreeFold (Ap IO (IntMap TestInfo))
-mkFold counterRef =
+mkFold :: (Int -> Int) -> IORef Int -> TreeFold (Ap IO (IntMap TestInfo))
+mkFold remapId counterRef =
   (trivialFold :: TreeFold (Ap IO (IntMap TestInfo)))
     { foldSingle = \opts name _ -> Ap $ do
-        idx <- readIORef counterRef
+        idx <- remapId <$> readIORef counterRef
         modifyIORef' counterRef (+ 1)
         let SrcLocOpt mLoc = lookupOption opts
             info =

@@ -765,6 +765,7 @@ instance ToSchema ThreatModelTrace where
           & properties
             .~ InsOrdHashMap.fromList
               [ ("name", Inline $ mempty & type_ ?~ OpenApiString)
+              , ("testId", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("targetTxIndex", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("modifications", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject txModRef)
               , ("originalTx", txRef)
@@ -772,7 +773,7 @@ instance ToSchema ThreatModelTrace where
               , ("outcome", outcomeRef)
               , ("covered", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject srcLocRanges)
               ]
-          & required .~ ["name", "targetTxIndex", "modifications", "originalTx", "modifiedTx", "outcome", "covered"]
+          & required .~ ["name", "testId", "targetTxIndex", "modifications", "originalTx", "modifiedTx", "outcome", "covered"]
 
 instance ToSchema IterationTrace where
   declareNamedSchema _ = do
