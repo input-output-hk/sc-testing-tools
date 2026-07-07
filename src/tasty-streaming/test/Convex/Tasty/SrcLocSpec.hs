@@ -69,7 +69,7 @@ tests =
  attaches the option to the tree itself via 'localOption').
 -}
 buildMap :: TestTree -> IO [TestInfo]
-buildMap tree = IntMap.elems <$> buildTestMap mempty tree
+buildMap tree = IntMap.elems <$> buildTestMap mempty id tree
 
 -- ---------------------------------------------------------------------------
 -- 1. Leaf with our shim has a location
