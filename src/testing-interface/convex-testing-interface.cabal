@@ -44,6 +44,7 @@ library
     Convex.TestingInterface
     Convex.TestingInterface.Options
     Convex.TestingInterface.Trace
+    Convex.TestingInterface.Trace.RedeemerTag
     Convex.TestingInterface.Trace.TxSummary
     Convex.ThreatModel
     Convex.ThreatModel.All
@@ -75,6 +76,7 @@ library
     , aeson
     , aeson-pretty
     , base                    >=4.14.0
+    , base16-bytestring
     , bytestring
     , cardano-api
     , containers
@@ -111,6 +113,7 @@ library
     , cardano-strict-containers
     , ouroboros-consensus
     , ouroboros-consensus-cardano
+    , plutus-ledger-api
     , plutus-ledger-api:plutus-ledger-api-testlib
     , plutus-tx
 

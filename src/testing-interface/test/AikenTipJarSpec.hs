@@ -49,6 +49,7 @@ import Convex.TestingInterface (
   RunOptions,
   TestingInterface (..),
   ThreatModelsFor (..),
+  autoRedeemerTag,
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel.Cardano.Api (dummyTxId)
@@ -61,6 +62,7 @@ import Convex.Wallet (Wallet, addressInEra, verificationKeyHash)
 import Convex.Wallet.MockWallet qualified as Wallet
 import Data.ByteString qualified as BS
 import Data.Map qualified as Map
+import Data.Proxy (Proxy (..))
 
 import Paths_convex_testing_interface qualified as Pkg
 import PlutusTx qualified
@@ -551,6 +553,11 @@ instance TestingInterface TipJarModel where
         pure (valueMatches && datumMatches)
 
   monitoring _state _action prop = prop
+
+  -- Auto-label example: 'autoRedeemerTag' decodes the nullary 'TipJarRedeemer' via its
+  -- 'FromData' instance and labels the input with the Haskell 'Show' of the
+  -- decoded value (@"Claim"@ / @"AddTip"@). Zero effort, perfect for nullary types.
+  redeemerTagger = autoRedeemerTag (Proxy @TipJarRedeemer)
 
 instance ThreatModelsFor TipJarModel where
   -- Threat models to test vulnerability detection.

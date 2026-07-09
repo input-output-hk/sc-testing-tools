@@ -27,12 +27,18 @@ module Convex.TestingInterface.Trace (
   -- * Threat model trace
   ThreatModelTrace (..),
   ThreatModelTraceOutcome (..),
+
+  -- * Redeemer tagging (Tier 2)
+  RedeemerTag (..),
+  RedeemerTagger (..),
 ) where
 
+import Control.Applicative ((<|>))
 import Convex.Tasty.Streaming.SrcLoc (SrcLocRange, groupRanges)
 import Data.Aeson (ToJSON (..), Value, object, (.=))
 import Data.Text (Text)
 import GHC.Generics (Generic)
+import PlutusTx (Data)
 
 {- | Complete trace of a test run (one QuickCheck property execution = N iterations).
 Links to the Tasty test tree via 'trtTestId'.
@@ -133,8 +139,25 @@ data TxInputSummary = TxInputSummary
   -- ^ @"txid#index"@
   , tisAddress :: !Text
   -- ^ Bech32 or hex address
-  , tisValue :: !ValueSummary
+  , tisValue :: ValueSummary
   -- ^ Structured value (ada + tokens)
+  , tisRedeemerRaw :: !(Maybe Text)
+  {- ^ Hex (CBOR) of the spend redeemer's 'C.ScriptData', @Nothing@ for
+  non-script inputs (no redeemer in the witness set).
+  -}
+  , tisRedeemerConstr :: !(Maybe Integer)
+  {- ^ Constr index when the parsed redeemer 'Data' is @Constr n _@;
+  @Nothing@ for non-Constr redeemers or non-script inputs.
+  -}
+  , tisRedeemerKind :: !(Maybe Text)
+  {- ^ Tier 2: human-readable redeemer label (e.g. @"Pong"@) produced by
+  the implementor's 'RedeemerTagger'. @Nothing@ when no tagger is
+  supplied or the tagger declines to label this redeemer.
+  -}
+  , tisRedeemerPayload :: !(Maybe Value)
+  {- ^ Tier 2: optional JSON payload accompanying 'tisRedeemerKind'.
+  @Nothing@ unless the tagger explicitly returns one.
+  -}
   }
   deriving (Eq, Show, Generic)
 
@@ -162,6 +185,33 @@ data AssetSummary = AssetSummary
   , asQuantity :: !Integer
   }
   deriving (Eq, Show, Generic)
+
+{- | A human-readable label for a redeemer, produced by a 'RedeemerTagger'
+supplied by the implementor (Tier 2). When no tagger matches, both
+'tisRedeemerKind' and 'tisRedeemerPayload' stay @Nothing@ and only Tier 1
+('tisRedeemerRaw' / 'tisRedeemerConstr') is streamed.
+-}
+data RedeemerTag = RedeemerTag
+  { rtKind :: !Text
+  -- ^ Discriminator such as @"Ping"@ / @"Pong"@.
+  , rtPayload :: !(Maybe Value)
+  -- ^ Optional JSON payload for richer UI columns.
+  }
+
+{- | An opt-in function from a parsed Plutus 'Data' (the redeemer of a script
+input) to an optional 'RedeemerTag'. The 'Monoid' instance picks the first
+'Just' result, enabling composition of per-validator taggers.
+-}
+newtype RedeemerTagger = RedeemerTagger
+  { applyRedeemerTagger :: Data -> Maybe RedeemerTag
+  }
+
+instance Semigroup RedeemerTagger where
+  RedeemerTagger f <> RedeemerTagger g =
+    RedeemerTagger (\d -> f d <|> g d)
+
+instance Monoid RedeemerTagger where
+  mempty = RedeemerTagger (const Nothing)
 
 instance ToJSON ValueSummary where
   toJSON v =
@@ -279,6 +329,10 @@ instance ToJSON TxInputSummary where
       [ "utxo" .= tisUtxo t
       , "address" .= tisAddress t
       , "value" .= tisValue t
+      , "redeemerRaw" .= tisRedeemerRaw t
+      , "redeemerConstr" .= tisRedeemerConstr t
+      , "redeemerKind" .= tisRedeemerKind t
+      , "redeemerPayload" .= tisRedeemerPayload t
       ]
 
 instance ToJSON TxOutputSummary where

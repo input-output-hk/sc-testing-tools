@@ -41,15 +41,18 @@ import Convex.MockChain.CoinSelection (balanceAndSubmit, tryBalanceAndSubmit)
 import Convex.MockChain.Defaults qualified as Defaults
 import Convex.MockChain.Utils (mockchainSucceeds)
 import Convex.TestingInterface (
+  RedeemerTag (..),
   RunOptions (..),
   TestingInterface (..),
   ThreatModelsFor (..),
+  labelRedeemer,
   propRunActionsWithOptions,
  )
 import Convex.Utils (failOnError)
 import Convex.Wallet (Wallet, addressInEra)
 import Convex.Wallet.MockWallet qualified as Wallet
 import Data.Map qualified as Map
+import Data.Proxy (Proxy (..))
 
 import Paths_convex_testing_interface qualified as Pkg
 import PlutusTx qualified
@@ -396,6 +399,16 @@ instance TestingInterface HelloWorldModel where
       (True, Nothing) -> pure False -- Model says locked but no UTxO
 
   monitoring _state _action prop = prop
+
+  -- Label-with-a-function example: record redeemer, fixed kind "Greet" + message as payload. The
+  -- message is a 'BuiltinByteString' (no 'ToJSON' instance), so it is rendered via
+  -- 'show' into the JSON payload.
+  redeemerTagger =
+    labelRedeemer
+      (Proxy @HelloWorldRedeemer)
+      ( \(HelloWorldRedeemer msg) ->
+          RedeemerTag "Greet" (Just (toJSON (show msg)))
+      )
 
 instance ThreatModelsFor HelloWorldModel where
   -- No threat models for this simple contract
