@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Convex.TestingInterface.Trace.TxSummary (
@@ -11,38 +12,60 @@ module Convex.TestingInterface.Trace.TxSummary (
 ) where
 
 import Cardano.Api qualified as C
+import Cardano.Ledger.Alonzo.Scripts qualified as Ledger (AsIx (AsIx))
+import Cardano.Ledger.Alonzo.TxWits qualified as Ledger (Redeemers (Redeemers))
+import Cardano.Ledger.Conway.Scripts qualified as Conway (ConwayPlutusPurpose (ConwaySpending))
 import Convex.TestingInterface.Trace (
   AssetSummary (..),
+  RedeemerTag (..),
+  RedeemerTagger (..),
   TxInputSummary (..),
   TxOutputSummary (..),
   TxSummary (..),
   ValueSummary (..),
  )
 import Data.ByteString qualified as BS
+import Data.ByteString.Base16 qualified as Base16
+import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TE
+import Data.Word (Word32)
 import GHC.Exts (toList)
+import PlutusTx (Data (..))
 
--- | Summarize a full transaction, resolving inputs from the given UTxO set.
-summarizeTx :: C.Tx C.ConwayEra -> C.UTxO C.ConwayEra -> TxSummary
-summarizeTx tx utxo =
+{- | Summarize a full transaction, resolving inputs from the given UTxO set.
+The 'RedeemerTagger' is applied to each script input's parsed redeemer
+'Data' to optionally produce Tier 2 ('tisRedeemerKind' /
+'tisRedeemerPayload') labels. Pass 'mempty' for Tier 1-only behaviour.
+-}
+summarizeTx :: RedeemerTagger -> C.Tx C.ConwayEra -> C.UTxO C.ConwayEra -> TxSummary
+summarizeTx tagger tx utxo =
   let body = C.getTxBody tx
       txId = C.getTxId body
-      summary = summarizeTxBody body utxo
+      summary = summarizeTxBody tagger body utxo
    in summary{txsId = Just (C.serialiseToRawBytesHexText txId)}
 
--- | Summarize a transaction body, resolving inputs from the given UTxO set.
-summarizeTxBody :: C.TxBody C.ConwayEra -> C.UTxO C.ConwayEra -> TxSummary
-summarizeTxBody body (C.UTxO utxoMap) =
+{- | Summarize a transaction body, resolving inputs from the given UTxO set.
+Spend redeemers are read from the body's 'C.TxBodyScriptData' (always
+available on a built 'C.TxBody') and surfaced per script input. The
+'RedeemerTagger' supplies the optional Tier 2 labels.
+-}
+summarizeTxBody :: RedeemerTagger -> C.TxBody C.ConwayEra -> C.UTxO C.ConwayEra -> TxSummary
+summarizeTxBody tagger body (C.UTxO utxoMap) =
   let content = C.getTxBodyContent body
 
-      -- Inputs (resolved from UTxO)
-      inputTxIns = map fst (C.txIns content)
+      -- Spend redeemers keyed by input position (matches 'C.txIns' order).
+      redeemers = bodySpendRedeemers body
+
+      -- Inputs (resolved from UTxO). The index is the original position in
+      -- 'txIns content' so it lines up with the redeemer keys even when some
+      -- inputs are unresolved and filtered out.
+      inputTxIns = C.txIns content
       inputs =
-        [ mkInputSummary txIn txOut
-        | txIn <- inputTxIns
+        [ mkInputSummary tagger ix txIn txOut (Map.lookup ix redeemers)
+        | (ix, (txIn, _)) <- zip [0 ..] inputTxIns
         , Just txOut <- [Map.lookup txIn utxoMap]
         ]
 
@@ -80,14 +103,26 @@ summarizeTxBody body (C.UTxO utxoMap) =
         , txsValidRange = validRange
         }
 
--- | Build an input summary from a TxIn and its resolved TxOut.
-mkInputSummary :: C.TxIn -> C.TxOut C.CtxUTxO C.ConwayEra -> TxInputSummary
-mkInputSummary txIn (C.TxOut addr val _datum _refScript) =
-  TxInputSummary
-    { tisUtxo = renderTxIn txIn
-    , tisAddress = renderAddressInEra addr
-    , tisValue = toValueSummary (C.txOutValueToValue val)
-    }
+{- | Build an input summary from its (0-based) position in the tx inputs, the
+resolved 'C.TxOut', and the optional spend redeemer's 'C.ScriptData'.
+The 'RedeemerTagger' is applied to the parsed Plutus 'Data' of the
+redeemer to produce Tier 2 labels when present.
+-}
+mkInputSummary :: RedeemerTagger -> Word32 -> C.TxIn -> C.TxOut C.CtxUTxO C.ConwayEra -> Maybe C.ScriptData -> TxInputSummary
+mkInputSummary tagger _ix txIn (C.TxOut addr val _datum _refScript) mRedeemer =
+  let mTag = do
+        sd <- mRedeemer
+        let d = C.toPlutusData sd
+        applyRedeemerTagger tagger d
+   in TxInputSummary
+        { tisUtxo = renderTxIn txIn
+        , tisAddress = renderAddressInEra addr
+        , tisValue = toValueSummary (C.txOutValueToValue val)
+        , tisRedeemerRaw = redeemerToHex <$> mRedeemer
+        , tisRedeemerConstr = mRedeemer >>= redeemerConstrIx
+        , tisRedeemerKind = rtKind <$> mTag
+        , tisRedeemerPayload = mTag >>= rtPayload
+        }
 
 -- | Build an output summary from a TxId, an index, and a TxOut.
 mkOutputSummary :: C.TxId -> Int -> C.TxOut C.CtxTx C.ConwayEra -> TxOutputSummary
@@ -98,6 +133,41 @@ mkOutputSummary txId idx (C.TxOut addr val datum _refScript) =
     , tosValue = toValueSummary (C.txOutValueToValue val)
     , tosDatum = renderDatum datum
     }
+
+-- ---------------------------------------------------------------------
+-- Redeemer helpers
+-- ---------------------------------------------------------------------
+
+{- | Extract the spend-purpose redeemers from a 'C.TxBody', keyed by the
+0-based position of the input in the tx body's spend input list. Mirrors
+the destructure used by 'Convex.ThreatModel.Cardano.Api.redeemerOfTxIn':
+the redeemers live in the 'C.TxBodyScriptData' carried by the
+'C.ShelleyTxBody' constructor (cardano-api 10.x).
+-}
+bodySpendRedeemers :: C.TxBody C.ConwayEra -> Map Word32 C.ScriptData
+bodySpendRedeemers body =
+  case body of
+    C.ShelleyTxBody _ _ _ scriptData _ _ -> scriptDataSpendRedeemers scriptData
+
+-- | Project the spend redeemers out of a 'C.TxBodyScriptData' value.
+scriptDataSpendRedeemers :: C.TxBodyScriptData C.ConwayEra -> Map Word32 C.ScriptData
+scriptDataSpendRedeemers = \case
+  C.TxBodyNoScriptData -> Map.empty
+  C.TxBodyScriptData _ _ (Ledger.Redeemers rdmrs) ->
+    Map.fromList
+      [ (idx, C.getScriptData (C.fromAlonzoData d))
+      | (Conway.ConwaySpending (Ledger.AsIx idx), (d, _exUnits)) <- Map.toList rdmrs
+      ]
+
+-- | Render a redeemer's 'C.ScriptData' as the hex of its CBOR encoding.
+redeemerToHex :: C.ScriptData -> Text
+redeemerToHex = TE.decodeUtf8 . Base16.encode . C.serialiseToCBOR
+
+-- | Extract the Constr index when the redeemer parses to @Constr n _@.
+redeemerConstrIx :: C.ScriptData -> Maybe Integer
+redeemerConstrIx sd = case C.toPlutusData sd of
+  Constr n _ -> Just n
+  _ -> Nothing
 
 -- ---------------------------------------------------------------------
 -- Rendering helpers

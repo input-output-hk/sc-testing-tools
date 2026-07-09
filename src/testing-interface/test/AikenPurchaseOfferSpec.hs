@@ -60,9 +60,11 @@ import Convex.MockChain.Utils (mockchainSucceeds)
 import Convex.PlutusLedger.V1 (transAddressInEra)
 import Convex.TestingInterface (
   Options (Options, params),
+  RedeemerTag (..),
   RunOptions (mcOptions),
   TestingInterface (..),
   ThreatModelsFor (..),
+  labelRedeemer,
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel.Cardano.Api (dummyTxId)
@@ -73,6 +75,7 @@ import Convex.Wallet.MockWallet qualified as Wallet
 import Data.ByteString qualified as BS
 import Data.Map qualified as Map
 import Data.Maybe (mapMaybe)
+import Data.Proxy (Proxy (..))
 import GHC.Exts (fromList)
 
 import Paths_convex_testing_interface qualified as Pkg
@@ -741,6 +744,17 @@ instance TestingInterface PurchaseOfferModel where
   validate _model = pure True
 
   monitoring _state _action prop = prop
+
+  -- Label-with-a-function example: record redeemer needs a fixed kind + payload (autoRedeemerTag would
+  -- put the whole 'show' output into the kind, defeating bucketing). The policy/token
+  -- fields are 'BuiltinByteString's with no 'ToJSON' instance, so they are rendered
+  -- via 'show' into the JSON payload.
+  redeemerTagger =
+    labelRedeemer
+      (Proxy @SellRedeemer)
+      ( \(SellRedeemer policy name) ->
+          RedeemerTag "Sell" (Just (toJSON [toJSON (show policy), toJSON (show name)]))
+      )
 
 instance ThreatModelsFor PurchaseOfferModel where
   expectedVulnerabilities = [redeemerAssetSubstitution, timeBoundManipulation, tokenForgeryAttack simpleAlwaysSucceedsMintingPolicyV2 simpleTestAssetName]

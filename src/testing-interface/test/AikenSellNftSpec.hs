@@ -365,6 +365,10 @@ data SellNftModel = SellNftModel
 instance ToJSON SellNftModel where
   toJSON = toJSON . show
 
+-- NOTE: This spec intentionally does NOT override 'redeemerTagger'. The validator's
+-- redeemer is unit ('()'), so there is no meaningful label. It stays on Tier 1 (raw
+-- redeemerRaw + redeemerConstr are still streamed for script inputs) — demonstrating
+-- that doing nothing is a valid, supported choice.
 instance TestingInterface SellNftModel where
   -- Actions for Sell NFT: list NFTs and buy them
   data Action SellNftModel

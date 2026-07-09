@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -59,6 +60,8 @@ import Convex.MockChain.Utils (mockchainSucceeds)
 import Convex.PlutusLedger.V1 (transAddressInEra)
 import Convex.TestingInterface (
   Options (Options, params),
+  RedeemerTag (..),
+  RedeemerTagger (..),
   RunOptions (mcOptions),
   TestingInterface (..),
   ThreatModelsFor (..),
@@ -75,6 +78,7 @@ import Data.Maybe (mapMaybe)
 
 import Paths_convex_testing_interface qualified as Pkg
 import PlutusLedgerApi.V1 qualified as PV1
+import PlutusTx (Data (..))
 import PlutusTx qualified
 import PlutusTx.Builtins qualified as PlutusTx
 
@@ -732,6 +736,16 @@ instance TestingInterface MultisigModel where
   validate _model = pure True
 
   monitoring _state _action prop = prop
+
+  -- NOTE: This spec uses raw 'Data' matching (a direct RedeemerTagger) as an escape-hatch example,
+  -- matching directly on Plutus Data. For this nullary redeemer it would more simply be:
+  --   redeemerTagger = autoRedeemerTag (Proxy @MultisigRedeemer)
+  -- (unstableMakeIsData assigns Constr indices in declaration order: Sign=0, Use=1).
+  redeemerTagger =
+    RedeemerTagger $ \case
+      Constr 0 _ -> Just (RedeemerTag "Sign" Nothing)
+      Constr 1 _ -> Just (RedeemerTag "Use" Nothing)
+      _ -> Nothing
 
 instance ThreatModelsFor MultisigModel where
   -- NOTE: threatModels is empty for multisig because most action sequences

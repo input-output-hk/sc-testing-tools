@@ -19,6 +19,12 @@ module Convex.TestingInterface (
   ModelState,
   ThreatModelsFor (..),
 
+  -- * Redeemer tagging (Tier 2)
+  RedeemerTagger (..),
+  RedeemerTag (..),
+  autoRedeemerTag,
+  labelRedeemer,
+
   -- * Running Tests
   propRunActions,
   propRunActionsWithOptions,
@@ -98,12 +104,15 @@ import Convex.TestingInterface.Options (defaultMainTestingInterface)
 import Convex.TestingInterface.Trace (
   IterationStatus (..),
   IterationTrace (..),
+  RedeemerTag (..),
+  RedeemerTagger (..),
   ThreatModelTrace (..),
   ThreatModelTraceOutcome (..),
   Transition (..),
   TransitionResult (..),
   TxSummary (..),
  )
+import Convex.TestingInterface.Trace.RedeemerTag (autoRedeemerTag, labelRedeemer)
 import Convex.TestingInterface.Trace.TxSummary (summarizeTx)
 import Convex.ThreatModel (SigningWallet (AutoSign), ThreatModel (..), ThreatModelCheckEntry (..), ThreatModelOutcome (..), getThreatModelName, runThreatModelCheckTraced, threatModelEnvs)
 import Convex.ThreatModel.All (allThreatModels)
@@ -209,6 +218,18 @@ class (Show state, Eq state, Show (Action state), ToJSON state) => TestingInterf
   -}
   discardNegativeTestForUserExceptions :: Bool
   discardNegativeTestForUserExceptions = False
+
+  {- | Optional 'RedeemerTagger' (Tier 2) that maps a script input's parsed
+  Plutus redeemer 'Data' to a human-readable 'RedeemerTag' (label +
+  optional JSON payload). The label surfaces in the streamed
+  'TxInputSummary' as @redeemerKind@ / @redeemerPayload@.
+
+  Default: a no-op tagger, so Tier 1 ('redeemerRaw' / 'redeemerConstr')
+  is still streamed and Tier 2 fields stay @Nothing@. See
+  'autoRedeemerTag' and 'labelRedeemer' for ergonomics.
+  -}
+  redeemerTagger :: RedeemerTagger
+  redeemerTagger = RedeemerTagger (const Nothing)
 
 class (TestingInterface state) => ThreatModelsFor state where
   {- | Threat models to run against the transactions.
@@ -668,7 +689,7 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
               existing
               tmResultsWithCov
         Nothing -> pure ()
-      tmTraces <- liftIO $ toThreatModelTraces (findTestIdIO recorder groupName) tmResultsWithCov
+      tmTraces <- liftIO $ toThreatModelTraces (findTestIdIO recorder groupName) (redeemerTagger @state) tmResultsWithCov
       let trace =
             IterationTrace
               { itIndex = iterIdx
@@ -981,13 +1002,15 @@ partial trace is lost — use the 'IORef' variant in 'positiveTest'
 for partial-failure capture if needed.
 -}
 runActionsTraced
-  :: (TestingInterface state, MonadIO m)
+  :: forall state m
+   . (TestingInterface state, MonadIO m)
   => RunOptions
   -> Int
   -> state
   -> TestingMonadT (PropertyM m) (state, [Transition])
 runActionsTraced opts maxSteps initialState = go 0 initialState []
  where
+  tagger = redeemerTagger @state
   go stepIdx state acc
     | stepIdx >= maxSteps = pure (state, reverse acc)
     | otherwise = do
@@ -1003,7 +1026,7 @@ runActionsTraced opts maxSteps initialState = go 0 initialState []
             -- Run the action (may throw, short-circuiting the monad)
             newState <- runAction opts state action
             -- If we get here, the action succeeded
-            mTxSummary <- getLastTxSummary txByIdBefore utxoBefore
+            mTxSummary <- getLastTxSummary tagger txByIdBefore utxoBefore
             let transition =
                   Transition
                     { trStepIndex = stepIdx
@@ -1020,12 +1043,13 @@ the given snapshot, and if so, return a compact summary.
 -}
 getLastTxSummary
   :: (MonadMockchain C.ConwayEra m)
-  => Map.Map C.TxId (C.Tx C.ConwayEra)
+  => RedeemerTagger
+  -> Map.Map C.TxId (C.Tx C.ConwayEra)
   -- ^ @mcsTxById@ snapshot taken before the action
   -> C.UTxO C.ConwayEra
   -- ^ UTxO snapshot taken before the action
   -> m (Maybe TxSummary)
-getLastTxSummary txByIdBefore utxoBefore = do
+getLastTxSummary tagger txByIdBefore utxoBefore = do
   st <- getMockChainState
   let txByIdAfter = mcsTxById st
       newTxIds = Map.keys (Map.difference txByIdAfter txByIdBefore)
@@ -1034,7 +1058,7 @@ getLastTxSummary txByIdBefore utxoBefore = do
     (txId : _) ->
       case Map.lookup txId txByIdAfter of
         Nothing -> pure Nothing
-        Just tx -> pure (Just (summarizeTx tx utxoBefore))
+        Just tx -> pure (Just (summarizeTx tagger tx utxoBefore))
 
 {- | Convert traced threat model results into 'ThreatModelTrace' values
 suitable for inclusion in an 'IterationTrace'.
@@ -1045,9 +1069,10 @@ transactions, and outcome.
 -}
 toThreatModelTraces
   :: (String -> IO (Maybe Int))
+  -> RedeemerTagger
   -> [(String, ThreatModelOutcome, [ThreatModelCheckEntry], CoverageData)]
   -> IO [ThreatModelTrace]
-toThreatModelTraces findTestId results = concat <$> traverse go results
+toThreatModelTraces findTestId tagger results = concat <$> traverse go results
  where
   go (name, outcome, [], covData) = do
     mtestId <- findTestId name
@@ -1074,9 +1099,9 @@ toThreatModelTraces findTestId results = concat <$> traverse go results
           , tmtTestId = testId
           , tmtTargetTxIndex = tmceEnvIndex entry
           , tmtModifications = renderModifications (tmceModifications entry)
-          , tmtOriginalTx = summarizeTx (tmceOriginalTx entry) (tmceOriginalUtxo entry)
+          , tmtOriginalTx = summarizeTx tagger (tmceOriginalTx entry) (tmceOriginalUtxo entry)
           , tmtModifiedTx = case tmceModifiedTx entry of
-              Just tx -> Just (summarizeTx tx (tmceModifiedUtxo entry))
+              Just tx -> Just (summarizeTx tagger tx (tmceModifiedUtxo entry))
               Nothing -> Nothing
           , tmtOutcome = outcomeToTrace outcome
           , tmtCovered = covDataToSrcLocRanges covData

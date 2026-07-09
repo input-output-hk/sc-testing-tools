@@ -191,6 +191,105 @@ Failure:
 {"event": "suite_done", "passed": 55, "failed": 0, "duration": 79.6}
 ```
 
+## Redeemer data in `test_trace`
+
+Each `test_trace` event carries, per transition, the transaction's
+inputs as a list of `TxInputSummary` objects. For **script inputs**
+(inputs protected by a Plutus validator), each summary now surfaces the
+redeemer in two layers.
+
+### Tier 1 — always on
+
+Two fields are populated for every script input with no setup required:
+
+- `redeemerRaw` — hex CBOR of the redeemer's `ScriptData`. `null` for
+  non-script inputs (no redeemer in the witness set).
+- `redeemerConstr` — the Plutus `Constr` index when the redeemer parses
+  to `Constr n _`. `null` otherwise, and for non-script inputs.
+
+This lets consumers (e.g. the VS Code extension) bucket script inputs by
+constructor index without any per-spec opt-in.
+
+### Tier 2 — opt-in via `redeemerTagger`
+
+The library cannot know your redeemer ADT's shape — the compiled Plutus
+script has lost the constructor names — so Tier 2 is opt-in. Override
+the optional `redeemerTagger` method on your `TestingInterface`
+instance to map a parsed Plutus `Data` to a human-readable label and an
+optional JSON payload. When the tagger returns a label, two more fields
+are populated:
+
+- `redeemerKind` — a human-readable discriminator, e.g. `"Pong"`.
+- `redeemerPayload` — optional JSON payload of the redeemer's inner
+  data.
+
+When not opted in (or the tagger declines a given redeemer), both are
+`null`; Tier 1 fields are still present for script inputs. The default
+`redeemerTagger` is a no-op, so existing specs keep streaming unchanged.
+
+### Full `TxInputSummary` shape
+
+```json
+{
+  "utxo":            "txid#idx",
+  "address":         "bech32",
+  "value":           { "lovelace": 0, "assets": [] },
+  "redeemerRaw":     "hex-cbor" | null,
+  "redeemerConstr":  0           | null,
+  "redeemerKind":    "Pong"      | null,
+  "redeemerPayload": <any-json>  | null
+}
+```
+
+All seven fields are `required`; the four redeemer fields are nullable.
+
+### Labelling helpers
+
+Three helpers, from one-liner to fully manual. All are
+re-exported from `Convex.TestingInterface` (defined in
+`Convex.TestingInterface.Trace.RedeemerTag`).
+
+**Auto label — one-liner** for nullary redeemers such as `Ping | Pong | Stop`:
+
+```haskell
+import Convex.TestingInterface (autoRedeemerTag)
+
+instance TestingInterface MyModel where
+  -- ...
+  redeemerTagger = autoRedeemerTag (Proxy @MyRedeemer)
+```
+
+Decodes via `FromData` and labels with the Haskell `Show` of the decoded
+value. The PingPong spec (`PingPongSpec.hs`) is the reference example —
+`"Ping"`, `"Pong"`, `"Stop"` appear as `redeemerKind` on script inputs.
+
+**Label with a function — explicit labelling** for redeemers that carry useful data:
+
+```haskell
+import Convex.TestingInterface (labelRedeemer, RedeemerTag (..))
+
+redeemerTagger =
+  labelRedeemer (Proxy @MyRedeemer) $ \case
+    Buy n  -> RedeemerTag "Buy"   (Just (toJSON n))
+    Cancel -> RedeemerTag "Cancel" Nothing
+```
+
+Decodes via `FromData` and applies your labelling function for kind and
+optional payload.
+
+**Raw `Data` matching — escape hatch** when you don't want to decode via
+`FromData`. Construct a `RedeemerTagger` directly from a
+`Data -> Maybe RedeemerTag` function:
+
+```haskell
+import Convex.TestingInterface.Trace (RedeemerTagger (..), RedeemerTag (..))
+
+redeemerTagger = RedeemerTagger $ \d -> Just (RedeemerTag "custom" Nothing)
+```
+
+`RedeemerTagger` is a `Monoid` (first `Just` wins), so helpers can be
+combined with `<>`.
+
 ## Parsing with jq
 
 Since `cabal test` prints its own non-JSON lines to stdout (build info, "Running 1 test suites...", etc.), use this pattern to safely parse only the JSON lines:

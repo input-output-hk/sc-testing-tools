@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -63,9 +64,11 @@ import Convex.NodeParams (ledgerProtocolParameters)
 import Convex.PlutusLedger.V1 (transAddressInEra)
 import Convex.TestingInterface (
   Options (Options, params),
+  RedeemerTag (..),
   RunOptions (disableNegativeTesting, mcOptions),
   TestingInterface (..),
   ThreatModelsFor (..),
+  labelRedeemer,
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel (SigningWallet (SignWith), ThreatModelEnv (..), runThreatModelM)
@@ -78,6 +81,7 @@ import Convex.Wallet (Wallet, addressInEra)
 import Convex.Wallet.MockWallet qualified as Wallet
 import Data.Map qualified as Map
 import Data.Maybe (mapMaybe)
+import Data.Proxy (Proxy (..))
 
 import Paths_convex_testing_interface qualified as Pkg
 import PlutusLedgerApi.V1 qualified as PV1
@@ -819,6 +823,17 @@ instance TestingInterface KingModel where
   validate _model = pure True
 
   monitoring _state _action prop = prop
+
+  -- NOTE: This spec uses 'label with a function' (labelRedeemer) as an example of explicit labeling.
+  -- For a nullary redeemer like this it would more simply be:
+  --   redeemerTagger = autoRedeemerTag (Proxy @KingRedeemer)
+  redeemerTagger =
+    labelRedeemer
+      (Proxy @KingRedeemer)
+      ( \case
+          OverthrowKing -> RedeemerTag "OverthrowKing" Nothing
+          CloseCompetition -> RedeemerTag "CloseCompetition" Nothing
+      )
 
 instance ThreatModelsFor KingModel where
   -- Threat models: OverthrowKing creates a continuation output
