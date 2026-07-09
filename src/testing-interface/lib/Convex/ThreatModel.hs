@@ -146,6 +146,7 @@ import Cardano.Api as X
 
 import Control.Lens ((%~), (&), (^.))
 import Control.Monad
+import Data.List (intercalate, nub)
 import Data.Map qualified as Map
 import Text.PrettyPrint hiding ((<>))
 import Text.Printf
@@ -681,7 +682,14 @@ shouldValidateOrNot should txMod = do
         | should = "" :: String
         | otherwise = "n't"
   when (should /= valid validReport) $ do
-    fail $ show $ info $ printf "Test failure: the following transaction did%s validate" n't
+    let distinctErrors = nub (errors validReport)
+        failureLine = printf "Test failure: the following transaction did%s validate" n't
+        errorsLine =
+          "Validation errors:\n "
+            <> if null distinctErrors
+              then "(none)"
+              else intercalate " \n " distinctErrors
+    fail $ show $ info $ failureLine <> "\n" <> errorsLine
   pre <- inPrecondition
   when pre $
     counterexampleTM $

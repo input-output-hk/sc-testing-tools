@@ -105,7 +105,7 @@ import Convex.TestingInterface.Trace (
   TxSummary (..),
  )
 import Convex.TestingInterface.Trace.TxSummary (summarizeTx)
-import Convex.ThreatModel (SigningWallet (AutoSign), ThreatModel (..), ThreatModelCheckEntry (..), ThreatModelOutcome (..), getThreatModelName, runThreatModelCheckTraced, threatModelEnvs)
+import Convex.ThreatModel (SigningWallet (AutoSign), ThreatModel (..), ThreatModelCheckEntry (..), ThreatModelOutcome (..), ValidityReport (..), getThreatModelName, runThreatModelCheckTraced, threatModelEnvs)
 import Convex.ThreatModel.All (allThreatModels)
 import Convex.ThreatModel.TxModifier (TxModifier (..))
 import Convex.Wallet.MockWallet qualified as Wallet
@@ -116,7 +116,7 @@ import Data.Aeson.Key qualified as Key
 import Data.ByteString.Lazy.Char8 qualified as LBS
 import Data.Foldable (foldl', for_, traverse_)
 import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
-import Data.List (deleteFirstsBy, isPrefixOf)
+import Data.List (deleteFirstsBy, isPrefixOf, nub)
 import Data.Map qualified as Map
 import Data.Maybe (catMaybes, fromMaybe)
 
@@ -277,7 +277,7 @@ newtype ModelState state = ModelState {unModelState :: state}
 {- | Per-threat-model accumulated results across all QuickCheck iterations.
 Key is the threat model name, value is the list of outcomes (one per iteration).
 -}
-type ThreatModelResults = Map.Map String [ThreatModelOutcome]
+type ThreatModelResults = Map.Map String [(ThreatModelOutcome, [ThreatModelCheckEntry])]
 
 -- | Try up to 100 times to generate a value satisfying a predicate
 suchThatMaybe :: Gen a -> (a -> Bool) -> Gen (Maybe a)
@@ -621,7 +621,7 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
       Nothing -> pure Map.empty
     let isTMFailed (TMFailed _) = True
         isTMFailed _ = False
-        alreadyFailed name = any isTMFailed (fromMaybe [] (Map.lookup name existingResults))
+        alreadyFailed name = any (isTMFailed . fst) (fromMaybe [] (Map.lookup name existingResults))
 
         -- Only filter threat models (tms) for early-stop and optional name filtering;
         -- expected vulnerabilities (evs) always run.
@@ -640,7 +640,7 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
         runMockchainIO (runThreatModelCheckTraced AutoSign tm envs) params state0
       pure (name, outcome, traceEntries, mcsCoverageData tmFinalState)
 
-    let tmResults = [(n, o) | (n, o, _, _) <- tmResultsWithCov]
+    let tmResults = [(n, (o, entries)) | (n, o, entries, _) <- tmResultsWithCov]
         tmTracedResults = [(n, o, entries) | (n, o, entries, _) <- tmResultsWithCov]
         tmCoverage = mconcat [cov | (_, _, _, cov) <- tmResultsWithCov]
 
@@ -668,7 +668,7 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
           tmRef <- getTmResultsRef
           modifyIORef tmRef $ \existing ->
             foldl'
-              (\m (name, outcome) -> Map.insertWith (<>) name [outcome] m)
+              (\m (name, outcomeAndEntries) -> Map.insertWith (<>) name [outcomeAndEntries] m)
               existing
               tmResults
         Nothing -> pure ()
@@ -709,7 +709,7 @@ positiveTestFast opts mGetTmResultsRef tms evs = do
       Nothing -> pure Map.empty
     let isTMFailed (TMFailed _) = True
         isTMFailed _ = False
-        alreadyFailed name = any isTMFailed (fromMaybe [] (Map.lookup name existingResults))
+        alreadyFailed name = any (isTMFailed . fst) (fromMaybe [] (Map.lookup name existingResults))
 
         -- Only filter threat models (tms) for early-stop and optional name filtering;
         -- expected vulnerabilities (evs) always run.
@@ -728,7 +728,7 @@ positiveTestFast opts mGetTmResultsRef tms evs = do
         runMockchainIO (runThreatModelCheckTraced AutoSign tm envs) params state0
       pure (name, outcome, traceEntries, mcsCoverageData tmFinalState)
 
-    let tmResults = [(n, o) | (n, o, _, _) <- tmResultsWithCov]
+    let tmResults = [(n, (o, entries)) | (n, o, entries, _) <- tmResultsWithCov]
         tmCoverage = mconcat [cov | (_, _, _, cov) <- tmResultsWithCov]
 
     pure (finalState, tmResults, tmCoverage)
@@ -745,7 +745,7 @@ positiveTestFast opts mGetTmResultsRef tms evs = do
           tmRef <- getTmResultsRef
           modifyIORef tmRef $ \existing ->
             foldl'
-              (\m (name, outcome) -> Map.insertWith (<>) name [outcome] m)
+              (\m (name, outcomeAndEntries) -> Map.insertWith (<>) name [outcomeAndEntries] m)
               existing
               tmResults
         Nothing -> pure ()
@@ -768,7 +768,8 @@ threatModelTestCase getTmResultsRef groupName idx tm =
         testCaseSteps name $ \step -> do
           tmRef <- getTmResultsRef
           allResults <- readIORef tmRef
-          let outcomes = fromMaybe [] (Map.lookup name allResults)
+          let outcomeEntries = fromMaybe [] (Map.lookup name allResults)
+              outcomes = map fst outcomeEntries
               total = length outcomes
               numPassed = length [() | TMPassed <- outcomes]
               numFailed = length [() | TMFailed _ <- outcomes]
@@ -856,7 +857,8 @@ expectedVulnTestCase getTmResultsRef groupName idx tm =
         testCaseSteps name $ \step -> do
           tmRef <- getTmResultsRef
           allResults <- readIORef tmRef
-          let outcomes = fromMaybe [] (Map.lookup name allResults)
+          let outcomeEntries = fromMaybe [] (Map.lookup name allResults)
+              outcomes = map fst outcomeEntries
               total = length outcomes
               -- In expected vulnerability context:
               -- TMFailed = vulnerability detected = GOOD
@@ -867,6 +869,7 @@ expectedVulnTestCase getTmResultsRef groupName idx tm =
               numSkipped = length [() | TMSkipped <- outcomes]
               numErrors = length [() | TMError _ <- outcomes]
               errors = [msg | TMError msg <- outcomes]
+              validationErrors = distinctValidationErrors outcomeEntries
               tested = numFound + numNotFound
               summary =
                 ThreatModelSummary
@@ -886,6 +889,15 @@ expectedVulnTestCase getTmResultsRef groupName idx tm =
               step $ "WARNING: " <> show numErrors <> " error(s) during threat model execution"
               mapM_ (step . ("  " <>)) (take 3 errors)
               case drop 3 errors of
+                [] -> pure ()
+                remaining -> step $ "  ... and " <> show (length remaining) <> " more"
+
+          case validationErrors of
+            [] -> pure ()
+            _ -> do
+              step "Validation errors:"
+              mapM_ (step . ("  " <>)) (take 3 validationErrors)
+              case drop 3 validationErrors of
                 [] -> pure ()
                 remaining -> step $ "  ... and " <> show (length remaining) <> " more"
 
@@ -932,6 +944,16 @@ expectedVulnTestCase getTmResultsRef groupName idx tm =
                               <> show total
                               <> " transactions applicable)"
                           tmRecord recorder key summary
+
+distinctValidationErrors :: [(ThreatModelOutcome, [ThreatModelCheckEntry])] -> [String]
+distinctValidationErrors outcomeEntries =
+  nub
+    [ msg
+    | (_, entries) <- outcomeEntries
+    , entry <- entries
+    , Just report <- [tmceValidation entry]
+    , msg <- errors report
+    ]
 
 -- | Generate a number of actions (with a given maximum) and run them.
 runActions
