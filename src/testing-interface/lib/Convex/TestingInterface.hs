@@ -275,9 +275,10 @@ newtype ModelState state = ModelState {unModelState :: state}
   deriving (Eq, Show)
 
 {- | Per-threat-model accumulated results across all QuickCheck iterations.
-Key is the threat model name, value is the list of outcomes (one per iteration).
+Key is the threat model name, value is the list of iteration results.
+Each iteration result is a pair of the threat model outcome and related error messages.
 -}
-type ThreatModelResults = Map.Map String [(ThreatModelOutcome, [ThreatModelCheckEntry])]
+type ThreatModelResults = Map.Map String [(ThreatModelOutcome, [String])]
 
 -- | Try up to 100 times to generate a value satisfying a predicate
 suchThatMaybe :: Gen a -> (a -> Bool) -> Gen (Maybe a)
@@ -640,7 +641,7 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
         runMockchainIO (runThreatModelCheckTraced AutoSign tm envs) params state0
       pure (name, outcome, traceEntries, mcsCoverageData tmFinalState)
 
-    let tmResults = [(n, (o, entries)) | (n, o, entries, _) <- tmResultsWithCov]
+    let tmResults = [(n, summarizeThreatModelIteration o entries) | (n, o, entries, _) <- tmResultsWithCov]
         tmTracedResults = [(n, o, entries) | (n, o, entries, _) <- tmResultsWithCov]
         tmCoverage = mconcat [cov | (_, _, _, cov) <- tmResultsWithCov]
 
@@ -728,7 +729,7 @@ positiveTestFast opts mGetTmResultsRef tms evs = do
         runMockchainIO (runThreatModelCheckTraced AutoSign tm envs) params state0
       pure (name, outcome, traceEntries, mcsCoverageData tmFinalState)
 
-    let tmResults = [(n, (o, entries)) | (n, o, entries, _) <- tmResultsWithCov]
+    let tmResults = [(n, summarizeThreatModelIteration o entries) | (n, o, entries, _) <- tmResultsWithCov]
         tmCoverage = mconcat [cov | (_, _, _, cov) <- tmResultsWithCov]
 
     pure (finalState, tmResults, tmCoverage)
@@ -945,15 +946,22 @@ expectedVulnTestCase getTmResultsRef groupName idx tm =
                               <> " transactions applicable)"
                           tmRecord recorder key summary
 
-distinctValidationErrors :: [(ThreatModelOutcome, [ThreatModelCheckEntry])] -> [String]
-distinctValidationErrors outcomeEntries =
+summarizeThreatModelIteration :: ThreatModelOutcome -> [ThreatModelCheckEntry] -> (ThreatModelOutcome, [String])
+summarizeThreatModelIteration outcome entries =
+  (outcome, distinctValidationErrorsFromEntries entries)
+
+distinctValidationErrorsFromEntries :: [ThreatModelCheckEntry] -> [String]
+distinctValidationErrorsFromEntries entries =
   nub
     [ msg
-    | (_, entries) <- outcomeEntries
-    , entry <- entries
+    | entry <- entries
     , Just report <- [tmceValidation entry]
     , msg <- errors report
     ]
+
+distinctValidationErrors :: [(ThreatModelOutcome, [String])] -> [String]
+distinctValidationErrors outcomeEntries =
+  nub [msg | (_, msgs) <- outcomeEntries, msg <- msgs]
 
 -- | Generate a number of actions (with a given maximum) and run them.
 runActions

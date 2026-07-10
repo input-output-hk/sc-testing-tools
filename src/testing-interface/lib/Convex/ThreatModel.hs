@@ -685,10 +685,9 @@ shouldValidateOrNot should txMod = do
     let distinctErrors = nub (errors validReport)
         failureLine = printf "Test failure: the following transaction did%s validate" n't
         errorsLine =
-          "Validation errors:\n "
-            <> if null distinctErrors
-              then "(none)"
-              else intercalate " \n " distinctErrors
+          if null distinctErrors
+            then "Validation errors: (none)"
+            else "Validation errors:\n" <> intercalate "\n" (map ("  - " <>) distinctErrors)
     fail $ show $ info $ failureLine <> "\n" <> errorsLine
   pre <- inPrecondition
   when pre $
@@ -762,6 +761,10 @@ anyInputSuchThat p = pickAny . filter p =<< getTxInputs
 -- | Pick a random reference input satisfying the given predicate.
 anyReferenceInputSuchThat :: (Input -> Bool) -> ThreatModel Input
 anyReferenceInputSuchThat p = pickAny . filter p =<< getTxReferenceInputs
+
+-- <> if null distinctErrors
+--   then "(none)"
+--   else intercalate " \n " distinctErrors
 
 -- | Pick a random output satisfying the given predicate.
 anyOutputSuchThat :: (Output -> Bool) -> ThreatModel Output
