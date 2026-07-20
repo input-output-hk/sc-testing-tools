@@ -71,7 +71,7 @@ streamingEventSchema =
           Nothing -> Aeson.Array mempty
         _ -> Aeson.Array mempty
    in Aeson.object
-        [ "$schema" .= ("https://json-schema.org/draft/2020-12/schema" :: Text)
+        [ "$schema" .= ("http://json-schema.org/draft-07/schema#" :: Text)
         , "$id" .= ("https://github.com/j-mueller/sc-tools/streaming-events.schema.json" :: Text)
         , "title" .= ("SC-Tools Streaming Event" :: Text)
         , "description" .= ("A single NDJSON line from the sc-tools test streaming reporter" :: Text)
@@ -284,7 +284,7 @@ instance ToSchema Event where
                 [ ("event", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["test_progress"])
                 , ("id", Inline $ mempty & type_ ?~ OpenApiInteger)
                 , ("message", Inline $ mempty & type_ ?~ OpenApiString)
-                , ("percent", Inline $ mempty & type_ ?~ OpenApiNumber & format ?~ "float")
+                , ("percent", Inline $ mempty & type_ ?~ OpenApiNumber & format ?~ "double")
                 ]
             & required .~ ["event", "id", "message", "percent"]
 

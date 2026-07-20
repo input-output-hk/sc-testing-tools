@@ -89,7 +89,7 @@
                             "type": "string"
                         },
                         "percent": {
-                            "format": "float",
+                            "format": "double",
                             "type": "number"
                         }
                     },
@@ -1309,7 +1309,7 @@
         }
     },
     "$id": "https://github.com/j-mueller/sc-tools/streaming-events.schema.json",
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "A single NDJSON line from the sc-tools test streaming reporter",
     "oneOf": [
         {
@@ -1376,7 +1376,7 @@
                     "type": "string"
                 },
                 "percent": {
-                    "format": "float",
+                    "format": "double",
                     "type": "number"
                 }
             },
