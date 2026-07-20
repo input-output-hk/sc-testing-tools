@@ -146,7 +146,8 @@ import Cardano.Api as X
 
 import Control.Lens ((%~), (&), (^.))
 import Control.Monad
-import Data.List (intercalate, nub)
+import Data.Containers.ListUtils (nubOrd)
+import Data.List (intercalate)
 import Data.Map qualified as Map
 import Text.PrettyPrint hiding ((<>))
 import Text.Printf
@@ -682,13 +683,14 @@ shouldValidateOrNot should txMod = do
         | should = "" :: String
         | otherwise = "n't"
   when (should /= valid validReport) $ do
-    let distinctErrors = nub (errors validReport)
+    let distinctErrors = nubOrd (errors validReport)
         failureLine = printf "Test failure: the following transaction did%s validate" n't
-        errorsLine =
-          if null distinctErrors
-            then "Validation errors: (none)"
-            else "Validation errors:\n" <> intercalate "\n" (map ("  - " <>) distinctErrors)
-    fail $ show $ info $ failureLine <> "\n" <> errorsLine
+        messageLines =
+          failureLine
+            : [ "  Validation errors:\n  " <> intercalate "\n" (map ("  - " <>) distinctErrors)
+              | not (null distinctErrors)
+              ]
+    fail $ show $ info $ intercalate "\n" messageLines
   pre <- inPrecondition
   when pre $
     counterexampleTM $
@@ -761,10 +763,6 @@ anyInputSuchThat p = pickAny . filter p =<< getTxInputs
 -- | Pick a random reference input satisfying the given predicate.
 anyReferenceInputSuchThat :: (Input -> Bool) -> ThreatModel Input
 anyReferenceInputSuchThat p = pickAny . filter p =<< getTxReferenceInputs
-
--- <> if null distinctErrors
---   then "(none)"
---   else intercalate " \n " distinctErrors
 
 -- | Pick a random output satisfying the given predicate.
 anyOutputSuchThat :: (Output -> Bool) -> ThreatModel Output
