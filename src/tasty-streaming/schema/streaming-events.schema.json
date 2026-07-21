@@ -89,7 +89,7 @@
                             "type": "string"
                         },
                         "percent": {
-                            "format": "float",
+                            "format": "double",
                             "type": "number"
                         }
                     },
@@ -542,6 +542,12 @@
         },
         "ThreatModelTrace": {
             "properties": {
+                "covered": {
+                    "items": {
+                        "$ref": "#/$defs/SrcLocRanges"
+                    },
+                    "type": "array"
+                },
                 "modifications": {
                     "items": {
                         "$ref": "#/$defs/TxMod"
@@ -567,15 +573,20 @@
                 },
                 "targetTxIndex": {
                     "type": "integer"
+                },
+                "testId": {
+                    "type": "integer"
                 }
             },
             "required": [
                 "name",
+                "testId",
                 "targetTxIndex",
                 "modifications",
                 "originalTx",
                 "modifiedTx",
-                "outcome"
+                "outcome",
+                "covered"
             ],
             "type": "object"
         },
@@ -732,8 +743,24 @@
             ]
         },
         "TxInputSummary": {
+            "description": "Tier 1 (redeemerRaw, redeemerConstr) is always present for script inputs; Tier 2 (redeemerKind, redeemerPayload) is only populated when the TestingInterface instance overrides redeemerTagger. All four redeemer fields are nullable (null for non-script inputs, or when Tier 2 is not opted in).",
             "properties": {
                 "address": {
+                    "type": "string"
+                },
+                "redeemerConstr": {
+                    "nullable": true,
+                    "type": "integer"
+                },
+                "redeemerKind": {
+                    "nullable": true,
+                    "type": "string"
+                },
+                "redeemerPayload": {
+                    "nullable": true
+                },
+                "redeemerRaw": {
+                    "nullable": true,
                     "type": "string"
                 },
                 "utxo": {
@@ -746,7 +773,11 @@
             "required": [
                 "utxo",
                 "address",
-                "value"
+                "value",
+                "redeemerRaw",
+                "redeemerConstr",
+                "redeemerKind",
+                "redeemerPayload"
             ],
             "type": "object"
         },
@@ -1278,7 +1309,7 @@
         }
     },
     "$id": "https://github.com/j-mueller/sc-tools/streaming-events.schema.json",
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "A single NDJSON line from the sc-tools test streaming reporter",
     "oneOf": [
         {
@@ -1345,7 +1376,7 @@
                     "type": "string"
                 },
                 "percent": {
-                    "format": "float",
+                    "format": "double",
                     "type": "number"
                 }
             },

@@ -55,6 +55,7 @@ import Convex.TestingInterface (
   RunOptions (..),
   TestingInterface (..),
   ThreatModelsFor (..),
+  autoRedeemerTag,
   genAction,
   mockchainFailsWithOptions,
   mockchainSucceedsWithOptions,
@@ -81,6 +82,7 @@ import Convex.ThreatModel.OutputDatumHashMissing (outputDatumHashMissingAttack)
 import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
 import Convex.Wallet.MockWallet qualified as Wallet
 import Data.Map qualified as Map
+import Data.Proxy (Proxy (Proxy))
 
 import Scripts qualified
 import Scripts.PingPong qualified as PingPong
@@ -354,6 +356,10 @@ instance TestingInterface PingPongModel where
 
   -- Here is an example of using the monitoring function to label actions in QuickCheck output.
   monitoring _ action = QC.label ("action=" <> show action)
+
+  -- Tier 2 redeemer streaming: label each script input's redeemer with the
+  -- constructor name of 'PingPongRedeemer' (i.e. "Ping", "Pong", or "Stop").
+  redeemerTagger = autoRedeemerTag (Proxy @PingPong.PingPongRedeemer)
 
 instance ThreatModelsFor PingPongModel where
   threatModels =

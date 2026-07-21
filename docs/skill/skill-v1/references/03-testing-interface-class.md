@@ -263,3 +263,58 @@ The test module needs at minimum:
 Errors like `Illegal deriving strategy` or `lexical error in numeric
 literal at character '_'` mean `DerivingStrategies` or
 `NumericUnderscores` is missing.
+
+## M. Streaming redeemer metadata (`redeemerTagger`, optional)
+
+Default: `redeemerTagger = RedeemerTagger (const Nothing)` — a no-op.
+Existing instances are unaffected.
+
+When a test runs with `--streaming-json`, each `test_trace` event
+surfaces per-input redeemer data on every script input inside
+`TxInputSummary`. There are two layers:
+
+- **Tier 1 (always on, no override needed).** `redeemerRaw` (hex CBOR
+  of the redeemer's `ScriptData`) and `redeemerConstr` (the Plutus
+  `Constr` index). Consumers can bucket script inputs by constructor
+  index with zero per-spec work.
+- **Tier 2 (opt-in via `redeemerTagger`).** `redeemerKind` (a
+  human-readable label such as `"Pong"`) and `redeemerPayload`
+  (optional JSON). The library cannot know your redeemer ADT's shape —
+  the compiled Plutus script has lost constructor names — so you must
+  supply the mapping.
+
+Override `redeemerTagger` in your instance. Three helpers, from
+one-liner to fully manual, re-exported from `Convex.TestingInterface`
+(defined in `Convex.TestingInterface.Trace.RedeemerTag`):
+
+**Auto label — one-liner** for nullary redeemers (`Ping | Pong | Stop`):
+
+```haskell
+instance TestingInterface MyModel where
+  -- ...
+  redeemerTagger = autoRedeemerTag (Proxy @MyRedeemer)
+```
+
+Decodes via `FromData`; labels with the Haskell `Show` of the decoded
+value. This is the reference example used in `PingPongSpec.hs`.
+
+**Label with a function — explicit labelling** when the redeemer carries useful data:
+
+```haskell
+redeemerTagger =
+  labelRedeemer (Proxy @MyRedeemer) $ \case
+    Buy n  -> RedeemerTag "Buy"   (Just (toJSON n))
+    Cancel -> RedeemerTag "Cancel" Nothing
+```
+
+**Raw `Data` matching — escape hatch** when you don't want `FromData`:
+construct `RedeemerTagger (Data -> Maybe RedeemerTag)` directly.
+
+`RedeemerTagger` is a `Monoid` (first `Just` wins), so helpers combine
+with `<>`.
+
+Only **spend-purpose** redeemers are surfaced in the MVP (mint / cert /
+withdraw redeemers are deferred). See the streaming README
+(`src/tasty-streaming/README.md`, "Redeemer data in `test_trace`") for
+the full `TxInputSummary` JSON shape and `PingPongSpec.hs` for a
+working auto-label instance.

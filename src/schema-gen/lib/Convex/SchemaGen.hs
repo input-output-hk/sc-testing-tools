@@ -71,7 +71,7 @@ streamingEventSchema =
           Nothing -> Aeson.Array mempty
         _ -> Aeson.Array mempty
    in Aeson.object
-        [ "$schema" .= ("https://json-schema.org/draft/2020-12/schema" :: Text)
+        [ "$schema" .= ("http://json-schema.org/draft-07/schema#" :: Text)
         , "$id" .= ("https://github.com/j-mueller/sc-tools/streaming-events.schema.json" :: Text)
         , "title" .= ("SC-Tools Streaming Event" :: Text)
         , "description" .= ("A single NDJSON line from the sc-tools test streaming reporter" :: Text)
@@ -284,7 +284,7 @@ instance ToSchema Event where
                 [ ("event", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["test_progress"])
                 , ("id", Inline $ mempty & type_ ?~ OpenApiInteger)
                 , ("message", Inline $ mempty & type_ ?~ OpenApiString)
-                , ("percent", Inline $ mempty & type_ ?~ OpenApiNumber & format ?~ "float")
+                , ("percent", Inline $ mempty & type_ ?~ OpenApiNumber & format ?~ "double")
                 ]
             & required .~ ["event", "id", "message", "percent"]
 
@@ -377,13 +377,18 @@ instance ToSchema TxInputSummary where
       NamedSchema (Just "TxInputSummary") $
         mempty
           & type_ ?~ OpenApiObject
+          & description ?~ "Tier 1 (redeemerRaw, redeemerConstr) is always present for script inputs; Tier 2 (redeemerKind, redeemerPayload) is only populated when the TestingInterface instance overrides redeemerTagger. All four redeemer fields are nullable (null for non-script inputs, or when Tier 2 is not opted in)."
           & properties
             .~ InsOrdHashMap.fromList
               [ ("utxo", Inline $ mempty & type_ ?~ OpenApiString)
               , ("address", Inline $ mempty & type_ ?~ OpenApiString)
               , ("value", valueRef)
+              , ("redeemerRaw", Inline $ mempty & type_ ?~ OpenApiString & nullable ?~ True)
+              , ("redeemerConstr", Inline $ mempty & type_ ?~ OpenApiInteger & nullable ?~ True)
+              , ("redeemerKind", Inline $ mempty & type_ ?~ OpenApiString & nullable ?~ True)
+              , ("redeemerPayload", Inline $ mempty & nullable ?~ True)
               ]
-          & required .~ ["utxo", "address", "value"]
+          & required .~ ["utxo", "address", "value", "redeemerRaw", "redeemerConstr", "redeemerKind", "redeemerPayload"]
 
 instance ToSchema TxOutputSummary where
   declareNamedSchema _ = do
@@ -757,6 +762,7 @@ instance ToSchema ThreatModelTrace where
     txRef <- declareSchemaRef (Proxy @TxSummary)
     outcomeRef <- declareSchemaRef (Proxy @ThreatModelTraceOutcome)
     txModRef <- declareSchemaRef (Proxy @TxMod)
+    srcLocRanges <- declareSchemaRef (Proxy @SrcLocRanges)
     pure $
       NamedSchema (Just "ThreatModelTrace") $
         mempty
@@ -764,13 +770,15 @@ instance ToSchema ThreatModelTrace where
           & properties
             .~ InsOrdHashMap.fromList
               [ ("name", Inline $ mempty & type_ ?~ OpenApiString)
+              , ("testId", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("targetTxIndex", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("modifications", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject txModRef)
               , ("originalTx", txRef)
               , ("modifiedTx", Inline $ mempty & nullable ?~ True & allOf ?~ [txRef])
               , ("outcome", outcomeRef)
+              , ("covered", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject srcLocRanges)
               ]
-          & required .~ ["name", "targetTxIndex", "modifications", "originalTx", "modifiedTx", "outcome"]
+          & required .~ ["name", "testId", "targetTxIndex", "modifications", "originalTx", "modifiedTx", "outcome", "covered"]
 
 instance ToSchema IterationTrace where
   declareNamedSchema _ = do

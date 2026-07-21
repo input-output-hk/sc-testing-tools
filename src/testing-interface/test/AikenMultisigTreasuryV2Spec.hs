@@ -78,6 +78,7 @@ import Convex.TestingInterface (
   RunOptions (disableNegativeTesting, mcOptions),
   TestingInterface (..),
   ThreatModelsFor (..),
+  autoRedeemerTag,
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel.Cardano.Api (dummyTxId)
@@ -89,6 +90,7 @@ import Convex.Wallet (Wallet, addressInEra, getWallet, verificationKeyHash)
 import Convex.Wallet.MockWallet qualified as Wallet
 import Data.Map qualified as Map
 import Data.Maybe (mapMaybe)
+import Data.Proxy (Proxy (..))
 
 import Paths_convex_testing_interface qualified as Pkg
 import PlutusLedgerApi.V1 qualified as PV1
@@ -811,6 +813,15 @@ instance TestingInterface MultisigV2Model where
   validate _model = pure True
 
   monitoring _state _action prop = prop
+
+  -- Monoid-composition example: the suite has TWO redeemer-bearing scripts
+  -- (spend + mint). Note: redeemers for *spending* a script input are the only
+  -- ones streamed today; redeemers for minting (and certificates/withdrawals)
+  -- are not yet included, so the mint tagger here has no effect yet -- it's
+  -- composed in so it works unchanged once they are.
+  redeemerTagger =
+    autoRedeemerTag (Proxy @MultisigV2SpendRedeemer)
+      <> autoRedeemerTag (Proxy @ValidationMintRedeemer)
 
 instance ThreatModelsFor MultisigV2Model where
   -- Note: threatModels empty for same reasons as v1

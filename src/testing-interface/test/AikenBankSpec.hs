@@ -64,6 +64,8 @@ import Convex.MockChain.CoinSelection (balanceAndSubmit, tryBalanceAndSubmit)
 import Convex.MockChain.Defaults qualified as Defaults
 import Convex.MockChain.Utils (mockchainSucceeds)
 import Convex.TestingInterface (
+  RedeemerTag (..),
+  RedeemerTagger (..),
   RunOptions (disableNegativeTesting),
   TestingInterface (..),
   ThreatModelsFor (..),
@@ -85,6 +87,7 @@ import Data.String (fromString)
 import Paths_convex_testing_interface qualified as Pkg
 import PlutusCore qualified as PLC
 import PlutusLedgerApi.Common qualified as PlutusLedgerApi
+import PlutusTx (Data (..))
 import PlutusTx qualified
 import PlutusTx.Builtins qualified as PlutusTx
 
@@ -978,6 +981,17 @@ instance TestingInterface BankModel where
   validate _model = pure True
 
   monitoring _state _action prop = prop
+
+  -- NOTE: This spec uses raw 'Data' matching (a direct RedeemerTagger) as an escape-hatch example,
+  -- matching directly on Plutus Data. For this nullary redeemer it would more simply be:
+  --   redeemerTagger = autoRedeemerTag (Proxy @AccountRedeemer)
+  -- (unstableMakeIsData assigns Constr indices in declaration order: IncreaseBalance=0,
+  -- DecreaseBalance=1).
+  redeemerTagger =
+    RedeemerTagger $ \case
+      Constr 0 _ -> Just (RedeemerTag "IncreaseBalance" Nothing)
+      Constr 1 _ -> Just (RedeemerTag "DecreaseBalance" Nothing)
+      _ -> Nothing
 
 instance ThreatModelsFor BankModel where
   threatModels = [unprotectedScriptOutput, negativeIntegerAttack, valueUnderpaymentAttack, mutualExclusionAttack]

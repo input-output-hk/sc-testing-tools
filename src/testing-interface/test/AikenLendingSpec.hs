@@ -72,9 +72,11 @@ import Convex.NodeParams (ledgerProtocolParameters)
 import Convex.PlutusLedger.V1 (transAddressInEra)
 import Convex.TestingInterface (
   Options (Options, params),
+  RedeemerTag (..),
   RunOptions (mcOptions),
   TestingInterface (..),
   ThreatModelsFor (..),
+  labelRedeemer,
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel (SigningWallet (SignWith), ThreatModelEnv (..), runThreatModelMQuiet)
@@ -87,6 +89,7 @@ import Convex.Wallet.MockWallet qualified as Wallet
 import Data.List (find)
 import Data.Map qualified as Map
 import Data.Maybe (mapMaybe)
+import Data.Proxy (Proxy (..))
 
 import Paths_convex_testing_interface qualified as Pkg
 import PlutusLedgerApi.V1 qualified as PV1
@@ -954,6 +957,18 @@ instance TestingInterface LendingModel where
   validate _model = pure True
 
   monitoring _state _action prop = prop
+
+  -- NOTE: This spec uses 'label with a function' (labelRedeemer) as an example of explicit labeling.
+  -- For a nullary redeemer like this it would more simply be:
+  --   redeemerTagger = autoRedeemerTag (Proxy @LendingRedeemer)
+  redeemerTagger =
+    labelRedeemer
+      (Proxy @LendingRedeemer)
+      ( \case
+          RequestLoan -> RedeemerTag "RequestLoan" Nothing
+          Lend -> RedeemerTag "Lend" Nothing
+          Repay -> RedeemerTag "Repay" Nothing
+      )
 
 instance ThreatModelsFor LendingModel where
   -- threatModels is empty - vulnerabilities are tested via expectedVulnerabilities

@@ -391,6 +391,10 @@ data VestingModel = VestingModel
 instance ToJSON VestingModel where
   toJSON = toJSON . show
 
+-- NOTE: This spec intentionally does NOT override 'redeemerTagger'. The validator's
+-- redeemer is unit ('()'), so there is no meaningful label. It stays on Tier 1 (raw
+-- redeemerRaw + redeemerConstr are still streamed for script inputs) — demonstrating
+-- that doing nothing is a valid, supported choice.
 instance TestingInterface VestingModel where
   -- Actions for Vesting: lock funds and unlock (after deadline)
   data Action VestingModel

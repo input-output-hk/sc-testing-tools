@@ -418,6 +418,8 @@ data TipJarV2Model = TipJarV2Model
 instance ToJSON TipJarV2Model where
   toJSON = toJSON . show
 
+-- NOTE: This spec intentionally does NOT override 'redeemerTagger' (unlike AikenTipJarSpec)
+-- to demonstrate the default/no-op path. Tier 1 raw redeemer data still streams.
 instance TestingInterface TipJarV2Model where
   -- Actions for TipJar V2: initialize, add tips, and owner claims
   data Action TipJarV2Model
