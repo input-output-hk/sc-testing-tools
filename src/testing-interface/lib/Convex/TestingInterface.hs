@@ -641,11 +641,7 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
         runMockchainIO (runThreatModelCheckTraced AutoSign tm envs) params state0
       pure (name, outcome, traceEntries, mcsCoverageData tmFinalState)
 
-    let tmResults = [(n, summarizeThreatModelIteration o entries) | (n, o, entries, _) <- tmResultsWithCov]
-        tmTracedResults = [(n, o, entries) | (n, o, entries, _) <- tmResultsWithCov]
-        tmCoverage = mconcat [cov | (_, _, _, cov) <- tmResultsWithCov]
-
-    pure (finalState, transitions, tmResults, tmTracedResults, tmCoverage)
+    pure (finalState, transitions, tmResultsWithCov)
 
   case result of
     (Left err, MockChainState{mcsCoverageData}) -> do
@@ -660,12 +656,13 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
               }
       run $ recordIteration recorder groupName "positive" (covDataToSrcLocRanges covData) (toJSON trace)
       pure (property False)
-    (Right (finalState, transitions, tmResults, tmTracedResults, tmCoverage), MockChainState{mcsCoverageData}) -> do
-      let covData = mcsCoverageData <> tmCoverage
+    (Right (finalState, transitions, tmResultsWithCov), MockChainState{mcsCoverageData}) -> do
+      let covData = mcsCoverageData <> mconcat [cov | (_, _, _, cov) <- tmResultsWithCov]
       monitor (counterexample $ "Final state: " ++ show finalState)
       traverse_ (\ref -> liftIO $ modifyIORef ref (<> covData)) coverageRef
       case mGetTmResultsRef of
         Just getTmResultsRef -> run $ do
+          let tmResults = [(n, summarizeThreatModelIteration o entries) | (n, o, entries, _) <- tmResultsWithCov]
           tmRef <- getTmResultsRef
           modifyIORef tmRef $ \existing ->
             foldl'
@@ -673,7 +670,8 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
               existing
               tmResults
         Nothing -> pure ()
-      let tmTraces = toThreatModelTraces tmTracedResults
+      let tmTracedResults = [(n, o, entries) | (n, o, entries, _) <- tmResultsWithCov]
+          tmTraces = toThreatModelTraces tmTracedResults
           trace =
             IterationTrace
               { itIndex = iterIdx
