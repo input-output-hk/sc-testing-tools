@@ -93,8 +93,11 @@ diagnostic.
 as non-parameterised `ThreatModel ()` values. Several have
 parameterised `…With` siblings exposed by individual modules.
 `tokenForgeryAttack` is NOT in `allThreatModels` (it needs a
-minting-policy argument). Total: 18 default + 8 parameterised = 26
-callable forms.
+minting-policy argument). Six of the parameterised models also offer
+a `…WithGen` variant. Total: 18 default + 8 parameterised + 6
+generator = 32 callable forms.
+
+Parameterised models follow a three-tier convention: `model` (randomised default), `modelWith` (fixed value), and `modelWithGen` (explicit generator). See §G.
 
 ### B.1 Output redirection
 
@@ -109,8 +112,8 @@ callable forms.
 | name | description | applies when |
 |---|---|---|
 | `tokenForgeryAttack` / `tokenForgeryAttackWith :: ScriptData -> PlutusScript lang -> AssetName -> ThreatModel ()` | Mints additional tokens under a supplied policy and adds them to a key-address output. | Contract has (or could be paired with) a minting policy. **Not** in `allThreatModels`. |
-| `largeValueAttack` / `largeValueAttackWith :: Int -> ThreatModel ()` | Mints N unique junk tokens (default 50) using an always-succeeds policy and stuffs them into a script output. | Tx has at least one script output. |
-| `valueUnderpaymentAttack` / `valueUnderpaymentAttackWith :: Double -> ThreatModel ()` | Reduces ADA on a script output by the given factor (default 0.5). | Tx has a script output carrying more than ~2 ADA. |
+| `largeValueAttack` / `largeValueAttackWith :: Int -> ThreatModel ()` / `largeValueAttackWithGen :: Gen Int -> ThreatModel ()` | Mints N unique junk tokens (default 50) using an always-succeeds policy and stuffs them into a script output. | Tx has at least one script output. |
+| `valueUnderpaymentAttack` / `valueUnderpaymentAttackWith :: Double -> ThreatModel ()` / `valueUnderpaymentAttackWithGen :: Gen Double -> ThreatModel ()` | Reduces ADA on a script output by the given factor (default 0.5). | Tx has a script output carrying more than ~2 ADA. |
 | `redeemerAssetSubstitution` | Substitutes asset identifiers referenced in redeemers. | Contract uses redeemers that name assets/policies. |
 
 ### B.3 Authorization bypass
@@ -124,12 +127,12 @@ callable forms.
 
 | name | description | applies when |
 |---|---|---|
-| `largeDataAttack` / `largeDataAttackWith :: Int -> ThreatModel ()` | Appends N extra fields (default 1000) of `ScriptDataNumber 42` to an inline-datum constructor. | Script input + script output with inline datum whose top-level shape is `ScriptDataConstructor`. |
-| `datumByteBloatAttack` / `datumByteBloatAttackWith :: Int -> ThreatModel ()` | Inflates the first list-item bytestring inside a datum to N bytes (default 10 000). | Inline datum contains a non-empty list whose first item is a ByteString-like value. |
-| `datumListBloatAttack` / `datumListBloatAttackWith :: Int -> Int -> ThreatModel ()` | Appends N items of M bytes to every list field in an inline datum (defaults 5 × 100). | Inline datum contains at least one list field. |
+| `largeDataAttack` / `largeDataAttackWith :: Int -> ThreatModel ()` / `largeDataAttackWithGen :: Gen Int -> ThreatModel ()` | Appends N extra fields (default 1000) of `ScriptDataNumber 42` to an inline-datum constructor. | Script input + script output with inline datum whose top-level shape is `ScriptDataConstructor`. |
+| `datumByteBloatAttack` / `datumByteBloatAttackWith :: Int -> ThreatModel ()` / `datumByteBloatAttackWithGen :: Gen Int -> ThreatModel ()` | Inflates the first list-item bytestring inside a datum to N bytes (default 10 000). | Inline datum contains a non-empty list whose first item is a ByteString-like value. |
+| `datumListBloatAttack` / `datumListBloatAttackWith :: Int -> Int -> ThreatModel ()` / `datumListBloatAttackWithGen :: Gen (Int, Int) -> ThreatModel ()` | Appends N items of M bytes to every list field in an inline datum (defaults 5 × 100). | Inline datum contains at least one list field. |
 | `duplicateListEntryAttack` | Duplicates the first entry of every non-empty list field. | Inline datum contains a non-empty list. |
 | `negativeIntegerAttack` | Replaces integer fields with negative values. | Datum or redeemer carries integer fields where sign matters. |
-| `invalidDatumIndexAttack` | Targets datum-lookup-by-index patterns with out-of-range indices. | Validator selects datum entries by index. |
+| `invalidDatumIndexAttack` / `invalidDatumIndexAttackWith :: Int -> ThreatModel ()` / `invalidDatumIndexAttackWithGen :: Gen Int -> ThreatModel ()` | Targets datum-lookup-by-index patterns with out-of-range indices. | Validator selects datum entries by index. |
 | `missingOutputDatumAttack` | Omits a required output datum. | Script outputs carry datums the validator expects. |
 | `outputDatumHashMissingAttack` | Omits the datum hash on an output. | Script outputs use datum-hash references. |
 
@@ -186,6 +189,8 @@ length checks.
   uniqueness (e.g. uses a set abstraction).
 - `largeValueAttackWith N` — skip if output value structure is
   whitelisted.
+
+**Note:** The no-suffix forms (`largeDataAttack`, `largeValueAttack`, etc.) now randomise their parameters per transaction by default. Use the `…With` form for deterministic regression tests, or `…WithGen` for a custom range. The parameter distribution is visible in QuickCheck output via `tabulate`.
 
 ### Default-on for any contract handling Ada / native-token outputs
 
@@ -256,14 +261,16 @@ import Convex.ThreatModel                          (ThreatModel)
 import Convex.ThreatModel.UnprotectedScriptOutput  (unprotectedScriptOutput)
 import Convex.ThreatModel.DoubleSatisfaction       (doubleSatisfaction)
 import Convex.ThreatModel.SignatoryRemoval         (signatoryRemoval)
-import Convex.ThreatModel.LargeData                (largeDataAttackWith)
+import Convex.ThreatModel.LargeData      (largeDataAttack)  -- randomised default
+-- or: (largeDataAttackWith)             -- for fixed value
+-- or: (largeDataAttackWithGen)          -- for custom Gen range
 
 instance ThreatModelsFor MyModel where
   threatModels =
     [ unprotectedScriptOutput
     , doubleSatisfaction
     , signatoryRemoval
-    , largeDataAttackWith 10
+    , largeDataAttack  -- randomised; was largeDataAttackWith 10
     ]
   expectedVulnerabilities = []
 ```
@@ -322,3 +329,57 @@ pattern, point them at the `ThreatModel` monad and its combinators
 `shouldNotValidate`, `Named`, plus `TxModifier` `Monoid` composition
 with `<>`). Documented under "Writing Custom Threat Models" in the
 [main README](https://github.com/input-output-hk/sc-testing-tools/blob/main/README.md).
+
+## §G. Parameterised threat models — the three-tier convention
+
+Every parameterised built-in follows a consistent three-tier API:
+
+| Tier | Signature shape | When to use |
+|---|---|---|
+| `model` | `ThreatModel ()` | Default. Parameter randomised per transaction via a curated `Gen`. Goes in `allThreatModels`. |
+| `modelWith` | `ParamType -> ThreatModel ()` | Fixed value. Deterministic regression tests, golden seeds, CI reproducibility. |
+| `modelWithGen` | `Gen ParamType -> ThreatModel ()` | Explicit generator. Power users with domain knowledge about the interesting range. |
+
+### How randomisation works
+
+The parameter is drawn fresh for each transaction in each QuickCheck iteration via `forAllTM` (the `ThreatModel` DSL's embedding of QuickCheck generation). This means:
+
+- QuickCheck explores the parameter space across iterations.
+- The parameter distribution is reported via `tabulate` (visible in test output).
+- Vacuous draws (e.g. a field count of 0 for large-data) are skipped via `ensure`, so a `TMPassed` outcome always means a meaningful attack was attempted and rejected.
+- In the pure `runThreatModel` runner, the parameter is shrunk toward the smallest triggering value, giving minimal counterexamples.
+
+### When to use which tier
+
+- **`model`** (randomised): the right default for `threatModels` lists. Zero configuration; QuickCheck finds the interesting region.
+- **`modelWith N`**: when you need determinism — regression tests against a known seed, golden tests, CI reproducibility.
+- **`modelWithGen gen`**: when you have domain knowledge. E.g. `largeDataAttackWithGen (choose (50, 200))` if you know your validator only becomes interesting above 50 fields.
+
+### Writing parameterised custom models
+
+If your custom threat model has a numeric strength parameter, follow the same convention:
+
+1. Write `modelWithGen :: Gen N -> ThreatModel ()` as the primitive.
+2. Specialise: `modelWith n = modelWithGen (pure n)` and `model = modelWithGen (choose (lo, hi))`.
+3. `tabulateTM` the parameter so users see the distribution.
+4. `ensure` a meaningful lower bound so vacuous draws are skipped.
+5. Provide a shrinker that shrinks toward the smallest meaningful value.
+
+Example (from `Convex.ThreatModel.LargeData`):
+
+```haskell
+largeDataAttackWithGen :: Gen Int -> ThreatModel ()
+largeDataAttackWithGen fieldsGen =
+    Named "Large Data Attack" $ do
+      n <- forAllTM fieldsGen shrinkPositive
+      ensure (n >= 1)
+      ...                         -- attack body, parameterised on n
+      tabulateTM "fields injected" [bucket n]
+      shouldNotValidate $ ...     -- the TxModifier
+
+largeDataAttackWith :: Int -> ThreatModel ()
+largeDataAttackWith = largeDataAttackWithGen . pure
+
+largeDataAttack :: ThreatModel ()
+largeDataAttack = largeDataAttackWithGen (choose (1, 1000))
+```

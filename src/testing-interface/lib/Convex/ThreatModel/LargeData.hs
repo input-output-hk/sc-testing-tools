@@ -49,80 +49,85 @@ If it does, the validator has a Large Data Attack vulnerability.
 module Convex.ThreatModel.LargeData (
   largeDataAttack,
   largeDataAttackWith,
+  largeDataAttackWithGen,
   bloatData,
 ) where
 
 import Convex.ThreatModel
+import Test.QuickCheck (Gen, choose, shrinkIntegral)
 
-{- | Check for Large Data Attack vulnerabilities with 1000 extra fields.
-
-This is the default configuration that appends 1000 extra @ScriptDataNumber 42@
-fields to any inline datum on a script output. If the transaction still
-validates, the script's datum parser is permissive and vulnerable.
+{- | Default large-data attack. The number of injected fields is drawn per
+transaction from a curated range, so QuickCheck explores the parameter space
+and shrinks counterexamples toward the smallest triggering value.
 -}
 largeDataAttack :: ThreatModel ()
-largeDataAttack = largeDataAttackWith 1000
+largeDataAttack = largeDataAttackWithGen (choose (1, 1000))
 
-{- | Check for Large Data Attack vulnerabilities with a configurable number
-of extra fields.
-
-For a transaction with script outputs containing inline datums:
-
-* Try bloating the datum by appending @n@ extra fields
-* If the transaction still validates, the script doesn't strictly validate
-  its datum structure - it only checks expected fields and ignores extras.
-
-This catches a vulnerability where different parsers may interpret the same
-on-chain data differently, leading to potential exploits.
+{- | Large-data attack with a fixed field count. Keep using this for
+deterministic regression tests and golden seeds.
 -}
 largeDataAttackWith :: Int -> ThreatModel ()
-largeDataAttackWith n = Named ("Large Data Attack (max " ++ show n ++ " fields)") $ do
-  -- Precondition: transaction must spend a script input (otherwise no validator runs)
-  _ <- anyInputSuchThat (not . isKeyAddressAny . addressOf)
+largeDataAttackWith = largeDataAttackWithGen . pure
 
-  -- Get all outputs from the transaction
-  outputs <- getTxOutputs
+{- | Large-data attack parameterised by a generator for the number of extra
+@Constr@ fields injected into the target inline datum. This is the primitive
+the other two forms delegate to.
+-}
+largeDataAttackWithGen :: Gen Int -> ThreatModel ()
+largeDataAttackWithGen fieldsGen =
+  Named "Large Data Attack" $ do
+    n <- forAllTM fieldsGen shrinkPositive
 
-  -- Filter to script outputs with inline datums
-  let scriptOutputsWithDatum = filter isScriptOutputWithInlineDatum outputs
+    -- Skip iterations where the draw is too small to be a meaningful attack.
+    ensure (n >= 1)
 
-  -- Precondition: there must be at least one script output with inline datum
-  threatPrecondition $ ensure (not $ null scriptOutputsWithDatum)
+    -- Precondition: transaction must spend a script input (otherwise no validator runs)
+    _ <- anyInputSuchThat (not . isKeyAddressAny . addressOf)
 
-  -- Pick a target output
-  target <- pickAny scriptOutputsWithDatum
+    -- Get all outputs from the transaction
+    outputs <- getTxOutputs
 
-  -- Extract the inline datum (we know it exists due to the filter)
-  originalDatum <- case getInlineDatum target of
-    Nothing -> failPrecondition "Script output missing inline datum"
-    Just originalDatum' -> pure originalDatum'
+    -- Filter to script outputs with inline datums
+    let scriptOutputsWithDatum = filter isScriptOutputWithInlineDatum outputs
 
-  let bloatedDatum = bloatData n originalDatum
+    -- Precondition: there must be at least one script output with inline datum
+    threatPrecondition $ ensure (not $ null scriptOutputsWithDatum)
 
-  counterexampleTM $
-    paragraph
-      [ "The transaction contains a script output at index"
-      , show (outputIx target)
-      , "with an inline datum."
-      ]
+    -- Pick a target output
+    target <- pickAny scriptOutputsWithDatum
 
-  counterexampleTM $
-    paragraph
-      [ "Testing if the datum can be bloated with"
-      , show n
-      , "extra fields while still passing validation."
-      ]
+    -- Extract the inline datum (we know it exists due to the filter)
+    originalDatum <- case getInlineDatum target of
+      Nothing -> failPrecondition "Script output missing inline datum"
+      Just originalDatum' -> pure originalDatum'
 
-  counterexampleTM $
-    paragraph
-      [ "If this validates, the script's FromData parser is permissive"
-      , "and ignores extra Constr fields. An attacker could exploit this"
-      , "to make a single datum satisfy multiple validators,"
-      , "or to bypass certain datum-based checks."
-      ]
+    let bloatedDatum = bloatData n originalDatum
 
-  -- Try to validate with the bloated datum
-  shouldNotValidate $ changeDatumOf target (toInlineDatum bloatedDatum)
+    counterexampleTM $
+      paragraph
+        [ "Injecting " ++ show n
+        , "extra Constr fields into the inline datum of output"
+        , show (outputIx target)
+        , "and asserting the transaction no longer validates."
+        ]
+    tabulateTM "fields injected" [bucket n]
+
+    -- Try to validate with the bloated datum
+    shouldNotValidate $ changeDatumOf target (toInlineDatum bloatedDatum)
+
+{- | Shrink a positive integer toward 1 (the smallest meaningful value),
+never reaching 0.
+-}
+shrinkPositive :: Int -> [Int]
+shrinkPositive = filter (>= 1) . shrinkIntegral
+
+-- | Coarse bucket for the parameter distribution report.
+bucket :: Int -> String
+bucket n
+  | n <= 10 = "001-010"
+  | n <= 100 = "011-100"
+  | n <= 500 = "101-500"
+  | otherwise = "501-1000"
 
 {- | Bloat a @ScriptData@ value by appending extra fields to a @Constr@.
 

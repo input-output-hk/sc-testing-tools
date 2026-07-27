@@ -52,6 +52,7 @@ has a Large Value Attack vulnerability.
 module Convex.ThreatModel.LargeValue (
   largeValueAttack,
   largeValueAttackWith,
+  largeValueAttackWithGen,
 ) where
 
 import Cardano.Api qualified as C
@@ -59,90 +60,107 @@ import Convex.ThreatModel
 import Convex.ThreatModel.TxModifier (addPlutusScriptMint, alwaysSucceedsMintingPolicy)
 import Data.ByteString.Char8 qualified as BS
 import GHC.Exts (fromList)
+import Test.QuickCheck (Gen, choose, shrinkIntegral)
 
-{- | Check for Large Value Attack vulnerabilities with 50 junk tokens.
-
-This is the default configuration that mints 50 unique tokens and adds them
-to a script output. If the transaction still validates, the script doesn't
-properly validate the value structure of its outputs.
+{- | Default large-value attack. The number of junk tokens is drawn per
+transaction from a curated range, so QuickCheck explores the parameter space
+and shrinks counterexamples toward the smallest triggering value.
 -}
 largeValueAttack :: ThreatModel ()
-largeValueAttack = largeValueAttackWith 50
+largeValueAttack = largeValueAttackWithGen (choose (1, 100))
 
-{- | Check for Large Value Attack vulnerabilities with a configurable number
-of junk tokens.
-
-For a transaction with script outputs:
-
-* Mint @n@ unique junk tokens using an always-succeeds minting policy
-* Add these tokens to a script output's value
-* If the transaction still validates, the script doesn't validate
-  the structure of values being created - it may only check amounts.
-
-This catches a vulnerability where validators use permissive value checks
-like @valuePaidTo addr >= expected@ instead of exact matching, allowing
-attackers to inflate UTxO min-Ada requirements or lock funds permanently.
+{- | Large-value attack with a fixed junk-token count. Keep using this for
+deterministic regression tests and golden seeds.
 -}
 largeValueAttackWith :: Int -> ThreatModel ()
-largeValueAttackWith numTokens = Named ("Large Value Attack (" ++ show numTokens ++ " tokens)") $ do
-  -- Get all outputs from the transaction
-  outputs <- getTxOutputs
+largeValueAttackWith = largeValueAttackWithGen . pure
 
-  -- Filter to script outputs (NOT key addresses)
-  let scriptOutputs = filter (not . isKeyAddressAny . addressOf) outputs
+{- | Large-value attack parameterised by a generator for the number of junk
+tokens minted and added to a script output. This is the primitive the other
+two forms delegate to.
+-}
+largeValueAttackWithGen :: Gen Int -> ThreatModel ()
+largeValueAttackWithGen numTokensGen =
+  Named "Large Value Attack" $ do
+    numTokens <- forAllTM numTokensGen shrinkPositive
 
-  -- Precondition: there must be at least one script output
-  threatPrecondition $ ensure (not $ null scriptOutputs)
+    -- Skip iterations where the draw is too small to be a meaningful attack.
+    ensure (numTokens >= 1)
 
-  -- Pick a target script output
-  target <- pickAny scriptOutputs
+    -- Get all outputs from the transaction
+    outputs <- getTxOutputs
 
-  -- Create junk tokens by minting with the always-succeeds policy
-  let policyId = C.PolicyId $ hashScript (C.PlutusScript C.PlutusScriptV2 alwaysSucceedsMintingPolicy)
-      junkTokens =
-        [ (C.UnsafeAssetName $ BS.pack $ "junk" ++ show i, C.Quantity 1)
-        | i <- [1 .. numTokens]
+    -- Filter to script outputs (NOT key addresses)
+    let scriptOutputs = filter (not . isKeyAddressAny . addressOf) outputs
+
+    -- Precondition: there must be at least one script output
+    threatPrecondition $ ensure (not $ null scriptOutputs)
+
+    -- Pick a target script output
+    target <- pickAny scriptOutputs
+
+    -- Create junk tokens by minting with the always-succeeds policy
+    let policyId = C.PolicyId $ hashScript (C.PlutusScript C.PlutusScriptV2 alwaysSucceedsMintingPolicy)
+        junkTokens =
+          [ (C.UnsafeAssetName $ BS.pack $ "junk" ++ show i, C.Quantity 1)
+          | i <- [1 .. numTokens]
+          ]
+        junkValue =
+          fromList
+            [ (C.AssetId policyId name, qty)
+            | (name, qty) <- junkTokens
+            ]
+        bloatedValue = valueOf target <> junkValue
+
+    counterexampleTM $
+      paragraph
+        [ "The transaction contains a script output at index"
+        , show (outputIx target)
+        , "."
         ]
-      junkValue =
-        fromList
-          [ (C.AssetId policyId name, qty)
-          | (name, qty) <- junkTokens
-          ]
-      bloatedValue = valueOf target <> junkValue
 
-  counterexampleTM $
-    paragraph
-      [ "The transaction contains a script output at index"
-      , show (outputIx target)
-      , "."
-      ]
+    counterexampleTM $
+      paragraph
+        [ "Testing if"
+        , show numTokens
+        , "junk tokens can be minted and added to the output's value"
+        , "while still passing validation."
+        ]
 
-  counterexampleTM $
-    paragraph
-      [ "Testing if"
-      , show numTokens
-      , "junk tokens can be minted and added to the output's value"
-      , "while still passing validation."
-      ]
+    counterexampleTM $
+      paragraph
+        [ "If this validates, the script's value validation is permissive."
+        , "An attacker could exploit this to:"
+        , "1) Increase min-UTxO requirements, locking victim's Ada"
+        , "2) Inflate transaction sizes, increasing spending costs"
+        , "3) Potentially lock funds permanently if size limits are exceeded"
+        ]
 
-  counterexampleTM $
-    paragraph
-      [ "If this validates, the script's value validation is permissive."
-      , "An attacker could exploit this to:"
-      , "1) Increase min-UTxO requirements, locking victim's Ada"
-      , "2) Inflate transaction sizes, increasing spending costs"
-      , "3) Potentially lock funds permanently if size limits are exceeded"
-      ]
+    tabulateTM "junk tokens" [bucket numTokens]
 
-  -- Create mint modifiers for all junk tokens
-  let mintModifiers =
-        mconcat
-          [ addPlutusScriptMint alwaysSucceedsMintingPolicy name qty (toScriptData ())
-          | (name, qty) <- junkTokens
-          ]
+    -- Create mint modifiers for all junk tokens
+    let mintModifiers =
+          mconcat
+            [ addPlutusScriptMint alwaysSucceedsMintingPolicy name qty (toScriptData ())
+            | (name, qty) <- junkTokens
+            ]
 
-  -- This SHOULD fail - if it validates, the contract is vulnerable
-  -- The attack: mint junk tokens AND add them to the target output
-  shouldNotValidate $
-    changeValueOf target bloatedValue
-      <> mintModifiers
+    -- This SHOULD fail - if it validates, the contract is vulnerable
+    -- The attack: mint junk tokens AND add them to the target output
+    shouldNotValidate $
+      changeValueOf target bloatedValue
+        <> mintModifiers
+
+{- | Shrink a positive integer toward 1 (the smallest meaningful value),
+never reaching 0.
+-}
+shrinkPositive :: Int -> [Int]
+shrinkPositive = filter (>= 1) . shrinkIntegral
+
+-- | Coarse bucket for the parameter distribution report.
+bucket :: Int -> String
+bucket n
+  | n <= 10 = "001-010"
+  | n <= 50 = "011-050"
+  | n <= 100 = "051-100"
+  | otherwise = "101+"
