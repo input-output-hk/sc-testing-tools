@@ -21,16 +21,24 @@ import Convex.MockChain.Defaults qualified as Defaults
 import Convex.PlutusLedger.V1 (transPubKeyHash)
 import Convex.Tasty.QuickCheck qualified as QC
 import Convex.TestingInterface (TestingInterface (..), ThreatModelsFor (..), propRunActions)
-import Convex.ThreatModel.DatumBloat (datumListBloatAttack)
+import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
+import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
 import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
-import Convex.ThreatModel.LargeData (largeDataAttackWith)
-import Convex.ThreatModel.LargeValue (largeValueAttackWith)
+import Convex.ThreatModel.InputDuplication (inputDuplication)
+import Convex.ThreatModel.InvalidDatumIndex (invalidDatumIndexAttack)
+import Convex.ThreatModel.LargeData (largeDataAttack)
+import Convex.ThreatModel.LargeValue (largeValueAttack)
+import Convex.ThreatModel.MissingOutputDatum (missingOutputDatumAttack)
 import Convex.ThreatModel.MutualExclusion (mutualExclusionAttack)
 import Convex.ThreatModel.NegativeInteger (negativeIntegerAttack)
+import Convex.ThreatModel.OutputDatumHashMissing (outputDatumHashMissingAttack)
+import Convex.ThreatModel.RedeemerAssetSubstitution (redeemerAssetSubstitution)
+import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
 import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
 import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
 import Convex.ThreatModel.TokenForgery (simpleAlwaysSucceedsMintingPolicyV2, simpleTestAssetName, tokenForgeryAttack)
 import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
+import Convex.ThreatModel.ValueUnderpayment (valueUnderpaymentAttack)
 import Convex.Utxos (toApiUtxo)
 import Convex.Wallet (Wallet, verificationKeyHash)
 import Convex.Wallet.MockWallet qualified as MockWallet
@@ -258,14 +266,22 @@ nextStateForHitTurn m =
 instance ThreatModelsFor MultiPlayerPingPongModel where
   threatModels =
     [ datumListBloatAttack
-    , largeDataAttackWith 10
-    , largeValueAttackWith 10
+    , datumByteBloatAttack
+    , doubleSatisfaction
+    , inputDuplication
+    , invalidDatumIndexAttack
+    , largeDataAttack
+    , largeValueAttack
+    , missingOutputDatumAttack
     , mutualExclusionAttack
     , negativeIntegerAttack
+    , outputDatumHashMissingAttack
+    , redeemerAssetSubstitution
+    , selfReferenceInjection
     , signatoryRemoval
     , unprotectedScriptOutput
+    , valueUnderpaymentAttack
     ]
-
   expectedVulnerabilities =
     [ duplicateListEntryAttack
     , timeBoundManipulation

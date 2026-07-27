@@ -54,7 +54,7 @@ import Convex.Aiken.Blueprint (Blueprint (..))
 import Convex.Aiken.Blueprint qualified as Blueprint
 import Convex.BuildTx (MonadBuildTx, execBuildTx)
 import Convex.BuildTx qualified as BuildTx
-import Convex.Class (MonadMockchain, getUtxo)
+import Convex.Class (MonadMockchain, getSlot, getUtxo)
 import Convex.CoinSelection (BalanceTxError, ChangeOutputPosition (TrailingChange))
 import Convex.MockChain (fromLedgerUTxO, runMockchain0IOWith)
 import Convex.MockChain.CoinSelection (balanceAndSubmit, tryBalanceAndSubmit)
@@ -694,12 +694,14 @@ propKingUnprotectedOutput opts = monadicIO $ do
     runMockchain0IOWith Wallet.initialUTxOs params $
       runExceptT $ do
         (tx, utxo) <- kingScenario
+        slot <- getSlot
 
         let pparams' = params ^. ledgerProtocolParameters
             env =
               ThreatModelEnv
                 { currentTx = tx
                 , currentUTxOs = utxo
+                , currentSlot = slot
                 , pparams = pparams'
                 }
 
