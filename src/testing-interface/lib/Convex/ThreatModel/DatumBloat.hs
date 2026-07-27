@@ -63,100 +63,128 @@ module Convex.ThreatModel.DatumBloat (
   -- * List bloating attacks
   datumListBloatAttack,
   datumListBloatAttackWith,
+  datumListBloatAttackWithGen,
   bloatLists,
 
   -- * ByteString inflation attacks
   datumByteBloatAttack,
   datumByteBloatAttackWith,
+  datumByteBloatAttackWithGen,
   inflateBytes,
   inflateFirstListItem,
 ) where
 
 import Convex.ThreatModel
 import Data.ByteString qualified as BS
+import Test.QuickCheck (Gen, choose, shrinkIntegral)
 
-{- | Check for Datum Bloat vulnerabilities with default parameters.
-
-Appends 5 items of 100 bytes each to every list found in the datum.
-If the transaction still validates, the script doesn't limit datum field sizes.
+{- | Default datum-list-bloat attack. The number of items and item size are
+drawn per transaction from curated ranges, so QuickCheck explores the
+parameter space and shrinks counterexamples toward the smallest triggering
+values.
 -}
 datumListBloatAttack :: ThreatModel ()
-datumListBloatAttack = datumListBloatAttackWith 5 100
+datumListBloatAttack = datumListBloatAttackWithGen ((,) <$> choose (1, 20) <*> choose (1, 500))
 
-{- | Check for Datum Bloat vulnerabilities with configurable parameters.
-
-For a transaction with script outputs containing inline datums:
-
-* Recursively find all @ScriptDataList@ fields in the datum
-* Append @numItems@ large @ScriptDataBytes@ items to each list
-* Each appended item is @itemSize@ bytes of 0x42 ('B')
-* If the transaction still validates, the script doesn't enforce
-  field size limits - it only checks the fields it expects.
-
-This catches vulnerabilities where validators have unbounded list fields
-(like a list of messages or a list of signatures) that can be exploited
-to bloat the datum beyond spendable limits.
-
-@
-datumListBloatAttackWith 5 100  -- Add 5 items of 100 bytes each
-datumListBloatAttackWith 10 500 -- More aggressive: 10 items of 500 bytes
-@
+{- | Datum-list-bloat attack with fixed parameters. Keep using this for
+deterministic regression tests and golden seeds.
 -}
 datumListBloatAttackWith :: Int -> Int -> ThreatModel ()
-datumListBloatAttackWith numItems itemSize = Named ("Datum List Bloat Attack (" ++ show numItems ++ " items, " ++ show itemSize ++ " bytes)") $ do
-  -- Get all outputs from the transaction
-  outputs <- getTxOutputs
+datumListBloatAttackWith numItems itemSize = datumListBloatAttackWithGen (pure (numItems, itemSize))
 
-  -- Filter to script outputs with inline datums
-  let scriptOutputsWithDatum = filter isScriptOutputWithInlineDatum outputs
+{- | Datum-list-bloat attack parameterised by a generator for the number of
+items and the per-item byte size. This is the primitive the other two forms
+delegate to.
+-}
+datumListBloatAttackWithGen :: Gen (Int, Int) -> ThreatModel ()
+datumListBloatAttackWithGen gen =
+  Named "Datum List Bloat Attack" $ do
+    (numItems, itemSize) <- forAllTM gen shrinkPair
 
-  -- Precondition: there must be at least one script output with inline datum
-  threatPrecondition $ ensure (not $ null scriptOutputsWithDatum)
+    -- Skip iterations where the draw is too small to be a meaningful attack.
+    ensure (numItems >= 1 && itemSize >= 1)
 
-  -- Pick a target output
-  target <- pickAny scriptOutputsWithDatum
+    -- Precondition: transaction must spend a script input (otherwise no validator runs)
+    _ <- anyInputSuchThat (not . isKeyAddressAny . addressOf)
 
-  -- Extract the inline datum (we know it exists due to the filter)
-  originalDatum <- case getInlineDatum target of
-    Nothing -> failPrecondition "Script output missing inline datum"
-    Just originalDatum' -> pure originalDatum'
+    -- Get all outputs from the transaction
+    outputs <- getTxOutputs
 
-  -- Check if the datum contains any lists to bloat
-  unless (containsList originalDatum) $
-    failPrecondition "Datum contains no list fields to bloat"
+    -- Filter to script outputs with inline datums
+    let scriptOutputsWithDatum = filter isScriptOutputWithInlineDatum outputs
 
-  let bloatedDatum = bloatLists numItems itemSize originalDatum
+    -- Precondition: there must be at least one script output with inline datum
+    threatPrecondition $ ensure (not $ null scriptOutputsWithDatum)
 
-  counterexampleTM $
-    paragraph
-      [ "The transaction contains a script output at index"
-      , show (outputIx target)
-      , "with an inline datum containing list fields."
-      ]
+    -- Pick a target output
+    target <- pickAny scriptOutputsWithDatum
 
-  counterexampleTM $
-    paragraph
-      [ "Testing if the lists can be bloated with"
-      , show numItems
-      , "items of"
-      , show itemSize
-      , "bytes each while still passing validation."
-      ]
+    -- Extract the inline datum (we know it exists due to the filter)
+    originalDatum <- case getInlineDatum target of
+      Nothing -> failPrecondition "Script output missing inline datum"
+      Just originalDatum' -> pure originalDatum'
 
-  counterexampleTM $
-    paragraph
-      [ "If this validates, the script doesn't enforce datum field size limits."
-      , "An attacker could exploit this to:"
-      , "1) Inflate the datum beyond transaction size limits"
-      , "2) Increase execution costs for processing the datum"
-      , "3) Potentially lock funds permanently if limits are exceeded"
-      ]
+    -- Check if the datum contains any lists to bloat
+    unless (containsList originalDatum) $
+      failPrecondition "Datum contains no list fields to bloat"
 
-  -- Try to validate with the bloated datum
-  shouldNotValidate $ changeDatumOf target (toInlineDatum bloatedDatum)
+    let bloatedDatum = bloatLists numItems itemSize originalDatum
+
+    counterexampleTM $
+      paragraph
+        [ "The transaction contains a script output at index"
+        , show (outputIx target)
+        , "with an inline datum containing list fields."
+        ]
+
+    counterexampleTM $
+      paragraph
+        [ "Testing if the lists can be bloated with"
+        , show numItems
+        , "items of"
+        , show itemSize
+        , "bytes each while still passing validation."
+        ]
+
+    counterexampleTM $
+      paragraph
+        [ "If this validates, the script doesn't enforce datum field size limits."
+        , "An attacker could exploit this to:"
+        , "1) Inflate the datum beyond transaction size limits"
+        , "2) Increase execution costs for processing the datum"
+        , "3) Potentially lock funds permanently if limits are exceeded"
+        ]
+
+    tabulateTM "items" [bucketItems numItems]
+    tabulateTM "item bytes" [bucketSize itemSize]
+
+    -- Try to validate with the bloated datum
+    shouldNotValidate $ changeDatumOf target (toInlineDatum bloatedDatum)
  where
   unless False action = action
   unless True _ = pure ()
+
+-- | Shrink a pair of positive integers toward (1, 1).
+shrinkPair :: (Int, Int) -> [(Int, Int)]
+shrinkPair (a, b) =
+  [(a', b) | a' <- shrinkPositive a]
+    ++ [(a, b') | b' <- shrinkPositive b]
+
+-- | Coarse bucket for the item-count distribution report.
+bucketItems :: Int -> String
+bucketItems n
+  | n <= 5 = "001-005"
+  | n <= 10 = "006-010"
+  | n <= 15 = "011-015"
+  | otherwise = "016-020"
+
+-- | Coarse bucket for the per-item byte-size distribution report.
+bucketSize :: Int -> String
+bucketSize n
+  | n <= 50 = "001-050"
+  | n <= 100 = "051-100"
+  | n <= 250 = "101-250"
+  | otherwise = "251-500"
 
 {- | Recursively bloat all list fields in a @ScriptData@ value.
 
@@ -216,80 +244,79 @@ toInlineDatum sd =
 -- ByteString Inflation Attack
 -- ----------------------------------------------------------------------------
 
-{- | Test if ByteString fields in the datum can be inflated.
-
-This catches validators that don't limit the size of individual
-ByteString fields (e.g., messages, names, arbitrary data).
-
-The attack replaces every @ScriptDataBytes@ field found at any depth
-(except the first field of the top-level constructor, typically an owner hash)
-with a much larger ByteString.
-
-For a tipjar datum @Con0(owner_hash, [\"Hello\"])@:
-
-* @owner_hash@ is preserved (first field must match for validation)
-* @\"Hello\"@ inside the list gets inflated to 10KB of @0x42@
-* Result: @Con0(owner_hash, [<10KB bytes>])@
-* The validator checks: @list.push([], <10KB bytes>) == [<10KB bytes>]@ → True!
-
-This enables a DoS attack where an attacker can:
-
-1. Create a valid transaction with a small message
-2. Intercept/frontrun and replace the message with a huge ByteArray
-3. The bloated datum may exceed transaction limits for future spending
-
-Default inflation size is 10,000 bytes (10KB).
+{- | Default datum-byte-bloat attack. The inflation size is drawn per
+transaction from a curated range, so QuickCheck explores the parameter
+space and shrinks counterexamples toward the smallest triggering value.
 -}
 datumByteBloatAttack :: ThreatModel ()
-datumByteBloatAttack = datumByteBloatAttackWith 10000
+datumByteBloatAttack = datumByteBloatAttackWithGen (choose (1, 10000))
 
-{- | Check for ByteString inflation vulnerabilities with configurable size.
-
-This attack is specifically designed to catch validators like tipjar that:
-1. Allow adding items to a list
-2. Check that @list.push(old_items, new_item) == new_items@
-3. But DON'T limit the SIZE of @new_item@
-
-The attack inflates only the FIRST item in lists (typically the newly-added
-item), leaving existing items unchanged so the structural check passes.
-
-@
-datumByteBloatAttackWith 10000   -- Inflate first list item to 10KB
-datumByteBloatAttackWith 50000   -- More aggressive: 50KB
-@
+{- | Datum-byte-bloat attack with a fixed inflation size. Keep using this
+for deterministic regression tests and golden seeds.
 -}
 datumByteBloatAttackWith :: Int -> ThreatModel ()
-datumByteBloatAttackWith inflatedSize = Named ("Datum Byte Bloat Attack (" ++ show inflatedSize ++ " bytes)") $ do
-  outputs <- getTxOutputs
-  let scriptOutputsWithDatum = filter isScriptOutputWithInlineDatum outputs
-  threatPrecondition $ ensure (not $ null scriptOutputsWithDatum)
-  target <- pickAny scriptOutputsWithDatum
+datumByteBloatAttackWith = datumByteBloatAttackWithGen . pure
 
-  originalDatum <- case getInlineDatum target of
-    Nothing -> failPrecondition "Script output missing inline datum"
-    Just originalDatum' -> pure originalDatum'
+{- | Datum-byte-bloat attack parameterised by a generator for the inflation
+size. This is the primitive the other two forms delegate to.
+-}
+datumByteBloatAttackWithGen :: Gen Int -> ThreatModel ()
+datumByteBloatAttackWithGen gen =
+  Named "Datum Byte Bloat Attack" $ do
+    inflatedSize <- forAllTM gen shrinkPositive
 
-  let bloatedDatum = inflateFirstListItem inflatedSize originalDatum
+    -- Skip iterations where the draw is too small to be a meaningful attack.
+    ensure (inflatedSize >= 1)
 
-  -- Only proceed if something actually changed (datum has list with items to inflate)
-  threatPrecondition $ ensure (bloatedDatum /= originalDatum)
+    -- Precondition: transaction must spend a script input (otherwise no validator runs)
+    _ <- anyInputSuchThat (not . isKeyAddressAny . addressOf)
 
-  counterexampleTM $
-    paragraph
-      [ "The transaction contains a script output with an inline datum."
-      , "Testing if the first item in list fields can be inflated to"
-      , show inflatedSize
-      , "bytes while still passing validation."
-      ]
+    outputs <- getTxOutputs
+    let scriptOutputsWithDatum = filter isScriptOutputWithInlineDatum outputs
+    threatPrecondition $ ensure (not $ null scriptOutputsWithDatum)
+    target <- pickAny scriptOutputsWithDatum
 
-  counterexampleTM $
-    paragraph
-      [ "If this validates, the script doesn't limit ByteString field sizes,"
-      , "enabling a datum bloat DoS attack where an attacker can add"
-      , "a huge message/data item to bloat the datum beyond spendable limits."
-      ]
+    originalDatum <- case getInlineDatum target of
+      Nothing -> failPrecondition "Script output missing inline datum"
+      Just originalDatum' -> pure originalDatum'
 
-  shouldNotValidate $ changeDatumOf target (toInlineDatum bloatedDatum)
+    let bloatedDatum = inflateFirstListItem inflatedSize originalDatum
+
+    -- Only proceed if something actually changed (datum has list with items to inflate)
+    threatPrecondition $ ensure (bloatedDatum /= originalDatum)
+
+    counterexampleTM $
+      paragraph
+        [ "The transaction contains a script output with an inline datum."
+        , "Testing if the first item in list fields can be inflated to"
+        , show inflatedSize
+        , "bytes while still passing validation."
+        ]
+
+    counterexampleTM $
+      paragraph
+        [ "If this validates, the script doesn't limit ByteString field sizes,"
+        , "enabling a datum bloat DoS attack where an attacker can add"
+        , "a huge message/data item to bloat the datum beyond spendable limits."
+        ]
+
+    tabulateTM "inflated bytes" [bucket inflatedSize]
+
+    shouldNotValidate $ changeDatumOf target (toInlineDatum bloatedDatum)
+
+{- | Shrink a positive integer toward 1 (the smallest meaningful value),
+never reaching 0.
+-}
+shrinkPositive :: Int -> [Int]
+shrinkPositive = filter (>= 1) . shrinkIntegral
+
+-- | Coarse bucket for the inflation-size distribution report.
+bucket :: Int -> String
+bucket n
+  | n <= 1000 = "0001-1000"
+  | n <= 5000 = "1001-5000"
+  | n <= 10000 = "5001-10000"
+  | otherwise = "10000+"
 
 {- | Replace all @ScriptDataBytes@ with inflated versions.
 

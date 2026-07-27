@@ -55,85 +55,103 @@ If it does, the validator has an Invalid Datum Index vulnerability.
 module Convex.ThreatModel.InvalidDatumIndex (
   invalidDatumIndexAttack,
   invalidDatumIndexAttackWith,
+  invalidDatumIndexAttackWithGen,
   replaceConstrIndex,
 ) where
 
 import Convex.ThreatModel
+import Test.QuickCheck (Gen, choose)
 
-{- | Check for Invalid Datum Index vulnerabilities using constructor index 5.
-
-This is the default configuration, which replaces the constructor index of any
-inline @Constr@ datum on a script output with @5@. Valid PingPong indices are
-0 (Pinged), 1 (Ponged), and 2 (Stopped), so @5@ is safely out-of-range for all
-known state machines in this codebase. If the transaction still validates, the
-validator has a permissive datum index check.
+{- | Default invalid-datum-index attack. The replacement constructor index is
+drawn per transaction from a curated range starting at 3 (above the typical
+0, 1, 2 indices of most Plutus sum types), so QuickCheck explores the
+parameter space without accidentally hitting a valid index.
 -}
 invalidDatumIndexAttack :: ThreatModel ()
-invalidDatumIndexAttack = invalidDatumIndexAttackWith 5
+invalidDatumIndexAttack = invalidDatumIndexAttackWithGen (choose (3, 100))
 
-{- | Check for Invalid Datum Index vulnerabilities with a configurable
-constructor index.
-
-For a transaction with script outputs containing inline datums:
-
-* Replace the @Constr@ index of the datum with @invalidIdx@
-* Leave the constructor fields unchanged so any field parsing still succeeds
-* If the transaction still validates, the validator does not reject
-  out-of-range constructor indices — it may have a permissive catch-all.
-
-Choose @invalidIdx@ to be outside the range of all valid constructors for the
-script under test (e.g., @5@ for a 3-constructor type, @99@ for extra clarity).
+{- | Invalid-datum-index attack with a fixed constructor index. Keep using
+this for deterministic regression tests and golden seeds.
 -}
 invalidDatumIndexAttackWith :: Integer -> ThreatModel ()
-invalidDatumIndexAttackWith invalidIdx = Named ("Invalid Datum Index Attack (index " ++ show invalidIdx ++ ")") $ do
-  -- Precondition: transaction must spend a script input (otherwise no validator runs)
-  _ <- anyInputSuchThat (not . isKeyAddressAny . addressOf)
+invalidDatumIndexAttackWith = invalidDatumIndexAttackWithGen . pure
 
-  -- Get all outputs from the transaction
-  outputs <- getTxOutputs
+{- | Invalid-datum-index attack parameterised by a generator for the
+replacement constructor index. This is the primitive the other two forms
+delegate to.
+-}
+invalidDatumIndexAttackWithGen :: Gen Integer -> ThreatModel ()
+invalidDatumIndexAttackWithGen invalidIdxGen =
+  Named "Invalid Datum Index Attack" $ do
+    invalidIdx <- forAllTM invalidIdxGen noShrink
 
-  -- Filter to script outputs with inline datums that carry a Constr datum
-  let scriptOutputsWithConstr = filter isScriptOutputWithConstrInlineDatum outputs
+    -- Negative indices belong to the negative-integer attack, not this model.
+    ensure (invalidIdx >= 0)
 
-  -- Precondition: there must be at least one eligible target output
-  threatPrecondition $ ensure (not $ null scriptOutputsWithConstr)
+    -- Precondition: transaction must spend a script input (otherwise no validator runs)
+    _ <- anyInputSuchThat (not . isKeyAddressAny . addressOf)
 
-  -- Pick a target output
-  target <- pickAny scriptOutputsWithConstr
+    -- Get all outputs from the transaction
+    outputs <- getTxOutputs
 
-  -- Extract the inline datum (we know it exists due to the filter above)
-  originalDatum <- case getInlineDatum target of
-    Nothing -> failPrecondition "Script output missing inline datum"
-    Just d -> pure d
+    -- Filter to script outputs with inline datums that carry a Constr datum
+    let scriptOutputsWithConstr = filter isScriptOutputWithConstrInlineDatum outputs
 
-  let mutatedDatum = replaceConstrIndex invalidIdx originalDatum
+    -- Precondition: there must be at least one eligible target output
+    threatPrecondition $ ensure (not $ null scriptOutputsWithConstr)
 
-  counterexampleTM $
-    paragraph
-      [ "The transaction contains a script output at index"
-      , show (outputIx target)
-      , "with an inline Constr datum."
-      ]
+    -- Pick a target output
+    target <- pickAny scriptOutputsWithConstr
 
-  counterexampleTM $
-    paragraph
-      [ "Testing if the datum's constructor index can be replaced with"
-      , show invalidIdx
-      , "while the fields are left unchanged, and the transaction still validates."
-      ]
+    -- Extract the inline datum (we know it exists due to the filter above)
+    originalDatum <- case getInlineDatum target of
+      Nothing -> failPrecondition "Script output missing inline datum"
+      Just d -> pure d
 
-  counterexampleTM $
-    paragraph
-      [ "If this validates, the script's FromData parser accepts out-of-range"
-      , "constructor indices (e.g., via a catch-all branch). An attacker could"
-      , "exploit this to:"
-      , "1) Confuse the validator about which state the datum represents"
-      , "2) Bypass state-transition guards that depend on the constructor index"
-      , "3) Lock funds permanently with an unspendable corrupted datum"
-      ]
+    let mutatedDatum = replaceConstrIndex invalidIdx originalDatum
 
-  -- This SHOULD fail - if it validates, the contract is vulnerable.
-  shouldNotValidate $ changeDatumOf target (toInlineDatum mutatedDatum)
+    counterexampleTM $
+      paragraph
+        [ "The transaction contains a script output at index"
+        , show (outputIx target)
+        , "with an inline Constr datum."
+        ]
+
+    counterexampleTM $
+      paragraph
+        [ "Testing if the datum's constructor index can be replaced with"
+        , show invalidIdx
+        , "while the fields are left unchanged, and the transaction still validates."
+        ]
+
+    counterexampleTM $
+      paragraph
+        [ "If this validates, the script's FromData parser accepts out-of-range"
+        , "constructor indices (e.g., via a catch-all branch). An attacker could"
+        , "exploit this to:"
+        , "1) Confuse the validator about which state the datum represents"
+        , "2) Bypass state-transition guards that depend on the constructor index"
+        , "3) Lock funds permanently with an unspendable corrupted datum"
+        ]
+
+    tabulateTM "invalid index" [bucketIdx invalidIdx]
+
+    -- This SHOULD fail - if it validates, the contract is vulnerable.
+    shouldNotValidate $ changeDatumOf target (toInlineDatum mutatedDatum)
+
+{- | No shrinking: shrinking toward 0 could produce a valid constructor index,
+making the attack vacuous and causing a false 'TMFailed'.
+-}
+noShrink :: a -> [a]
+noShrink _ = []
+
+-- | Coarse bucket for the invalid-index distribution report.
+bucketIdx :: Integer -> String
+bucketIdx n
+  | n <= 10 = "003-010"
+  | n <= 50 = "011-050"
+  | n <= 100 = "051-100"
+  | otherwise = "101+"
 
 -- ---------------------------------------------------------------------------
 -- Helpers

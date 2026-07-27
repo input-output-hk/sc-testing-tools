@@ -51,101 +51,113 @@ the validator has a Value Underpayment vulnerability.
 module Convex.ThreatModel.ValueUnderpayment (
   valueUnderpaymentAttack,
   valueUnderpaymentAttackWith,
+  valueUnderpaymentAttackWithGen,
 ) where
 
 import Cardano.Api qualified as C
 import Convex.ThreatModel
+import Test.QuickCheck (Gen, choose, shrinkRealFrac)
 
 -- | Minimum ADA to leave in the output (to avoid min-UTxO violations)
 minOutputAda :: C.Lovelace
 minOutputAda = 2_000_000
 
-{- | Check for Value Underpayment vulnerabilities by halving the ADA value.
-
-This is the default configuration that reduces the ADA in a script output
-by 50%. If the transaction still validates, the script doesn't properly
-verify that output values match expected amounts.
+{- | Default value-underpayment attack. The reduction factor is drawn per
+transaction from a curated range, so QuickCheck explores the parameter space
+and shrinks counterexamples toward the smallest triggering value.
 -}
 valueUnderpaymentAttack :: ThreatModel ()
-valueUnderpaymentAttack = valueUnderpaymentAttackWith 0.5
+valueUnderpaymentAttack = valueUnderpaymentAttackWithGen (choose (0.01, 0.99))
 
-{- | Check for Value Underpayment vulnerabilities with a configurable
-reduction factor.
-
-For a transaction with script outputs:
-
-* Find a script output with ADA value
-* Reduce its ADA value by the given factor (e.g., 0.5 = halve it)
-* Keep the datum unchanged
-* If the transaction still validates, the script doesn't verify
-  that output value matches the expected amount based on datum.
-
-@reductionFactor@ should be between 0 and 1:
-- 0.5 means reduce to 50% of original value
-- 0.25 means reduce to 25% of original value
-- 0.9 means reduce to 10% of original value (keep only 10%)
-
-The attack ensures at least 'minOutputAda' remains to avoid min-UTxO failures.
+{- | Value-underpayment attack with a fixed reduction factor. Keep using
+this for deterministic regression tests and golden seeds.
 -}
 valueUnderpaymentAttackWith :: Double -> ThreatModel ()
-valueUnderpaymentAttackWith reductionFactor = Named ("Value Underpayment Attack (" ++ show (reductionFactor * 100) ++ "% reduction)") $ do
-  -- Get all outputs from the transaction
-  outputs <- getTxOutputs
+valueUnderpaymentAttackWith = valueUnderpaymentAttackWithGen . pure
 
-  -- Filter to script outputs (NOT key addresses)
-  let scriptOutputs = filter (not . isKeyAddressAny . addressOf) outputs
+{- | Value-underpayment attack parameterised by a generator for the ADA
+reduction factor (fraction of the original ADA removed from a script output).
+This is the primitive the other two forms delegate to.
+-}
+valueUnderpaymentAttackWithGen :: Gen Double -> ThreatModel ()
+valueUnderpaymentAttackWithGen reductionFactorGen =
+  Named "Value Underpayment Attack" $ do
+    reductionFactor <- forAllTM reductionFactorGen shrinkPositiveDouble
 
-  -- Precondition: there must be at least one script output
-  threatPrecondition $ ensure (not $ null scriptOutputs)
+    -- Skip iterations where the draw is too small to be a meaningful attack.
+    ensure (reductionFactor > 0)
 
-  -- Further filter to outputs that have enough ADA to be reduced
-  let hasEnoughAda out =
-        let adaValue = C.selectLovelace (valueOf out)
-         in adaValue > minOutputAda
-      reducibleOutputs = filter hasEnoughAda scriptOutputs
+    -- Get all outputs from the transaction
+    outputs <- getTxOutputs
 
-  -- Precondition: there must be at least one script output with enough ADA
-  threatPrecondition $ ensure (not $ null reducibleOutputs)
+    -- Filter to script outputs (NOT key addresses)
+    let scriptOutputs = filter (not . isKeyAddressAny . addressOf) outputs
 
-  -- Pick a target script output
-  target <- pickAny reducibleOutputs
+    -- Precondition: there must be at least one script output
+    threatPrecondition $ ensure (not $ null scriptOutputs)
 
-  -- Calculate reduced value
-  let currentValue = valueOf target
-      currentAda = C.selectLovelace currentValue
-      -- Calculate reduced ADA, ensuring we don't go below minimum
-      -- Lovelace has a Num instance, so we can use numeric operations
-      reducedAda = max minOutputAda (fromInteger $ round (fromIntegral currentAda * (1 - reductionFactor)))
-      adaDifference = C.negateValue $ C.lovelaceToValue (currentAda - reducedAda)
-      reducedValue = currentValue <> adaDifference
+    -- Further filter to outputs that have enough ADA to be reduced
+    let hasEnoughAda out =
+          let adaValue = C.selectLovelace (valueOf out)
+           in adaValue > minOutputAda
+        reducibleOutputs = filter hasEnoughAda scriptOutputs
 
-  counterexampleTM $
-    paragraph
-      [ "The transaction contains a script output at index"
-      , show (outputIx target)
-      , "."
-      ]
+    -- Precondition: there must be at least one script output with enough ADA
+    threatPrecondition $ ensure (not $ null reducibleOutputs)
 
-  counterexampleTM $
-    paragraph
-      [ "Testing if the ADA value can be reduced from"
-      , show currentAda
-      , "to"
-      , show reducedAda
-      , "(reduction factor:"
-      , show (reductionFactor * 100) ++ "%)"
-      , "while keeping the datum unchanged."
-      ]
+    -- Pick a target script output
+    target <- pickAny reducibleOutputs
 
-  counterexampleTM $
-    paragraph
-      [ "If this validates, the script's value validation is insufficient."
-      , "An attacker could exploit this to:"
-      , "1) Increase their balance without depositing matching funds"
-      , "2) Steal funds from pooled reserves"
-      , "3) Create inconsistency between datum balance and actual UTxO value"
-      ]
+    -- Calculate reduced value
+    let currentValue = valueOf target
+        currentAda = C.selectLovelace currentValue
+        -- Calculate reduced ADA, ensuring we don't go below minimum
+        -- Lovelace has a Num instance, so we can use numeric operations
+        reducedAda = max minOutputAda (fromInteger $ round (fromIntegral currentAda * (1 - reductionFactor)))
+        adaDifference = C.negateValue $ C.lovelaceToValue (currentAda - reducedAda)
+        reducedValue = currentValue <> adaDifference
 
-  -- This SHOULD fail - if it validates, the contract is vulnerable
-  -- The attack: reduce the ADA value but keep datum the same
-  shouldNotValidate $ changeValueOf target reducedValue
+    counterexampleTM $
+      paragraph
+        [ "The transaction contains a script output at index"
+        , show (outputIx target)
+        , "."
+        ]
+
+    counterexampleTM $
+      paragraph
+        [ "Testing if the ADA value can be reduced from"
+        , show currentAda
+        , "to"
+        , show reducedAda
+        , "(reduction factor:"
+        , show (reductionFactor * 100) ++ "%)"
+        , "while keeping the datum unchanged."
+        ]
+
+    counterexampleTM $
+      paragraph
+        [ "If this validates, the script's value validation is insufficient."
+        , "An attacker could exploit this to:"
+        , "1) Increase their balance without depositing matching funds"
+        , "2) Steal funds from pooled reserves"
+        , "3) Create inconsistency between datum balance and actual UTxO value"
+        ]
+
+    tabulateTM "reduction %" [bucketPct reductionFactor]
+
+    -- This SHOULD fail - if it validates, the contract is vulnerable
+    -- The attack: reduce the ADA value but keep datum the same
+    shouldNotValidate $ changeValueOf target reducedValue
+
+-- | Shrink a positive 'Double' toward 0, discarding non-positive results.
+shrinkPositiveDouble :: Double -> [Double]
+shrinkPositiveDouble = filter (> 0) . shrinkRealFrac
+
+-- | Coarse bucket for the reduction-factor distribution report.
+bucketPct :: Double -> String
+bucketPct r
+  | r <= 0.25 = "01-25%"
+  | r <= 0.50 = "26-50%"
+  | r <= 0.75 = "51-75%"
+  | otherwise = "76-99%"

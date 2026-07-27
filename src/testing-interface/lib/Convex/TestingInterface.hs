@@ -658,9 +658,9 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
         allToRun = tmsToRun <> evs
     tmResultsWithCov <- liftIO $ forM allToRun $ \tm -> do
       let name = fromMaybe "Unnamed" (getThreatModelName tm)
-      ((outcome, traceEntries), tmFinalState) <-
+      ((outcome, traceEntries, monitors), tmFinalState) <-
         runMockchainIO (runThreatModelCheckTraced AutoSign tm envs) params state0
-      pure (name, outcome, traceEntries, mcsCoverageData tmFinalState)
+      pure (name, outcome, traceEntries, mcsCoverageData tmFinalState, monitors)
 
     pure (finalState, transitions, tmResultsWithCov)
 
@@ -678,12 +678,12 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
       run $ recordIteration recorder groupName "positive" (covDataToSrcLocRanges covData) (toJSON trace)
       pure (property False)
     (Right (finalState, transitions, tmResultsWithCov), MockChainState{mcsCoverageData}) -> do
-      let covData = mcsCoverageData <> mconcat [cov | (_, _, _, cov) <- tmResultsWithCov]
+      let covData = mcsCoverageData <> mconcat [cov | (_, _, _, cov, _) <- tmResultsWithCov]
       monitor (counterexample $ "Final state: " ++ show finalState)
       traverse_ (\ref -> liftIO $ modifyIORef ref (<> covData)) coverageRef
       case mGetTmResultsRef of
         Just getTmResultsRef -> run $ do
-          let tmResults = [(n, summarizeThreatModelIteration o entries) | (n, o, entries, _) <- tmResultsWithCov]
+          let tmResults = [(n, summarizeThreatModelIteration o entries) | (n, o, entries, _, _) <- tmResultsWithCov]
           tmRef <- getTmResultsRef
           modifyIORef tmRef $ \existing ->
             foldl'
@@ -691,7 +691,7 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
               existing
               tmResults
         Nothing -> pure ()
-      tmTraces <- liftIO $ toThreatModelTraces (findTestIdIO recorder groupName) (redeemerTagger @state) tmResultsWithCov
+      tmTraces <- liftIO $ toThreatModelTraces (findTestIdIO recorder groupName) (redeemerTagger @state) [(n, o, e, c) | (n, o, e, c, _) <- tmResultsWithCov]
       let trace =
             IterationTrace
               { itIndex = iterIdx
@@ -700,6 +700,8 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
               , itThreatModels = tmTraces
               }
       run $ recordIteration recorder groupName "positive" (covDataToSrcLocRanges mcsCoverageData) (toJSON trace)
+      let allMonitors = foldr (.) id [m | (_, _, _, _, m) <- tmResultsWithCov]
+      monitor allMonitors
       pure (property True)
 
 -- | Fast path: runs 'runActions' (no UTxO snapshots, no tx summaries, no JSON).
@@ -743,20 +745,21 @@ positiveTestFast opts mGetTmResultsRef tms evs = do
         allToRun = tmsToRun <> evs
     tmResultsWithCov <- liftIO $ forM allToRun $ \tm -> do
       let name = fromMaybe "Unnamed" (getThreatModelName tm)
-      ((outcome, traceEntries), tmFinalState) <-
+      ((outcome, traceEntries, monitors), tmFinalState) <-
         runMockchainIO (runThreatModelCheckTraced AutoSign tm envs) params state0
-      pure (name, outcome, traceEntries, mcsCoverageData tmFinalState)
+      pure (name, outcome, traceEntries, mcsCoverageData tmFinalState, monitors)
 
-    let tmResults = [(n, summarizeThreatModelIteration o entries) | (n, o, entries, _) <- tmResultsWithCov]
-        tmCoverage = mconcat [cov | (_, _, _, cov) <- tmResultsWithCov]
+    let tmResults = [(n, summarizeThreatModelIteration o entries) | (n, o, entries, _, _) <- tmResultsWithCov]
+        tmCoverage = mconcat [cov | (_, _, _, cov, _) <- tmResultsWithCov]
+        tmMonitors = [m | (_, _, _, _, m) <- tmResultsWithCov]
 
-    pure (finalState, tmResults, tmCoverage)
+    pure (finalState, tmResults, tmCoverage, tmMonitors)
 
   case result of
     (Left err, MockChainState{mcsCoverageData = covData}) -> do
       for_ coverageRef $ \ref -> liftIO $ modifyIORef ref (<> (covData <> coverageFromBalanceTxError err))
       pure (property False)
-    (Right (finalState, tmResults, tmCoverage), MockChainState{mcsCoverageData = covData}) -> do
+    (Right (finalState, tmResults, tmCoverage, tmMonitors), MockChainState{mcsCoverageData = covData}) -> do
       monitor (counterexample $ "Final state: " ++ show finalState)
       traverse_ (\ref -> liftIO $ modifyIORef ref (<> covData <> tmCoverage)) coverageRef
       case mGetTmResultsRef of
@@ -768,6 +771,8 @@ positiveTestFast opts mGetTmResultsRef tms evs = do
               existing
               tmResults
         Nothing -> pure ()
+      let allMonitors = foldr (.) id tmMonitors
+      monitor allMonitors
       pure (property True)
 
 -- | Create a test case for displaying threat model results

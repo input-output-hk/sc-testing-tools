@@ -212,6 +212,8 @@ Empty `threatModels` disables threat-model evaluation entirely; only
 positive and negative tests run. Pick models from
 `06-threat-models.md` once the suite is green.
 
+Parameterised threat models (`largeDataAttack`, `largeValueAttack`, etc.) now follow a three-tier convention (`model` / `modelWith` / `modelWithGen`). The no-suffix form randomises parameters per transaction. See `06-threat-models.md §G` for the full convention.
+
 ## J. `TestingMonadT`
 
 ```haskell
