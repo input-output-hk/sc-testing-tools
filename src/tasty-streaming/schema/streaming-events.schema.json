@@ -555,12 +555,16 @@
                     "type": "array"
                 },
                 "modifiedTx": {
-                    "allOf": [
+                    "anyOf": [
                         {
                             "$ref": "#/$defs/TxSummary"
+                        },
+                        {
+                            "enum": [
+                                null
+                            ]
                         }
-                    ],
-                    "nullable": true
+                    ]
                 },
                 "name": {
                     "type": "string"
@@ -680,12 +684,16 @@
                     "type": "integer"
                 },
                 "transaction": {
-                    "allOf": [
+                    "anyOf": [
                         {
                             "$ref": "#/$defs/TxSummary"
+                        },
+                        {
+                            "enum": [
+                                null
+                            ]
                         }
-                    ],
-                    "nullable": true
+                    ]
                 }
             },
             "required": [
@@ -749,19 +757,41 @@
                     "type": "string"
                 },
                 "redeemerConstr": {
-                    "nullable": true,
-                    "type": "integer"
+                    "anyOf": [
+                        {
+                            "type": "integer"
+                        },
+                        {
+                            "enum": [
+                                null
+                            ]
+                        }
+                    ]
                 },
                 "redeemerKind": {
-                    "nullable": true,
-                    "type": "string"
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "enum": [
+                                null
+                            ]
+                        }
+                    ]
                 },
-                "redeemerPayload": {
-                    "nullable": true
-                },
+                "redeemerPayload": {},
                 "redeemerRaw": {
-                    "nullable": true,
-                    "type": "string"
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "enum": [
+                                null
+                            ]
+                        }
+                    ]
                 },
                 "utxo": {
                     "type": "string"
@@ -826,19 +856,43 @@
                 {
                     "properties": {
                         "address": {
-                            "nullable": true,
-                            "type": "string"
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
                         },
                         "datum": {
-                            "nullable": true,
-                            "type": "string"
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
                         },
                         "index": {
                             "type": "integer"
                         },
                         "referenceScript": {
-                            "nullable": true,
-                            "type": "string"
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
                         },
                         "type": {
                             "enum": [
@@ -847,12 +901,16 @@
                             "type": "string"
                         },
                         "value": {
-                            "allOf": [
+                            "anyOf": [
                                 {
                                     "$ref": "#/$defs/ValueSummary"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
                                 }
-                            ],
-                            "nullable": true
+                            ]
                         }
                     },
                     "required": [
@@ -868,16 +926,40 @@
                 {
                     "properties": {
                         "address": {
-                            "nullable": true,
-                            "type": "string"
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
                         },
                         "datum": {
-                            "nullable": true,
-                            "type": "string"
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
                         },
                         "referenceScript": {
-                            "nullable": true,
-                            "type": "string"
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
                         },
                         "type": {
                             "enum": [
@@ -889,12 +971,16 @@
                             "type": "string"
                         },
                         "value": {
-                            "allOf": [
+                            "anyOf": [
                                 {
                                     "$ref": "#/$defs/ValueSummary"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
                                 }
-                            ],
-                            "nullable": true
+                            ]
                         }
                     },
                     "required": [
@@ -910,16 +996,40 @@
                 {
                     "properties": {
                         "datum": {
-                            "nullable": true,
-                            "type": "string"
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
                         },
                         "redeemer": {
-                            "nullable": true,
-                            "type": "string"
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
                         },
                         "referenceScript": {
-                            "nullable": true,
-                            "type": "string"
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
                         },
                         "type": {
                             "enum": [
@@ -931,12 +1041,16 @@
                             "type": "string"
                         },
                         "value": {
-                            "allOf": [
+                            "anyOf": [
                                 {
                                     "$ref": "#/$defs/ValueSummary"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
                                 }
-                            ],
-                            "nullable": true
+                            ]
                         }
                     },
                     "required": [
@@ -952,8 +1066,16 @@
                 {
                     "properties": {
                         "lowerBound": {
-                            "nullable": true,
-                            "type": "string"
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
                         },
                         "type": {
                             "enum": [
@@ -962,8 +1084,16 @@
                             "type": "string"
                         },
                         "upperBound": {
-                            "nullable": true,
-                            "type": "string"
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
                         }
                     },
                     "required": [
@@ -979,8 +1109,16 @@
                             "type": "string"
                         },
                         "datum": {
-                            "nullable": true,
-                            "type": "string"
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
                         },
                         "referenceScript": {
                             "type": "string"
@@ -1010,8 +1148,16 @@
                             "type": "string"
                         },
                         "datum": {
-                            "nullable": true,
-                            "type": "string"
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
                         },
                         "isReferenceInput": {
                             "type": "boolean"
@@ -1042,8 +1188,16 @@
                 {
                     "properties": {
                         "datum": {
-                            "nullable": true,
-                            "type": "string"
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
                         },
                         "redeemer": {
                             "type": "string"
@@ -1073,8 +1227,16 @@
                 {
                     "properties": {
                         "datum": {
-                            "nullable": true,
-                            "type": "string"
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
                         },
                         "redeemer": {
                             "type": "string"
@@ -1104,8 +1266,16 @@
                 {
                     "properties": {
                         "datum": {
-                            "nullable": true,
-                            "type": "string"
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
                         },
                         "referenceScript": {
                             "type": "string"
@@ -1220,8 +1390,16 @@
                     "type": "string"
                 },
                 "datum": {
-                    "nullable": true,
-                    "type": "string"
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "enum": [
+                                null
+                            ]
+                        }
+                    ]
                 },
                 "utxo": {
                     "type": "string"
@@ -1244,8 +1422,16 @@
                     "type": "integer"
                 },
                 "id": {
-                    "nullable": true,
-                    "type": "string"
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "enum": [
+                                null
+                            ]
+                        }
+                    ]
                 },
                 "inputs": {
                     "items": {
@@ -1254,12 +1440,16 @@
                     "type": "array"
                 },
                 "mint": {
-                    "allOf": [
+                    "anyOf": [
                         {
                             "$ref": "#/$defs/ValueSummary"
+                        },
+                        {
+                            "enum": [
+                                null
+                            ]
                         }
-                    ],
-                    "nullable": true
+                    ]
                 },
                 "outputs": {
                     "items": {
@@ -1269,13 +1459,30 @@
                 },
                 "signers": {
                     "items": {
-                        "type": "string"
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "enum": [
+                                    null
+                                ]
+                            }
+                        ]
                     },
                     "type": "array"
                 },
                 "validRange": {
-                    "nullable": true,
-                    "type": "string"
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "enum": [
+                                null
+                            ]
+                        }
+                    ]
                 }
             },
             "required": [

@@ -6,7 +6,7 @@ module Convex.SchemaGen (
   streamingEventSchema,
 ) where
 
-import Control.Lens hiding (allOf, (.=))
+import Control.Lens hiding (anyOf, (.=))
 import Data.Aeson ((.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
@@ -18,6 +18,7 @@ import Data.OpenApi.Lens qualified as L
 import Data.Proxy (Proxy (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Prelude hiding (null)
 
 -- Types from convex-tasty-streaming
 import Convex.Tasty.Streaming.SrcLoc (SrcLocRanges (..))
@@ -89,6 +90,19 @@ fixRefs (Aeson.Object o) = Aeson.Object $
       _ -> o
 fixRefs (Aeson.Array a) = Aeson.Array $ fmap fixRefs a
 fixRefs v = v
+
+-- | Modern way of specifying nullable types in OpenAPI 3.1: use anyOf with the type and null.
+nullableType :: OpenApiType -> Referenced Schema
+nullableType t =
+  Inline $
+    mempty
+      & anyOf
+        ?~ [ Inline $ mempty & type_ ?~ t
+           , null
+           ]
+
+null :: Referenced Schema
+null = Inline $ mempty & enum_ ?~ [Aeson.Null]
 
 -- ============================================================
 -- ToSchema instances for convex-tasty-streaming types
@@ -383,10 +397,10 @@ instance ToSchema TxInputSummary where
               [ ("utxo", Inline $ mempty & type_ ?~ OpenApiString)
               , ("address", Inline $ mempty & type_ ?~ OpenApiString)
               , ("value", valueRef)
-              , ("redeemerRaw", Inline $ mempty & type_ ?~ OpenApiString & nullable ?~ True)
-              , ("redeemerConstr", Inline $ mempty & type_ ?~ OpenApiInteger & nullable ?~ True)
-              , ("redeemerKind", Inline $ mempty & type_ ?~ OpenApiString & nullable ?~ True)
-              , ("redeemerPayload", Inline $ mempty & nullable ?~ True)
+              , ("redeemerRaw", nullableType OpenApiString)
+              , ("redeemerConstr", nullableType OpenApiInteger)
+              , ("redeemerKind", nullableType OpenApiString)
+              , ("redeemerPayload", Inline mempty)
               ]
           & required .~ ["utxo", "address", "value", "redeemerRaw", "redeemerConstr", "redeemerKind", "redeemerPayload"]
 
@@ -402,7 +416,7 @@ instance ToSchema TxOutputSummary where
               [ ("utxo", Inline $ mempty & type_ ?~ OpenApiString)
               , ("address", Inline $ mempty & type_ ?~ OpenApiString)
               , ("value", valueRef)
-              , ("datum", Inline $ mempty & type_ ?~ OpenApiString & nullable ?~ True) -- key present, value null when no datum
+              , ("datum", nullableType OpenApiString) -- key present, value null when no datum
               ]
           & required .~ ["utxo", "address", "value", "datum"]
 
@@ -417,13 +431,13 @@ instance ToSchema TxSummary where
           & type_ ?~ OpenApiObject
           & properties
             .~ InsOrdHashMap.fromList
-              [ ("id", Inline $ mempty & type_ ?~ OpenApiString & nullable ?~ True)
+              [ ("id", nullableType OpenApiString)
               , ("inputs", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject inputRef)
               , ("outputs", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject outputRef)
-              , ("mint", Inline $ mempty & nullable ?~ True & allOf ?~ [valueRef]) -- nullable ref
+              , ("mint", Inline $ mempty & anyOf ?~ [valueRef, null]) -- nullable ref
               , ("fee", Inline $ mempty & type_ ?~ OpenApiInteger)
-              , ("signers", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject (Inline $ mempty & type_ ?~ OpenApiString))
-              , ("validRange", Inline $ mempty & type_ ?~ OpenApiString & nullable ?~ True)
+              , ("signers", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject (nullableType OpenApiString))
+              , ("validRange", nullableType OpenApiString)
               ]
           & required .~ ["id", "inputs", "outputs", "mint", "fee", "signers", "validRange"]
 
@@ -467,7 +481,7 @@ instance ToSchema Transition where
               , ("action", Inline $ mempty & type_ ?~ OpenApiString)
               , ("stateBefore", Inline mempty) -- opaque JSON (user model state)
               , ("stateAfter", Inline mempty) -- opaque JSON (user model state)
-              , ("transaction", Inline $ mempty & nullable ?~ True & allOf ?~ [txRef]) -- nullable ref
+              , ("transaction", Inline $ mempty & anyOf ?~ [txRef, null]) -- nullable ref
               , ("result", resultRef)
               ]
           & required .~ ["stepIndex", "action", "stateBefore", "stateAfter", "transaction", "result"]
@@ -550,8 +564,8 @@ instance ToSchema ThreatModelTraceOutcome where
 instance ToSchema TxMod where
   declareNamedSchema _ = do
     valueRef <- declareSchemaRef (Proxy @ValueSummary)
-    let nullableString = Inline $ mempty & type_ ?~ OpenApiString & nullable ?~ True
-    let nullableValue = Inline $ mempty & nullable ?~ True & allOf ?~ [valueRef]
+    let nullableString = nullableType OpenApiString
+    let nullableValue = Inline $ mempty & anyOf ?~ [valueRef, null]
 
     let removeInput =
           mempty
@@ -774,7 +788,7 @@ instance ToSchema ThreatModelTrace where
               , ("targetTxIndex", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("modifications", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject txModRef)
               , ("originalTx", txRef)
-              , ("modifiedTx", Inline $ mempty & nullable ?~ True & allOf ?~ [txRef])
+              , ("modifiedTx", Inline $ mempty & anyOf ?~ [txRef, null])
               , ("outcome", outcomeRef)
               , ("covered", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject srcLocRanges)
               ]
