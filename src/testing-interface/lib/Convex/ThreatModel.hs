@@ -333,13 +333,13 @@ runThreatModel = go False
 assertThreatModel
   :: ThreatModel a
   -> LedgerProtocolParameters Era
-  -> [(Tx Era, UTxO Era)]
+  -> [(Tx Era, UTxO Era, SlotNo)]
   -> Property
 assertThreatModel m pparams' txs = runThreatModel m envs
  where
   envs =
-    [ ThreatModelEnv tx utxo 0 pparams'
-    | (tx, utxo) <- txs
+    [ ThreatModelEnv tx utxo slot pparams'
+    | (tx, utxo, slot) <- txs
     ]
 
 {- | Run threat model inside MockchainT with full Phase 1 + Phase 2 validation.

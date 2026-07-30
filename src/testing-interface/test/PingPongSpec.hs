@@ -509,11 +509,13 @@ propPingPongWithThreatModel opts = monadicIO $ do
     txs <- Convex.Class.getTxs
     -- Get the current UTxO set
     ledgerUtxo <- Convex.Class.getUtxo
-    pure (txs, ledgerUtxo)
+    -- Get the current slot
+    slot <- Convex.Class.getSlot
+    pure (txs, ledgerUtxo, slot)
 
   case result of
     (Left err, _) -> fail (show err)
-    (Right (txs, ledgerUtxo), _finalState) -> do
+    (Right (txs, ledgerUtxo, slot), _finalState) -> do
       -- Convert ledger UTxO to cardano-api UTxO
       let utxo = fromLedgerUTxO C.shelleyBasedEra ledgerUtxo
           pparams' = params ^. ledgerProtocolParameters
@@ -523,7 +525,7 @@ propPingPongWithThreatModel opts = monadicIO $ do
             [ ThreatModelEnv
                 { currentTx = tx
                 , currentUTxOs = utxo
-                , currentSlot = 0
+                , currentSlot = slot
                 , pparams = pparams'
                 }
             | tx <- txs
