@@ -19,8 +19,19 @@ import Convex.MockChain.Defaults qualified as Defaults
 import Convex.PlutusLedger.V1 (transPubKeyHash)
 import Convex.Tasty.QuickCheck qualified as QC
 import Convex.TestingInterface (RunOptions, TestingInterface (..), ThreatModelsFor (..), propRunActionsWithOptions)
-import Convex.ThreatModel.LargeValue (largeValueAttackWith)
+import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
+import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
+import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
+import Convex.ThreatModel.InputDuplication (inputDuplication)
+import Convex.ThreatModel.InvalidDatumIndex (invalidDatumIndexAttack)
+import Convex.ThreatModel.LargeData (largeDataAttack)
+import Convex.ThreatModel.LargeValue (largeValueAttack)
+import Convex.ThreatModel.MissingOutputDatum (missingOutputDatumAttack)
 import Convex.ThreatModel.MutualExclusion (mutualExclusionAttack)
+import Convex.ThreatModel.NegativeInteger (negativeIntegerAttack)
+import Convex.ThreatModel.OutputDatumHashMissing (outputDatumHashMissingAttack)
+import Convex.ThreatModel.RedeemerAssetSubstitution (redeemerAssetSubstitution)
+import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
 import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
 import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
 import Convex.ThreatModel.TokenForgery (simpleAlwaysSucceedsMintingPolicyV2, simpleTestAssetName, tokenForgeryAttack)
@@ -229,16 +240,27 @@ instance TestingInterface VestingModel where
 
 instance ThreatModelsFor VestingModel where
   threatModels =
-    [ largeValueAttackWith 10
+    [ datumListBloatAttack
+    , datumByteBloatAttack
+    , doubleSatisfaction
+    , duplicateListEntryAttack
+    , inputDuplication
     , mutualExclusionAttack
+    , negativeIntegerAttack
+    , redeemerAssetSubstitution
+    , selfReferenceInjection
     , signatoryRemoval
-    , tokenForgeryAttack simpleAlwaysSucceedsMintingPolicyV2 simpleTestAssetName
-    , unprotectedScriptOutput
     , valueUnderpaymentAttack
     ]
-
   expectedVulnerabilities =
-    [ timeBoundManipulation
+    [ invalidDatumIndexAttack
+    , largeDataAttack
+    , largeValueAttack
+    , missingOutputDatumAttack
+    , outputDatumHashMissingAttack
+    , timeBoundManipulation
+    , tokenForgeryAttack simpleAlwaysSucceedsMintingPolicyV2 simpleTestAssetName
+    , unprotectedScriptOutput
     ]
 
 -------------------------------------------------------------------------------

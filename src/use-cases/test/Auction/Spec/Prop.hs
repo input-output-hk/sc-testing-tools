@@ -22,9 +22,24 @@ import Convex.MockChain.Defaults qualified as Defaults
 import Convex.PlutusLedger.V1 (transPubKeyHash, unTransAssetName)
 import Convex.Tasty.QuickCheck qualified as QC
 import Convex.TestingInterface (TestingInterface (..), ThreatModelsFor (..), propRunActions)
+import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
 import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
+import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
+import Convex.ThreatModel.InputDuplication (inputDuplication)
+import Convex.ThreatModel.InvalidDatumIndex (invalidDatumIndexAttack)
+import Convex.ThreatModel.LargeData (largeDataAttack)
+import Convex.ThreatModel.LargeValue (largeValueAttack)
+import Convex.ThreatModel.MissingOutputDatum (missingOutputDatumAttack)
+import Convex.ThreatModel.MutualExclusion (mutualExclusionAttack)
+import Convex.ThreatModel.NegativeInteger (negativeIntegerAttack)
+import Convex.ThreatModel.OutputDatumHashMissing (outputDatumHashMissingAttack)
+import Convex.ThreatModel.RedeemerAssetSubstitution (redeemerAssetSubstitution)
+import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
+import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
 import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
 import Convex.ThreatModel.TokenForgery (simpleAlwaysSucceedsMintingPolicyV2, simpleTestAssetName, tokenForgeryAttack)
+import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
+import Convex.ThreatModel.ValueUnderpayment (valueUnderpaymentAttack)
 import Convex.Utils (slotToUtcTime, utcTimeToPosixTime)
 import Convex.Wallet (Wallet, verificationKeyHash)
 import Convex.Wallet qualified as MockWallet
@@ -260,14 +275,23 @@ instance TestingInterface AuctionModel where
   monitoring _ _ = id
 
 instance ThreatModelsFor AuctionModel where
-  threatModels = [doubleSatisfaction]
-  expectedVulnerabilities = [timeBoundManipulation, tokenForgeryAttack simpleAlwaysSucceedsMintingPolicyV2 simpleTestAssetName]
-
--- threatModels = [doubleSatisfaction, datumListBloatAttack, datumByteBloatAttack, duplicateListEntryAttack
---                , largeDataAttackWith 10, largeValueAttackWith 10, inputDuplication, mutualExclusionAttack
---                , negativeIntegerAttack, redeemerAssetSubstitution, selfReferenceInjection, signatoryRemoval
---                , timeBoundManipulation, tokenForgeryAttack simpleAlwaysSucceedsMintingPolicyV2 simpleTestAssetName
---                , unprotectedScriptOutput , unprotectedScriptOutput, valueUnderpaymentAttack]
+  threatModels =
+    [ datumListBloatAttack
+    , datumByteBloatAttack
+    , duplicateListEntryAttack
+    , inputDuplication
+    , invalidDatumIndexAttack
+    , missingOutputDatumAttack
+    , mutualExclusionAttack
+    , negativeIntegerAttack
+    , outputDatumHashMissingAttack
+    , redeemerAssetSubstitution
+    , selfReferenceInjection
+    , signatoryRemoval
+    , unprotectedScriptOutput
+    , valueUnderpaymentAttack
+    ]
+  expectedVulnerabilities = [doubleSatisfaction, largeDataAttack, largeValueAttack, timeBoundManipulation, tokenForgeryAttack simpleAlwaysSucceedsMintingPolicyV2 simpleTestAssetName]
 
 -------------------------------------------------------------------------------
 -- Helper functions for the AuctionModel

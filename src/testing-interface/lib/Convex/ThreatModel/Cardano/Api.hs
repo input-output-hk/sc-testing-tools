@@ -119,7 +119,6 @@ import Convex.Class (
   ValidationError (..),
   coverageData,
   env,
-  getSlot,
   poolState,
  )
 import Convex.MockChain (applyTransaction, initialState)
@@ -503,11 +502,11 @@ This uses 'applyTransaction' which performs complete ledger validation including
 validateTxM
   :: (MonadMockchain Era m)
   => NodeParams Era
+  -> SlotNo
   -> Tx Era
   -> UTxO Era
   -> m (ValidityReport, CoverageData)
-validateTxM params tx utxo = do
-  slot <- getSlot
+validateTxM params slot tx utxo = do
   let mockState = buildMockState params slot utxo
   pure $ case applyTransaction params mockState tx of
     Left (MockchainError (VExUnits (Phase2Error (ScriptErrorEvaluationFailed DebugPlutusFailure{dpfEvaluationError, dpfExecutionLogs})))) ->

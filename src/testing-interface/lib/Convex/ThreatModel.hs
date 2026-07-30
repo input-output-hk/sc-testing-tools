@@ -155,7 +155,7 @@ import Text.Printf
 import Test.QuickCheck
 import Test.QuickCheck qualified as QC
 
-import Convex.Class (MockChainState, MonadMockchain (..), coverageData, getUtxo, setTimeToValidRange)
+import Convex.Class (MockChainState, MonadMockchain (..), coverageData, getSlot, getUtxo, setTimeToValidRange)
 import Convex.MockChain (applyTransaction, runMockchain)
 import Convex.NodeParams (NodeParams, ledgerProtocolParameters)
 import Convex.ThreatModel.Cardano.Api
@@ -174,13 +174,14 @@ transactions in counterexamples. To include more information you can use `counte
 the functions below.
 -}
 
-{- | The context in which a `ThreatModel` is executed. Contains a transaction, its UTxO set and the
-  protocol parameters. See `getThreatModelEnv` and `originalTx` to access this information in a
-  threat model.
+{- | The context in which a `ThreatModel` is executed. Contains a transaction, its UTxO set, the
+  replayed slot, and the protocol parameters. See `getThreatModelEnv` and `originalTx` to access
+  this information in a threat model.
 -}
 data ThreatModelEnv = ThreatModelEnv
   { currentTx :: Tx Era
   , currentUTxOs :: UTxO Era
+  , currentSlot :: SlotNo
   , pparams :: LedgerProtocolParameters Era
   }
 
@@ -198,12 +199,13 @@ threatModelEnvs params txs chainState0 = fst $ foldM go chainState0 txs
   go chainState tx =
     let txBodyContent = getTxBodyContent $ getTxBody tx
         rng = (txValidityLowerBound txBodyContent, txValidityUpperBound txBodyContent)
-        (utxo, chainState') = runMockchain (setTimeToValidRange rng >> getUtxo) params chainState
+        ((slot, utxo), chainState') = runMockchain (setTimeToValidRange rng >> ((,) <$> getSlot <*> getUtxo)) params chainState
         res = applyTransaction params chainState' tx
         threatModelEnv =
           ThreatModelEnv
             { currentTx = tx
             , currentUTxOs = fromLedgerUTxO shelleyBasedEra utxo
+            , currentSlot = slot
             , pparams = params ^. ledgerProtocolParameters
             }
      in case res of
@@ -331,13 +333,13 @@ runThreatModel = go False
 assertThreatModel
   :: ThreatModel a
   -> LedgerProtocolParameters Era
-  -> [(Tx Era, UTxO Era)]
+  -> [(Tx Era, UTxO Era, SlotNo)]
   -> Property
 assertThreatModel m pparams' txs = runThreatModel m envs
  where
   envs =
-    [ ThreatModelEnv tx utxo pparams'
-    | (tx, utxo) <- txs
+    [ ThreatModelEnv tx utxo slot pparams'
+    | (tx, utxo, slot) <- txs
     ]
 
 {- | Run threat model inside MockchainT with full Phase 1 + Phase 2 validation.
@@ -433,7 +435,7 @@ runThreatModelM' quiet signingWallet = go False
         params <- askNodeParams
         rebalancedTx <- rebalanceAndSignM wallet modifiedTx modifiedUtxo
         -- Validate with full Phase 1 + Phase 2
-        (report, covData) <- validateTxM params rebalancedTx modifiedUtxo
+        (report, covData) <- validateTxM params (currentSlot env) rebalancedTx modifiedUtxo
         -- Accumulate coverage into the running MockChainState
         modifyMockChainState $ \s -> ((), s & coverageData %~ (<> covData))
         interpM mon wallet (k report)
@@ -495,7 +497,7 @@ runThreatModelCheck signingWallet = go False
           Left _err ->
             go b model envs -- Rebalancing failed, skip to next tx (like precondition failure)
           Right rebalancedTx -> do
-            (report, covData) <- validateTxM params rebalancedTx modifiedUtxo
+            (report, covData) <- validateTxM params (currentSlot env) rebalancedTx modifiedUtxo
             modifyMockChainState $ \s -> ((), s & coverageData %~ (<> covData))
             checkInterp wallet (k report)
       Generate gen _shr k -> do
@@ -571,7 +573,7 @@ runThreatModelCheckTraced signingWallet = go False [] 0
                     }
             go b (entry : acc') (envIdx + 1) model envs -- Rebalancing failed, skip to next tx
           Right rebalancedTx -> do
-            (report, covData) <- validateTxM params rebalancedTx modifiedUtxo
+            (report, covData) <- validateTxM params (currentSlot env) rebalancedTx modifiedUtxo
             modifyMockChainState $ \s -> ((), s & coverageData %~ (<> covData))
             let entry =
                   ThreatModelCheckEntry
@@ -663,7 +665,7 @@ shouldNotValidate = shouldValidateOrNot False
 shouldValidateOrNot :: Bool -> TxModifier -> ThreatModel ()
 shouldValidateOrNot should txMod = do
   validReport <- validate txMod
-  ThreatModelEnv tx utxos _ <- getThreatModelEnv
+  ThreatModelEnv tx utxos _ _ <- getThreatModelEnv
   let newTx = fst $ applyTxModifier tx utxos txMod
       info str =
         block
@@ -713,7 +715,7 @@ getTxOutputs = zipWith (flip Output . TxIx) [0 ..] . txOutputs <$> originalTx
 -- | Get the inputs from the original transaction.
 getTxInputs :: ThreatModel [Input]
 getTxInputs = do
-  ThreatModelEnv tx (UTxO utxos) _ <- getThreatModelEnv
+  ThreatModelEnv tx (UTxO utxos) _ _ <- getThreatModelEnv
   pure
     [ Input txout i
     | i <- txInputs tx
@@ -723,7 +725,7 @@ getTxInputs = do
 -- | Get the reference inputs from the original transaction.
 getTxReferenceInputs :: ThreatModel [Input]
 getTxReferenceInputs = do
-  ThreatModelEnv tx (UTxO utxos) _ <- getThreatModelEnv
+  ThreatModelEnv tx (UTxO utxos) _ _ <- getThreatModelEnv
   pure
     [ Input txout i
     | i <- txReferenceInputs tx
