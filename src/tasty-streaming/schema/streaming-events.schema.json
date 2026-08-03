@@ -522,6 +522,9 @@
                 "skipped": {
                     "type": "integer"
                 },
+                "skipped_phase1": {
+                    "type": "integer"
+                },
                 "tested": {
                     "type": "integer"
                 },
@@ -536,6 +539,7 @@
                 "passed",
                 "failed",
                 "skipped",
+                "skipped_phase1",
                 "errors"
             ],
             "type": "object"
@@ -640,6 +644,24 @@
                         "status": {
                             "enum": [
                                 "skipped"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "status",
+                        "reason"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "reason": {
+                            "type": "string"
+                        },
+                        "status": {
+                            "enum": [
+                                "skipped_phase1"
                             ],
                             "type": "string"
                         }

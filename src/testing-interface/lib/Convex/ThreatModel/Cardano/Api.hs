@@ -392,6 +392,7 @@ projectAda = lovelaceToValue . selectLovelace
 data ValidityReport = ValidityReport
   { valid :: Bool
   , errors :: [String]
+  , phase1Invalid :: Bool
   }
   deriving stock (Ord, Eq, Show)
 
@@ -407,8 +408,10 @@ The purpose of threat models is to test script logic, not transaction constructi
 validateTx :: LedgerProtocolParameters Era -> Tx Era -> UTxO Era -> ValidityReport
 validateTx pparams tx utxos =
   ValidityReport
-    (all isRight (Map.elems report))
-    [show e | Left e <- Map.elems report]
+    { valid = all isRight (Map.elems report)
+    , errors = [show e | Left e <- Map.elems report]
+    , phase1Invalid = False
+    }
  where
   report =
     evaluateTransactionExecutionUnits
@@ -509,10 +512,12 @@ validateTxM
 validateTxM params slot tx utxo = do
   let mockState = buildMockState params slot utxo
   pure $ case applyTransaction params mockState tx of
+    Left (ApplyTxFailure err) ->
+      (ValidityReport{valid = False, errors = [show err], phase1Invalid = True}, mempty)
     Left (MockchainError (VExUnits (Phase2Error (ScriptErrorEvaluationFailed DebugPlutusFailure{dpfEvaluationError, dpfExecutionLogs})))) ->
-      (ValidityReport False [show dpfEvaluationError], foldMap (coverageDataFromLogMsg . Text.unpack) dpfExecutionLogs)
-    Left err -> (ValidityReport False [show err], mempty)
-    Right (state', _) -> (ValidityReport True [], state' ^. coverageData)
+      (ValidityReport{valid = False, errors = [show dpfEvaluationError], phase1Invalid = False}, foldMap (coverageDataFromLogMsg . Text.unpack) dpfExecutionLogs)
+    Left err -> (ValidityReport{valid = False, errors = [show err], phase1Invalid = False}, mempty)
+    Right (state', _) -> (ValidityReport{valid = True, errors = [], phase1Invalid = False}, state' ^. coverageData)
 
 {- | Re-balance fees, recalculate execution units, and re-sign a modified transaction.
 

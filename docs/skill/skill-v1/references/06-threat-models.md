@@ -349,6 +349,22 @@ The parameter is drawn fresh for each transaction in each QuickCheck iteration v
 - Vacuous draws (e.g. a field count of 0 for large-data) are skipped via `ensure`, so a `TMPassed` outcome always means a meaningful attack was attempted and rejected.
 - In the pure `runThreatModel` runner, the parameter is shrunk toward the smallest triggering value, giving minimal counterexamples.
 
+### Outcomes — `TMPassed`, `TMFailed`, `TMSkipped`, `TMSkippedPhase1`, `TMError`
+
+Each threat-model run produces one of five outcomes:
+
+- **`TMPassed`** — the attack was attempted and the validator correctly rejected the mutated transaction (no vulnerability).
+- **`TMFailed`** — the validator accepted the mutated transaction; a vulnerability was found.
+- **`TMSkipped`** — the model's preconditions were not met (e.g. the tx had no continuation output, no script signer, etc.), so no meaningful attack was possible.
+- **`TMError`** — an unexpected error occurred while running the model (not a validator verdict).
+- **`TMSkippedPhase1`** — the mutated transaction was rejected by **Phase 1 validation** (the ledger's structural/phase-1 checks), so the Plutus validator never ran. This is treated as a SKIP, just like a precondition failure: the threat model was not meaningfully tested, so it is neither a pass nor a failure.
+
+  `TMSkippedPhase1` matters because a `TxModifier` can easily break a transaction in a way that fails *before* it reaches the script — e.g. an oversized datum, a value imbalance, or a missing signature. Such a rejection tells you nothing about whether the validator is actually guarded against the attack.
+
+  Common Phase 1 failures include: fee inadequacy, min-UTxO violations, transaction size limits exceeded, missing or incorrect required signatures, and value-preservation (inputs ≠ outputs).
+
+  The breakdown between precondition skips (`TMSkipped`) and Phase 1 skips (`TMSkippedPhase1`) is visible in both the CLI summary output and the streaming events (`ThreatModelSummary.skipped` vs `ThreatModelSummary.skipped_phase1`; `ThreatModelTraceOutcome` status `"skipped"` vs `"skipped_phase1"`).
+
 ### When to use which tier
 
 - **`model`** (randomised): the right default for `threatModels` lists. Zero configuration; QuickCheck finds the interesting region.
