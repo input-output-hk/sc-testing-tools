@@ -31,6 +31,7 @@ data ThreatModelSummary = ThreatModelSummary
   , tmsPassed :: !Int
   , tmsFailed :: !Int
   , tmsSkipped :: !Int
+  , tmsSkippedPhase1 :: !Int
   , tmsErrors :: !Int
   }
   deriving (Show, Eq, Generic)
@@ -44,6 +45,7 @@ instance ToJSON ThreatModelSummary where
       , "passed" .= tmsPassed s
       , "failed" .= tmsFailed s
       , "skipped" .= tmsSkipped s
+      , "skipped_phase1" .= tmsSkippedPhase1 s
       , "errors" .= tmsErrors s
       ]
 
@@ -56,6 +58,7 @@ instance FromJSON ThreatModelSummary where
       <*> o .: "passed"
       <*> o .: "failed"
       <*> o .: "skipped"
+      <*> o .: "skipped_phase1"
       <*> o .: "errors"
 
 -- | Mutable storage for threat-model summaries, owned by the reporter.

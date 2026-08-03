@@ -259,6 +259,8 @@ data ThreatModelTraceOutcome
     TMTOFailed !Text
   | -- | Couldn't test: rebalancing failed or precondition not met
     TMTOSkipped !Text
+  | -- | Skipped: modified tx hit Phase 1 invalidation
+    TMTOSkippedPhase1 !Text
   | -- | Unexpected error during threat model execution
     TMTOError !Text
   deriving (Eq, Show, Generic)
@@ -364,5 +366,7 @@ instance ToJSON ThreatModelTraceOutcome where
     object ["status" .= ("failed" :: Text), "reason" .= reason]
   toJSON (TMTOSkipped reason) =
     object ["status" .= ("skipped" :: Text), "reason" .= reason]
+  toJSON (TMTOSkippedPhase1 reason) =
+    object ["status" .= ("skipped_phase1" :: Text), "reason" .= reason]
   toJSON (TMTOError msg) =
     object ["status" .= ("error" :: Text), "message" .= msg]
