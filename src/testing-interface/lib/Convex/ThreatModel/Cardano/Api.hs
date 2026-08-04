@@ -392,9 +392,9 @@ projectAda = lovelaceToValue . selectLovelace
   of reasons.
 -}
 data ValidityReport = ValidityReport
-  { valid :: Bool
-  , errors :: [String]
-  , phase1Invalid :: Bool
+  { errors :: [String]
+  , phase1Valid :: Bool
+  , phase2Valid :: Bool
   }
   deriving stock (Ord, Eq, Show)
 
@@ -410,9 +410,9 @@ The purpose of threat models is to test script logic, not transaction constructi
 validateTx :: LedgerProtocolParameters Era -> Tx Era -> UTxO Era -> ValidityReport
 validateTx pparams tx utxos =
   ValidityReport
-    { valid = all isRight (Map.elems report)
-    , errors = [show e | Left e <- Map.elems report]
-    , phase1Invalid = False
+    { errors = [show e | Left e <- Map.elems report]
+    , phase1Valid = True
+    , phase2Valid = all isRight (Map.elems report)
     }
  where
   report =
@@ -536,8 +536,8 @@ validateTxM params slot tx utxo = do
   pure $ case applyTransaction params mockState tx of
     Left (ApplyTxFailure err)
       | hasPhase2Failure err ->
-          let covData =
-                extractCoverageFromExUnits $
+          let (covData, errors) =
+                extractFromExUnits $
                   evaluateTransactionExecutionUnits
                     ConwayEra
                     npSystemStart
@@ -545,28 +545,22 @@ validateTxM params slot tx utxo = do
                     npProtocolParameters
                     utxo
                     (getTxBody tx)
-           in (ValidityReport{valid = False, errors = [show err], phase1Invalid = False}, covData)
+           in (ValidityReport{errors, phase1Valid = True, phase2Valid = False}, covData)
       | otherwise ->
-          (ValidityReport{valid = False, errors = [show err], phase1Invalid = True}, mempty)
+          (ValidityReport{errors = [show err], phase1Valid = False, phase2Valid = True}, mempty)
     Left (MockchainError (VExUnits (Phase2Error (ScriptErrorEvaluationFailed DebugPlutusFailure{dpfEvaluationError, dpfExecutionLogs})))) ->
-      (ValidityReport{valid = False, errors = [show dpfEvaluationError], phase1Invalid = False}, foldMap (coverageDataFromLogMsg . Text.unpack) dpfExecutionLogs)
-    Left err -> (ValidityReport{valid = False, errors = [show err], phase1Invalid = False}, mempty)
-    Right (state', _) -> (ValidityReport{valid = True, errors = [], phase1Invalid = False}, state' ^. coverageData)
+      (ValidityReport{errors = [show dpfEvaluationError], phase1Valid = True, phase2Valid = False}, foldMap (coverageDataFromLogMsg . Text.unpack) dpfExecutionLogs)
+    Left err -> (ValidityReport{errors = [show err], phase1Valid = False, phase2Valid = True}, mempty)
+    Right (state', _) -> (ValidityReport{errors = [], phase1Valid = True, phase2Valid = True}, state' ^. coverageData)
 
-{- | Extract Plutus coverage data from the result of
-'evaluateTransactionExecutionUnits'. When a script fails Phase 2 validation,
-the resulting 'ScriptErrorEvaluationFailed' carries 'dpfExecutionLogs', which
-are converted into 'CoverageData' the same way as in the
-'MockchainError'/'Phase2Error' branch above.
--}
-extractCoverageFromExUnits
-  :: Map.Map ScriptWitnessIndex (Either ScriptExecutionError (a, ExecutionUnits))
-  -> CoverageData
-extractCoverageFromExUnits = foldMap fromScriptResult . Map.elems
+extractFromExUnits :: Map.Map k (Either ScriptExecutionError b) -> (CoverageData, [String])
+extractFromExUnits = foldMap fromScriptResult . Map.elems
  where
-  fromScriptResult (Left (ScriptErrorEvaluationFailed DebugPlutusFailure{dpfExecutionLogs})) =
-    foldMap (coverageDataFromLogMsg . Text.unpack) dpfExecutionLogs
-  fromScriptResult _ = mempty
+  fromScriptResult (Left (ScriptErrorEvaluationFailed DebugPlutusFailure{dpfExecutionLogs, dpfEvaluationError})) =
+    ( foldMap (coverageDataFromLogMsg . Text.unpack) dpfExecutionLogs
+    , [show dpfEvaluationError]
+    )
+  fromScriptResult _ = (mempty, [])
 
 {- | Re-balance fees, recalculate execution units, and re-sign a modified transaction.
 
