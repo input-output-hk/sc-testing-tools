@@ -109,6 +109,7 @@ library
     , cardano-ledger-conway
     , cardano-ledger-core
     , cardano-ledger-mary
+    , cardano-ledger-shelley
     , cardano-slotting
     , cardano-strict-containers
     , ouroboros-consensus
