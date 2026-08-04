@@ -480,8 +480,8 @@ runThreatModelCheck
 runThreatModelCheck signingWallet = go False False []
  where
   composeMonitors = foldr (.) id
-  go b phase1Seen mons _model [] = pure (if b then TMPassed else if phase1Seen then TMSkippedPhase1 else TMSkipped, composeMonitors mons)
-  go b phase1Seen mons model (env : envs) = do
+  go b hadPhase1Error mons _model [] = pure (if b then TMPassed else if hadPhase1Error then TMSkippedPhase1 else TMSkipped, composeMonitors mons)
+  go b hadPhase1Error mons model (env : envs) = do
     -- Resolve wallet: use provided or detect from transaction
     let resolvedWallet = case signingWallet of
           SignWith w -> Right w
@@ -498,24 +498,24 @@ runThreatModelCheck signingWallet = go False False []
         rebalanceResult <- TM.rebalanceAndSign wallet modifiedTx modifiedUtxo
         case rebalanceResult of
           Left _err ->
-            go b phase1Seen mons' model envs -- Rebalancing failed, skip to next tx (like precondition failure)
+            go b hadPhase1Error mons' model envs -- Rebalancing failed, skip to next tx (like precondition failure)
           Right rebalancedTx -> do
             (report, covData) <- validateTxM params (currentSlot env) rebalancedTx modifiedUtxo
             modifyMockChainState $ \s -> ((), s & coverageData %~ (<> covData))
-            if phase1Invalid report
-              then go b True mons' model envs
-              else checkInterp wallet mons' (k report)
+            if phase1Valid report
+              then checkInterp wallet mons' (k report)
+              else go b True mons' model envs
       Generate gen _shr k -> do
         a <- liftIO $ QC.generate gen
         checkInterp wallet mons' (k a)
       GetCtx k ->
         checkInterp wallet mons' (k env)
-      Skip -> go b phase1Seen mons' model envs
+      Skip -> go b hadPhase1Error mons' model envs
       InPrecondition k -> checkInterp wallet mons' (k False)
       Fail err -> pure (TMFailed err, composeMonitors mons')
       Monitor m k -> checkInterp wallet (m : mons') k
       MonitorLocal m k -> checkInterp wallet (m : mons') k
-      Done{} -> go True phase1Seen mons' model envs
+      Done{} -> go True hadPhase1Error mons' model envs
       Named _n k -> checkInterp wallet mons' k
 
 -- | A single trace entry from a threat model check against one ThreatModelEnv.
@@ -549,8 +549,8 @@ runThreatModelCheckTraced
 runThreatModelCheckTraced signingWallet = go False False [] [] 0
  where
   composeMonitors = foldr (.) id
-  go b phase1Seen acc mons _envIdx _model [] = pure (if b then TMPassed else if phase1Seen then TMSkippedPhase1 else TMSkipped, reverse acc, composeMonitors mons)
-  go b phase1Seen acc mons envIdx model (env : envs) = do
+  go b hadPhase1Error acc mons _envIdx _model [] = pure (if b then TMPassed else if hadPhase1Error then TMSkippedPhase1 else TMSkipped, reverse acc, composeMonitors mons)
+  go b hadPhase1Error acc mons envIdx model (env : envs) = do
     -- Resolve wallet: use provided or detect from transaction
     let resolvedWallet = case signingWallet of
           SignWith w -> Right w
@@ -577,7 +577,7 @@ runThreatModelCheckTraced signingWallet = go False False [] [] 0
                     , tmceModifiedUtxo = modifiedUtxo
                     , tmceValidation = Nothing
                     }
-            go b phase1Seen (entry : acc') mons' (envIdx + 1) model envs -- Rebalancing failed, skip to next tx
+            go b hadPhase1Error (entry : acc') mons' (envIdx + 1) model envs -- Rebalancing failed, skip to next tx
           Right rebalancedTx -> do
             (report, covData) <- validateTxM params (currentSlot env) rebalancedTx modifiedUtxo
             modifyMockChainState $ \s -> ((), s & coverageData %~ (<> covData))
@@ -591,20 +591,20 @@ runThreatModelCheckTraced signingWallet = go False False [] [] 0
                     , tmceModifiedUtxo = modifiedUtxo
                     , tmceValidation = Just report
                     }
-            if phase1Invalid report
-              then go b True (entry : acc') mons' (envIdx + 1) model envs
-              else checkInterp wallet (entry : acc') mons' (k report)
+            if phase1Valid report
+              then checkInterp wallet (entry : acc') mons' (k report)
+              else go b True (entry : acc') mons' (envIdx + 1) model envs
       Generate gen _shr k -> do
         a <- liftIO $ QC.generate gen
         checkInterp wallet acc' mons' (k a)
       GetCtx k ->
         checkInterp wallet acc' mons' (k env)
-      Skip -> go b phase1Seen acc' mons' (envIdx + 1) model envs
+      Skip -> go b hadPhase1Error acc' mons' (envIdx + 1) model envs
       InPrecondition k -> checkInterp wallet acc' mons' (k False)
       Fail err -> pure (TMFailed err, reverse acc', composeMonitors mons')
       Monitor m k -> checkInterp wallet acc' (m : mons') k
       MonitorLocal m k -> checkInterp wallet acc' (m : mons') k
-      Done{} -> go True phase1Seen acc' mons' (envIdx + 1) model envs
+      Done{} -> go True hadPhase1Error acc' mons' (envIdx + 1) model envs
       Named _n k -> checkInterp wallet acc' mons' k
 
 {- | Check a precondition. If the argument threat model fails, the evaluation of the current
@@ -692,7 +692,7 @@ shouldValidateOrNot should txMod = do
       notN't
         | should = "" :: String
         | otherwise = "n't"
-  when (should /= valid validReport) $ do
+  when (should /= phase2Valid validReport) $ do
     let distinctErrors = nubOrd (errors validReport)
         failureLine = printf "Test failure: the following transaction did%s validate" n't
         messageLines =
