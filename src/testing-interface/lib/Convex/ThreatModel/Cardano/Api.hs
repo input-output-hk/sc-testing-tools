@@ -99,11 +99,13 @@ import Cardano.Ledger.Alonzo.TxWits qualified as Ledger
 import Cardano.Ledger.Api.Era qualified as Ledger (eraProtVerLow)
 import Cardano.Ledger.Api.Tx.Body qualified as Ledger
 import Cardano.Ledger.Binary qualified as CBOR
+import Cardano.Ledger.Conway.Rules (ConwayLedgerPredFailure (..), ConwayUtxoPredFailure (..), ConwayUtxosPredFailure (..), ConwayUtxowPredFailure (..))
 import Cardano.Ledger.Conway.Scripts qualified as Conway
 import Cardano.Ledger.Conway.TxBody qualified as Conway
 import Cardano.Ledger.Keys (WitVKey (..), coerceKeyRole, hashKey)
 import Cardano.Ledger.Mary.Value qualified as Mary
 import Cardano.Ledger.Plutus.Language qualified as Plutus
+import Cardano.Ledger.Shelley.API.Mempool (ApplyTxError (..))
 import Cardano.Slotting.Slot ()
 import Cardano.Slotting.Time (SlotLength, mkSlotLength)
 import Control.Lens ((&), (.~), (^.), _1)
@@ -116,13 +118,13 @@ import Convex.Class (
   MonadBlockchain (..),
   MonadMockchain (..),
   SendTxError (..),
-  ValidationError (..),
+  ValidationError (VExUnits),
   coverageData,
   env,
   poolState,
  )
 import Convex.MockChain (applyTransaction, initialState)
-import Convex.NodeParams (NodeParams)
+import Convex.NodeParams (NodeParams (..))
 import Convex.Wallet (Wallet)
 import Convex.Wallet qualified as Wallet
 import Convex.Wallet.MockWallet (mockWallets)
@@ -491,6 +493,25 @@ buildMockState params slot utxo =
     & env . L.slot .~ slot
     & poolState . L.utxoState . L._UTxOState . _1 .~ toLedgerUTxO shelleyBasedEra utxo
 
+{- | Check if an ApplyTxError contains any Phase 2 (script execution) failures.
+Phase 2 failures are marked by 'ValidationTagMismatch' or 'CollectErrors'
+inside the UTXOS predicate failure. Everything else is Phase 1 (structural).
+-}
+hasPhase2Failure :: ApplyTxError LedgerEra -> Bool
+hasPhase2Failure (ApplyTxError failures) = any isPhase2 failures
+ where
+  isPhase2 (ConwayUtxowFailure utxowFail) = hasPhase2Utxow utxowFail
+  isPhase2 _ = False
+
+  hasPhase2Utxow (UtxoFailure utxoFail) = hasPhase2Utxo utxoFail
+  hasPhase2Utxow _ = False
+
+  hasPhase2Utxo (UtxosFailure utxosFail) = hasPhase2Utxos utxosFail
+  hasPhase2Utxo _ = False
+
+  hasPhase2Utxos ValidationTagMismatch{} = True
+  hasPhase2Utxos (CollectErrors _) = True
+
 {- | Validate a transaction with full Phase 1 + Phase 2 validation inside MockchainT.
 
 This uses 'applyTransaction' which performs complete ledger validation including:
@@ -511,13 +532,41 @@ validateTxM
   -> m (ValidityReport, CoverageData)
 validateTxM params slot tx utxo = do
   let mockState = buildMockState params slot utxo
+      NodeParams{npSystemStart, npEraHistory, npProtocolParameters} = params
   pure $ case applyTransaction params mockState tx of
-    Left (ApplyTxFailure err) ->
-      (ValidityReport{valid = False, errors = [show err], phase1Invalid = True}, mempty)
+    Left (ApplyTxFailure err)
+      | hasPhase2Failure err ->
+          let covData =
+                extractCoverageFromExUnits $
+                  evaluateTransactionExecutionUnits
+                    ConwayEra
+                    npSystemStart
+                    (toLedgerEpochInfo npEraHistory)
+                    npProtocolParameters
+                    utxo
+                    (getTxBody tx)
+           in (ValidityReport{valid = False, errors = [show err], phase1Invalid = False}, covData)
+      | otherwise ->
+          (ValidityReport{valid = False, errors = [show err], phase1Invalid = True}, mempty)
     Left (MockchainError (VExUnits (Phase2Error (ScriptErrorEvaluationFailed DebugPlutusFailure{dpfEvaluationError, dpfExecutionLogs})))) ->
       (ValidityReport{valid = False, errors = [show dpfEvaluationError], phase1Invalid = False}, foldMap (coverageDataFromLogMsg . Text.unpack) dpfExecutionLogs)
     Left err -> (ValidityReport{valid = False, errors = [show err], phase1Invalid = False}, mempty)
     Right (state', _) -> (ValidityReport{valid = True, errors = [], phase1Invalid = False}, state' ^. coverageData)
+
+{- | Extract Plutus coverage data from the result of
+'evaluateTransactionExecutionUnits'. When a script fails Phase 2 validation,
+the resulting 'ScriptErrorEvaluationFailed' carries 'dpfExecutionLogs', which
+are converted into 'CoverageData' the same way as in the
+'MockchainError'/'Phase2Error' branch above.
+-}
+extractCoverageFromExUnits
+  :: Map.Map ScriptWitnessIndex (Either ScriptExecutionError (a, ExecutionUnits))
+  -> CoverageData
+extractCoverageFromExUnits = foldMap fromScriptResult . Map.elems
+ where
+  fromScriptResult (Left (ScriptErrorEvaluationFailed DebugPlutusFailure{dpfExecutionLogs})) =
+    foldMap (coverageDataFromLogMsg . Text.unpack) dpfExecutionLogs
+  fromScriptResult _ = mempty
 
 {- | Re-balance fees, recalculate execution units, and re-sign a modified transaction.
 
