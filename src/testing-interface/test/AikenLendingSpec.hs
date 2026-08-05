@@ -62,7 +62,7 @@ import Convex.Aiken.Blueprint (Blueprint (..))
 import Convex.Aiken.Blueprint qualified as Blueprint
 import Convex.BuildTx (MonadBuildTx, execBuildTx)
 import Convex.BuildTx qualified as BuildTx
-import Convex.Class (MonadMockchain, getSlot, getUtxo)
+import Convex.Class (MonadMockchain, getUtxo)
 import Convex.CoinSelection (ChangeOutputPosition (TrailingChange))
 import Convex.MockChain (fromLedgerUTxO, runMockchain0IOWith)
 import Convex.MockChain.CoinSelection (balanceAndSubmit, tryBalanceAndSubmit)
@@ -708,14 +708,12 @@ propLendingVulnerableToInputDuplication opts = QC.expectFailure $
               -- Fund ONLY the first loan with a valid transaction
               let lendTxBody = execBuildTx $ lendFunds Defaults.networkId txIn1 datum1 value1 Wallet.w3
               lendTx <- tryBalanceAndSubmit mempty Wallet.w3 lendTxBody TrailingChange []
-              slot <- getSlot
 
               let pparams' = params ^. ledgerProtocolParameters
                   env =
                     ThreatModelEnv
                       { currentTx = lendTx
                       , currentUTxOs = utxoBefore
-                      , currentSlot = slot
                       , pparams = pparams'
                       }
 

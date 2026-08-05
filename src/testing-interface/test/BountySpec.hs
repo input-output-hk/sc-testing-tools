@@ -22,7 +22,6 @@ import Convex.BuildTx (execBuildTx)
 import Convex.BuildTx qualified as BuildTx
 import Convex.Class (
   MonadMockchain,
-  getSlot,
   getUtxo,
  )
 import Convex.CoinSelection (BalanceTxError, ChangeOutputPosition (TrailingChange))
@@ -102,14 +101,12 @@ propBountyVulnerableToDoubleSatisfaction opts = QC.expectFailure $
       runMockchain0IOWith Wallet.initialUTxOs params $
         runExceptT $ do
           (tx, utxo) <- bountyVulnerableScenario
-          slot <- getSlot
 
           let pparams' = params ^. ledgerProtocolParameters
               env =
                 ThreatModelEnv
                   { currentTx = tx
                   , currentUTxOs = utxo
-                  , currentSlot = slot
                   , pparams = pparams'
                   }
 
@@ -194,14 +191,12 @@ propBountySecureAgainstDoubleSatisfaction opts = monadicIO $ do
     runMockchain0IOWith Wallet.initialUTxOs params $
       runExceptT $ do
         (tx, utxo) <- bountySecureScenario
-        slot <- getSlot
 
         let pparams' = params ^. ledgerProtocolParameters
             env =
               ThreatModelEnv
                 { currentTx = tx
                 , currentUTxOs = utxo
-                , currentSlot = slot
                 , pparams = pparams'
                 }
 
