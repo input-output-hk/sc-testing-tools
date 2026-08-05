@@ -510,12 +510,11 @@ propPingPongWithThreatModel opts = monadicIO $ do
     -- Get the current UTxO set
     ledgerUtxo <- Convex.Class.getUtxo
     -- Get the current slot
-    slot <- Convex.Class.getSlot
-    pure (txs, ledgerUtxo, slot)
+    pure (txs, ledgerUtxo)
 
   case result of
     (Left err, _) -> fail (show err)
-    (Right (txs, ledgerUtxo, slot), _finalState) -> do
+    (Right (txs, ledgerUtxo), _finalState) -> do
       -- Convert ledger UTxO to cardano-api UTxO
       let utxo = fromLedgerUTxO C.shelleyBasedEra ledgerUtxo
           pparams' = params ^. ledgerProtocolParameters
@@ -525,7 +524,6 @@ propPingPongWithThreatModel opts = monadicIO $ do
             [ ThreatModelEnv
                 { currentTx = tx
                 , currentUTxOs = utxo
-                , currentSlot = slot
                 , pparams = pparams'
                 }
             | tx <- txs
@@ -563,14 +561,12 @@ propPingPongVulnerableToOutputRedirect opts = QC.expectFailure $
       runMockchain0IOWith Wallet.initialUTxOs params $
         runExceptT $ do
           (tx, utxo) <- vulnerablePingPongScenario
-          slot <- Convex.Class.getSlot
 
           let pparams' = params ^. ledgerProtocolParameters
               env =
                 ThreatModelEnv
                   { currentTx = tx
                   , currentUTxOs = utxo
-                  , currentSlot = slot
                   , pparams = pparams'
                   }
 
@@ -644,14 +640,12 @@ propPingPongVulnerableToLargeData opts = QC.expectFailure $
       runMockchain0IOWith Wallet.initialUTxOs params $
         runExceptT $ do
           (tx, utxo) <- vulnerablePingPongLargeDataScenario
-          slot <- Convex.Class.getSlot
 
           let pparams' = params ^. ledgerProtocolParameters
               env =
                 ThreatModelEnv
                   { currentTx = tx
                   , currentUTxOs = utxo
-                  , currentSlot = slot
                   , pparams = pparams'
                   }
 
@@ -729,14 +723,12 @@ propPingPongVulnerableToLargeValue opts = QC.expectFailure $
       runMockchain0IOWith Wallet.initialUTxOs params $
         runExceptT $ do
           (tx, utxo) <- vulnerablePingPongLargeValueScenario
-          slot <- Convex.Class.getSlot
 
           let pparams' = params ^. ledgerProtocolParameters
               env =
                 ThreatModelEnv
                   { currentTx = tx
                   , currentUTxOs = utxo
-                  , currentSlot = slot
                   , pparams = pparams'
                   }
 

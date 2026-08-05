@@ -61,7 +61,7 @@ UTxOs are available.
 inputDuplication :: ThreatModel ()
 inputDuplication = Named "Input Duplication" $ do
   -- Get the environment to access the full UTxO set and the original transaction
-  ThreatModelEnv tx (C.UTxO utxoMap) _ _ <- getThreatModelEnv
+  ThreatModelEnv tx (C.UTxO utxoMap) _ <- getThreatModelEnv
 
   -- Find a script input (non-key address = script address)
   scriptInput <- anyInputSuchThat (not . isKeyAddressAny . addressOf)
@@ -201,7 +201,8 @@ inputDuplication = Named "Input Duplication" $ do
           serialised = C.PlutusScriptSerialised binaryBytes
           asScript
             :: (lang ~ C.FromLedgerPlutusLanguage l, IsPlutusScriptInEra lang)
-            => C.PlutusScriptVersion lang -> Maybe SomePlutusScript
+            => C.PlutusScriptVersion lang
+            -> Maybe SomePlutusScript
           asScript ver =
             if C.hashScript (C.PlutusScript ver serialised) == targetHash
               then Just (SomePlutusScript serialised)

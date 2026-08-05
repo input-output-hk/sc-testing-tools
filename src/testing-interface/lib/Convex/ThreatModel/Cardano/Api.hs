@@ -121,7 +121,9 @@ import Convex.Class (
   ValidationError (VExUnits),
   coverageData,
   env,
+  getSlot,
   poolState,
+  setTimeToValidRange,
  )
 import Convex.MockChain (applyTransaction, initialState)
 import Convex.NodeParams (NodeParams (..))
@@ -526,11 +528,18 @@ This uses 'applyTransaction' which performs complete ledger validation including
 validateTxM
   :: (MonadMockchain Era m)
   => NodeParams Era
-  -> SlotNo
   -> Tx Era
   -> UTxO Era
   -> m (ValidityReport, CoverageData)
-validateTxM params slot tx utxo = do
+validateTxM params tx utxo = do
+  -- Validate at a slot within the transaction's own validity interval (like
+  -- 'threatModelEnvs' does when replaying). Otherwise the ledger rejects the
+  -- transaction with 'OutsideValidityIntervalUTxO' (Phase 1) whenever the
+  -- current mockchain slot falls outside the interval, masking any Phase 2
+  -- script failure.
+  let txBodyContent = getTxBodyContent $ getTxBody tx
+  setTimeToValidRange (txValidityLowerBound txBodyContent, txValidityUpperBound txBodyContent)
+  slot <- getSlot
   let mockState = buildMockState params slot utxo
       NodeParams{npSystemStart, npEraHistory, npProtocolParameters} = params
   pure $ case applyTransaction params mockState tx of
