@@ -56,6 +56,7 @@ module Convex.ThreatModel.Cardano.Api (
 
   -- * Validation
   ValidityReport (..),
+  TxValidity (..),
   validateTx,
   validateTxM,
   buildMockState,
@@ -390,13 +391,25 @@ leqValue v v' = all ((<= 0) . snd) (toList $ v <> negateValue v')
 projectAda :: Value -> Value
 projectAda = lovelaceToValue . selectLovelace
 
+{- | The outcome of validating a transaction, mirroring the ledger's two-phase
+validation: Phase 2 (script execution) only runs when Phase 1 (structural
+ledger rules) passes, so no other combinations exist.
+-}
+data TxValidity
+  = -- | Phase 1 and Phase 2 both passed
+    Valid
+  | -- | Rejected by Phase 1 ledger rules; scripts were never executed
+    Phase1Invalid
+  | -- | Phase 1 passed, but a script rejected the transaction
+    Phase2Invalid
+  deriving stock (Ord, Eq, Show)
+
 {- | The result of validating a transaction. In case of failure, it includes a list
   of reasons.
 -}
 data ValidityReport = ValidityReport
   { errors :: [String]
-  , phase1Valid :: Bool
-  , phase2Valid :: Bool
+  , validity :: TxValidity
   }
   deriving stock (Ord, Eq, Show)
 
@@ -413,8 +426,7 @@ validateTx :: LedgerProtocolParameters Era -> Tx Era -> UTxO Era -> ValidityRepo
 validateTx pparams tx utxos =
   ValidityReport
     { errors = [show e | Left e <- Map.elems report]
-    , phase1Valid = True
-    , phase2Valid = all isRight (Map.elems report)
+    , validity = if all isRight (Map.elems report) then Valid else Phase2Invalid
     }
  where
   report =
@@ -495,24 +507,23 @@ buildMockState params slot utxo =
     & env . L.slot .~ slot
     & poolState . L.utxoState . L._UTxOState . _1 .~ toLedgerUTxO shelleyBasedEra utxo
 
-{- | Check if an ApplyTxError contains any Phase 2 (script execution) failures.
-Phase 2 failures are marked by 'ValidationTagMismatch' or 'CollectErrors'
-inside the UTXOS predicate failure. Everything else is Phase 1 (structural).
+{- | Check if an 'ApplyTxError' contains a Phase 2 (script execution) failure.
+
+The only genuine Phase 2 signal in an 'ApplyTxError' is 'ValidationTagMismatch':
+the ledger re-ran the scripts and their result contradicts the transaction's
+'IsValid' flag.
+
+'CollectErrors' is deliberately not treated as Phase 2: its cases
+('NoRedeemer', 'NoWitness', 'NoCostModel', 'BadTranslation') mean script
+execution never started, which is Phase 1 in nature. It is also unreachable
+here: the mockchain collects scripts in 'constructValidated' before 'applyTx'
+and returns such failures as 'MockchainError', never as 'ApplyTxError'.
 -}
 hasPhase2Failure :: ApplyTxError LedgerEra -> Bool
 hasPhase2Failure (ApplyTxError failures) = any isPhase2 failures
  where
-  isPhase2 (ConwayUtxowFailure utxowFail) = hasPhase2Utxow utxowFail
+  isPhase2 (ConwayUtxowFailure (UtxoFailure (UtxosFailure ValidationTagMismatch{}))) = True
   isPhase2 _ = False
-
-  hasPhase2Utxow (UtxoFailure utxoFail) = hasPhase2Utxo utxoFail
-  hasPhase2Utxow _ = False
-
-  hasPhase2Utxo (UtxosFailure utxosFail) = hasPhase2Utxos utxosFail
-  hasPhase2Utxo _ = False
-
-  hasPhase2Utxos ValidationTagMismatch{} = True
-  hasPhase2Utxos (CollectErrors _) = True
 
 {- | Validate a transaction with full Phase 1 + Phase 2 validation inside MockchainT.
 
@@ -554,13 +565,13 @@ validateTxM params tx utxo = do
                     npProtocolParameters
                     utxo
                     (getTxBody tx)
-           in (ValidityReport{errors, phase1Valid = True, phase2Valid = False}, covData)
+           in (ValidityReport{errors, validity = Phase2Invalid}, covData)
       | otherwise ->
-          (ValidityReport{errors = [show err], phase1Valid = False, phase2Valid = True}, mempty)
+          (ValidityReport{errors = [show err], validity = Phase1Invalid}, mempty)
     Left (MockchainError (VExUnits (Phase2Error (ScriptErrorEvaluationFailed DebugPlutusFailure{dpfEvaluationError, dpfExecutionLogs})))) ->
-      (ValidityReport{errors = [show dpfEvaluationError], phase1Valid = True, phase2Valid = False}, foldMap (coverageDataFromLogMsg . Text.unpack) dpfExecutionLogs)
-    Left err -> (ValidityReport{errors = [show err], phase1Valid = False, phase2Valid = True}, mempty)
-    Right (state', _) -> (ValidityReport{errors = [], phase1Valid = True, phase2Valid = True}, state' ^. coverageData)
+      (ValidityReport{errors = [show dpfEvaluationError], validity = Phase2Invalid}, foldMap (coverageDataFromLogMsg . Text.unpack) dpfExecutionLogs)
+    Left err -> (ValidityReport{errors = [show err], validity = Phase1Invalid}, mempty)
+    Right (state', _) -> (ValidityReport{errors = [], validity = Valid}, state' ^. coverageData)
 
 extractFromExUnits :: Map.Map k (Either ScriptExecutionError b) -> (CoverageData, [String])
 extractFromExUnits = foldMap fromScriptResult . Map.elems
