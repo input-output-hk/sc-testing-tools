@@ -83,6 +83,7 @@ module Convex.ThreatModel (
   shouldValidate,
   shouldNotValidate,
   ValidityReport (..),
+  TxValidity (..),
   validate,
 
   -- ** Querying the environment
@@ -218,7 +219,10 @@ data ThreatModelOutcome
     TMFailed String
   | -- | Preconditions were never met (all transactions skipped)
     TMSkipped
-  | -- | Phase 1 invalidation was hit (all envs that ran hit Phase 1)
+  | {- | No transaction ran to completion, and at least one was skipped
+    due to a Phase 1 invalidation (other transactions may have been
+    skipped because of unmet preconditions)
+    -}
     TMSkippedPhase1
   | -- | Threat model crashed with an exception
     TMError String
@@ -500,9 +504,9 @@ runThreatModelCheck signingWallet = go False False []
           Right rebalancedTx -> do
             (report, covData) <- validateTxM params rebalancedTx modifiedUtxo
             modifyMockChainState $ \s -> ((), s & coverageData %~ (<> covData))
-            if phase1Valid report
-              then checkInterp wallet mons' (k report)
-              else go b True mons' model envs
+            case validity report of
+              Phase1Invalid -> go b True mons' model envs
+              _ -> checkInterp wallet mons' (k report)
       Generate gen _shr k -> do
         a <- liftIO $ QC.generate gen
         checkInterp wallet mons' (k a)
@@ -589,9 +593,9 @@ runThreatModelCheckTraced signingWallet = go False False [] [] 0
                     , tmceModifiedUtxo = modifiedUtxo
                     , tmceValidation = Just report
                     }
-            if phase1Valid report
-              then checkInterp wallet (entry : acc') mons' (k report)
-              else go b True (entry : acc') mons' (envIdx + 1) model envs
+            case validity report of
+              Phase1Invalid -> go b True (entry : acc') mons' (envIdx + 1) model envs
+              _ -> checkInterp wallet (entry : acc') mons' (k report)
       Generate gen _shr k -> do
         a <- liftIO $ QC.generate gen
         checkInterp wallet acc' mons' (k a)
@@ -690,15 +694,21 @@ shouldValidateOrNot should txMod = do
       notN't
         | should = "" :: String
         | otherwise = "n't"
-  when (should /= phase2Valid validReport) $ do
-    let distinctErrors = nubOrd (errors validReport)
-        failureLine = printf "Test failure: the following transaction did%s validate" n't
-        messageLines =
-          failureLine
-            : [ "  Validation errors:\n  " <> intercalate "\n" (map ("  - " <>) distinctErrors)
-              | not (null distinctErrors)
-              ]
-    fail $ show $ info $ intercalate "\n" messageLines
+  case (validity validReport, should) of
+    (Valid, True) -> pure () -- expected valid, was valid
+    (Phase2Invalid, False) -> pure () -- expected rejection, the validator rejected it
+    -- Rejected by Phase 1 ledger rules: so the mutation
+    -- cannot be executed on this transaction. Skip, like a failed precondition;
+    (Phase1Invalid, _) -> Skip
+    _ -> do
+      let distinctErrors = nubOrd (errors validReport)
+          failureLine = printf "Test failure: the following transaction did%s validate" n't
+          messageLines =
+            failureLine
+              : [ "  Validation errors:\n  " <> intercalate "\n" (map ("  - " <>) distinctErrors)
+                | not (null distinctErrors)
+                ]
+      fail $ show $ info $ intercalate "\n" messageLines
   pre <- inPrecondition
   when pre $
     counterexampleTM $
