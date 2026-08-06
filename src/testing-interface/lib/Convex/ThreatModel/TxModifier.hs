@@ -28,6 +28,7 @@ import Data.Set qualified as Set
 import PlutusLedgerApi.Test.Examples (alwaysSucceedingNAryFunction)
 
 import Data.Aeson (object, (.=))
+import Data.Text (Text)
 import Data.Text qualified as Text
 
 import Convex.TestingInterface.Trace.TxSummary (renderAssetName, renderDatum, toValueSummary)
