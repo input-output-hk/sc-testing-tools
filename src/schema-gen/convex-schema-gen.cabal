@@ -61,3 +61,20 @@ test-suite convex-schema-gen-plain-test
     , base         >=4.14.0
     , tasty
     , tasty-hunit
+
+test-suite convex-schema-gen-discover-test
+  import:             lang
+  type:               exitcode-stdio-1.0
+  hs-source-dirs:     test-discover
+  main-is:            Spec.hs
+  other-modules:
+    Test
+    Tests
+
+  build-tool-depends: tasty-discover:tasty-discover
+  build-depends:
+    , base                    >=4.14.0
+    , convex-tasty-streaming
+    , tasty
+    , tasty-discover
+    , tasty-hunit
