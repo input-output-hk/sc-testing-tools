@@ -630,12 +630,13 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
   let RunOptions{mcOptions = Options{coverageRef, params}} = opts
   result <- runTestingMonadT params $ do
     initialState <- runInitialization @state opts
+    initTxs <- getTxs
+    state0 <- get
 
     (finalState, transitions) <- runActionsTraced opts 10 initialState
 
     allTxs <- getTxs
-    let state0 = initialStateFor params Wallet.initialUTxOs
-        envs = threatModelEnvs params (reverse allTxs) state0
+    let envs = threatModelEnvs params (drop (length initTxs) $ reverse allTxs) state0
     existingResults <- case mGetTmResultsRef of
       Just getTmRef -> liftIO $ do
         tmRef <- getTmRef
@@ -717,12 +718,13 @@ positiveTestFast opts mGetTmResultsRef tms evs = do
   let RunOptions{mcOptions = Options{coverageRef, params}} = opts
   result <- runTestingMonadT params $ do
     initialState <- runInitialization @state opts
+    initTxs <- getTxs
+    state0 <- get
 
     finalState <- runActions opts 10 initialState
 
     allTxs <- getTxs
-    let state0 = initialStateFor params Wallet.initialUTxOs
-        envs = threatModelEnvs params (reverse allTxs) state0
+    let envs = threatModelEnvs params (drop (length initTxs) $ reverse allTxs) state0
     existingResults <- case mGetTmResultsRef of
       Just getTmRef -> liftIO $ do
         tmRef <- getTmRef
