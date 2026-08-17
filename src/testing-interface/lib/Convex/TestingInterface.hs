@@ -1,6 +1,7 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE LambdaCase #-}
@@ -91,10 +92,13 @@ import Cardano.Ledger.Core qualified as L
 import Control.Exception (SomeException, catch, throwIO, try)
 import Control.Lens ((&), (.~), (^.))
 import Control.Monad.Except (ExceptT, runExceptT)
+import Control.Monad.Reader (ReaderT (..))
+import Control.Monad.State.Class (MonadState, get)
 import Control.Monad.Trans (MonadTrans (..))
-import Convex.Class (MonadBlockchain, MonadMockchain, coverageData, getMockChainState, getTxs, getUtxo)
+import Convex.Class (MonadBlockchain, MonadMockchain, MonadUtxoQuery, coverageData, getMockChainState, getTxs, getUtxo)
 import Convex.CoinSelection (BalanceTxError (..), BalancingError (..), coverageFromBalanceTxError)
-import Convex.MockChain (MockChainState (..), MockchainT, fromLedgerUTxO, initialStateFor, runMockchainIO, runMockchainT)
+import Convex.CoinSelection.Class (BalancingT (..), MonadBalance)
+import Convex.MockChain (MockChainState (..), MockchainT (..), fromLedgerUTxO, initialStateFor, runMockchainIO, runMockchainT)
 import Convex.MockChain.Defaults qualified as Defaults
 import Convex.MonadLog (MonadLog)
 import Convex.NodeParams (NodeParams (..))
@@ -272,10 +276,14 @@ newtype TestingMonadT m a = TestingMonadT
     , Monad
     , C.MonadError (BalanceTxError C.ConwayEra)
     , C.MonadIO
+    , MonadState (MockChainState C.ConwayEra)
     , MonadLog
     , MonadBlockchain C.ConwayEra
     , MonadMockchain C.ConwayEra
+    , MonadUtxoQuery
     )
+
+deriving via (BalancingT (TestingMonadT m)) instance (Monad m) => MonadBalance C.ConwayEra (TestingMonadT m)
 
 runTestingMonadT
   :: NodeParams C.ConwayEra
