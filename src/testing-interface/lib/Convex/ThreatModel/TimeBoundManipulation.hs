@@ -121,6 +121,13 @@ timeBoundManipulationWith earlySlot@(C.SlotNo slotNum) = Named ("Time Bound Mani
       , "A secure validator would REJECT this because the lower bound is too early."
       ]
 
+  counterexampleTM $
+    paragraph
+      [ "Note: this check cannot tell whether the validator has any time-dependent logic at all."
+      , "If it never relies on the validity range for correctness, a FAIL here is expected"
+      , "and does not indicate a real vulnerability -- review the script before treating it as one."
+      ]
+
   -- The attack: widen the lower bound to an early slot
   -- If the script checks lower_bound >= deadline, this should FAIL
   -- If the script only checks upper_bound >= deadline, this will PASS (vulnerability!)
