@@ -831,7 +831,7 @@ instance ThreatModelsFor MultisigV2Model where
   -- (inverted pass/fail, quiet output)
   expectedVulnerabilities =
     [ unprotectedScriptOutput
-    , tokenForgeryAttack multisigV2MintScript validationTokenName
+    , tokenForgeryAttack
     ]
 
 -- ----------------------------------------------------------------------------

@@ -19,6 +19,7 @@ module Convex.ThreatModel.Cardano.Api (
 
   -- * Redeemer and script data
   redeemerOfTxIn,
+  mintedPlutusPolicies,
   recomputeScriptData,
   emptyTxBodyScriptData,
   addScriptData,
@@ -92,9 +93,9 @@ module Convex.ThreatModel.Cardano.Api (
 import Cardano.Api
 
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
-import Cardano.Ledger.Alonzo.PParams (getLanguageView, ppCollateralPercentageL)
+import Cardano.Ledger.Alonzo.PParams (ppCollateralPercentageL)
 import Cardano.Ledger.Alonzo.Scripts qualified as Ledger
-import Cardano.Ledger.Alonzo.Tx (ScriptIntegrity (..), hashScriptIntegrity)
+import Cardano.Ledger.Alonzo.Tx (hashScriptIntegrity, mkScriptIntegrity)
 import Cardano.Ledger.Alonzo.TxBody qualified as Ledger
 import Cardano.Ledger.Alonzo.TxWits qualified as Ledger
 import Cardano.Ledger.Api.Era qualified as Ledger (eraProtVerLow)
@@ -107,6 +108,7 @@ import Cardano.Ledger.Keys (WitVKey (..), coerceKeyRole, hashKey)
 import Cardano.Ledger.Mary.Value qualified as Mary
 import Cardano.Ledger.Plutus.Language qualified as Plutus
 import Cardano.Ledger.Shelley.API.Mempool (ApplyTxError (..))
+import Cardano.Ledger.State (getScriptsHashesNeeded, getScriptsNeeded, getScriptsProvided)
 import Cardano.Slotting.Slot ()
 import Cardano.Slotting.Time (SlotLength, mkSlotLength)
 import Control.Lens ((&), (.~), (^.), _1)
@@ -181,6 +183,57 @@ redeemerOfTxIn tx txIn = redeemer
   idx = case Ledger.indexOf (Ledger.AsItem (toShelleyTxIn txIn)) inputs of
     SJust idx' -> idx'
     _ -> error "The impossible happened!"
+
+{- | Plutus minting policies (with their minted/burned assets and the redeemer used) that
+the given transaction already exercises. Each policy's script is resolved either from the
+transaction's own witness set or, for reference-script mints, from a UTxO among the
+chain state passed in. Native-script policies, and policies whose script can't be
+resolved, are omitted.
+-}
+mintedPlutusPolicies :: Tx Era -> UTxO Era -> [(PolicyId, PolicyAssets, ScriptInAnyLang, ScriptData)]
+mintedPlutusPolicies tx (UTxO utxoMap) =
+  mapMaybe resolve (zip [0 ..] (Map.toAscList policyMap))
+ where
+  Tx (ShelleyTxBody _ Conway.ConwayTxBody{Conway.ctbMint = Mary.MultiAsset policyMap} witnessScripts scriptData _ _) _ = tx
+
+  redeemerAt :: Word32 -> Maybe ScriptData
+  redeemerAt idx = case scriptData of
+    TxBodyNoScriptData -> Nothing
+    TxBodyScriptData _ _ (Ledger.Redeemers rdmrs) ->
+      getScriptData . fromAlonzoData . fst <$> Map.lookup (Conway.ConwayMinting (Ledger.AsIx idx)) rdmrs
+
+  fromAlonzoScript :: Ledger.Script LedgerEra -> Maybe ScriptInAnyLang
+  fromAlonzoScript = \case
+    Ledger.NativeScript _ -> Nothing
+    Ledger.PlutusScript ps -> Just $ case ps of
+      Conway.ConwayPlutusV1 (Plutus.Plutus (Plutus.PlutusBinary bs)) ->
+        toScriptInAnyLang $ PlutusScript PlutusScriptV1 (PlutusScriptSerialised bs)
+      Conway.ConwayPlutusV2 (Plutus.Plutus (Plutus.PlutusBinary bs)) ->
+        toScriptInAnyLang $ PlutusScript PlutusScriptV2 (PlutusScriptSerialised bs)
+      Conway.ConwayPlutusV3 (Plutus.Plutus (Plutus.PlutusBinary bs)) ->
+        toScriptInAnyLang $ PlutusScript PlutusScriptV3 (PlutusScriptSerialised bs)
+
+  candidateScripts :: [ScriptInAnyLang]
+  candidateScripts =
+    mapMaybe fromAlonzoScript witnessScripts
+      <> [ script
+         | txout <- Map.elems utxoMap
+         , ReferenceScript _ script <- [referenceScriptOfTxOut txout]
+         ]
+
+  hashOf :: ScriptInAnyLang -> ScriptHash
+  hashOf (ScriptInAnyLang _ s) = hashScript s
+
+  resolve :: (Word32, (Mary.PolicyID, Map.Map Mary.AssetName Integer)) -> Maybe (PolicyId, PolicyAssets, ScriptInAnyLang, ScriptData)
+  resolve (idx, (Mary.PolicyID ledgerScriptHash, assetMap)) = do
+    -- fromMaryPolicyID isn't re-exported from Cardano.Api in every version we support
+    -- (it's an internal helper that only became public later), so convert manually.
+    let scriptHash = fromShelleyScriptHash ledgerScriptHash
+        policyId = PolicyId scriptHash
+    redeemer <- redeemerAt idx
+    scriptInAnyLang <- listToMaybe [s | s <- candidateScripts, hashOf s == scriptHash]
+    let assets = PolicyAssets $ Map.fromList [(UnsafeAssetName (SBS.fromShort n), Quantity q) | (Mary.AssetName n, q) <- Map.toList assetMap]
+    pure (policyId, assets, scriptInAnyLang, redeemer)
 
 paymentCredentialToAddressAny :: PaymentCredential -> AddressAny
 paymentCredentialToAddressAny t =
@@ -661,7 +714,7 @@ rebalanceAndSign wallet tx utxo = do
         Left err -> pure (Left err)
         Right txWithCollateral -> do
           -- Recalculate script integrity hash (after updating execution units)
-          let finalTx = recalculateScriptIntegrityHash pparams txWithCollateral
+          let finalTx = recalculateScriptIntegrityHash utxo pparams txWithCollateral
 
           -- Re-sign (strip old signatures and add new one)
           let Tx finalBody _ = finalTx
@@ -756,38 +809,17 @@ The script integrity hash commits to:
 After modifying a transaction (adding/removing inputs, changing redeemers/datums),
 this hash becomes stale and must be recalculated.
 -}
-recalculateScriptIntegrityHash :: LedgerProtocolParameters Era -> Tx Era -> Tx Era
-recalculateScriptIntegrityHash pparams (Tx (ShelleyTxBody era body scripts scriptData auxData validity) wits) =
+recalculateScriptIntegrityHash :: UTxO Era -> LedgerProtocolParameters Era -> Tx Era -> Tx Era
+recalculateScriptIntegrityHash utxo pparams tx@(Tx (ShelleyTxBody era body scripts scriptData auxData validity) wits) =
   let
-    -- Extract redeemers and datums from scriptData
-    (redeemers, datums) = case scriptData of
-      TxBodyNoScriptData -> (Ledger.Redeemers mempty, Ledger.TxDats mempty)
-      TxBodyScriptData _ dats rdmrs -> (rdmrs, dats)
-
-    -- Get the protocol parameters
     pp = unLedgerProtocolParameters pparams
-
-    -- Determine which languages are used by examining the scripts in the transaction
-    usedLangs =
-      Set.fromList
-        [ lang
-        | script <- scripts
-        , Just lang <- [getScriptLanguage script]
-        ]
-
-    -- Get LangDepView for each used language
-    langs =
-      Set.fromList
-        [ getLanguageView pp lang
-        | lang <- Set.toList usedLangs
-        ]
+    ledgerUtxo = toLedgerUTxO shelleyBasedEra utxo
+    ShelleyTx _ ledgerTx = tx
+    scriptsProvided = getScriptsProvided ledgerUtxo ledgerTx
+    scriptsNeeded = getScriptsHashesNeeded (getScriptsNeeded ledgerUtxo body)
 
     -- Compute new script integrity hash
-    -- If no languages are used (e.g., no Plutus scripts), set to SNothing
-    newHash =
-      if Set.null langs
-        then SNothing
-        else SJust $ hashScriptIntegrity (ScriptIntegrity redeemers datums langs)
+    newHash = hashScriptIntegrity <$> mkScriptIntegrity pp ledgerTx scriptsProvided scriptsNeeded
 
     -- Update the body with new hash
     body' = body{Conway.ctbScriptIntegrityHash = newHash}
