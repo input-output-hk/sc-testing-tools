@@ -174,7 +174,11 @@ class (Show state, Eq state, Show (Action state), ToJSON state) => TestingInterf
   -}
   data Action state
 
-  -- | The initial state of the model, before any actions are performed.
+  {- | The initial state of the model, before any actions are performed.
+  Any transactions submitted during initialization will not be subjected to tests.
+  If you want to test the initialization transactions, you can add an initialization action,
+  and keep the 'initialize' method minimal.
+  -}
   initialize :: (MonadIO m) => TestingMonadT m state
 
   {- | Generate a random action given the current state.
@@ -673,12 +677,13 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
   let RunOptions{mcOptions = Options{coverageRef, params}} = opts
   result <- runTestingMonadT params $ do
     initialState <- runInitialization @state opts
+    initTxs <- getTxs
+    state0 <- get
 
     (finalState, transitions) <- runActionsTraced opts 10 initialState
 
     allTxs <- getTxs
-    let state0 = initialStateFor params Wallet.initialUTxOs
-        envs = threatModelEnvs params (reverse allTxs) state0
+    let envs = threatModelEnvs params (drop (length initTxs) $ reverse allTxs) state0
     existingResults <- case mGetTmResultsRef of
       Just getTmRef -> liftIO $ do
         tmRef <- getTmRef
@@ -760,12 +765,13 @@ positiveTestFast opts mGetTmResultsRef tms evs = do
   let RunOptions{mcOptions = Options{coverageRef, params}} = opts
   result <- runTestingMonadT params $ do
     initialState <- runInitialization @state opts
+    initTxs <- getTxs
+    state0 <- get
 
     finalState <- runActions opts 10 initialState
 
     allTxs <- getTxs
-    let state0 = initialStateFor params Wallet.initialUTxOs
-        envs = threatModelEnvs params (reverse allTxs) state0
+    let envs = threatModelEnvs params (drop (length initTxs) $ reverse allTxs) state0
     existingResults <- case mGetTmResultsRef of
       Just getTmRef -> liftIO $ do
         tmRef <- getTmRef
