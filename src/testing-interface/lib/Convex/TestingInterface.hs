@@ -1,6 +1,7 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE LambdaCase #-}
@@ -91,10 +92,13 @@ import Cardano.Ledger.Core qualified as L
 import Control.Exception (SomeException, catch, throwIO, try)
 import Control.Lens ((&), (.~), (^.))
 import Control.Monad.Except (ExceptT, runExceptT)
+import Control.Monad.Reader (ReaderT (..))
+import Control.Monad.State.Class (MonadState, get)
 import Control.Monad.Trans (MonadTrans (..))
-import Convex.Class (MonadBlockchain, MonadMockchain, coverageData, getMockChainState, getTxs, getUtxo)
+import Convex.Class (MonadBlockchain, MonadMockchain, MonadUtxoQuery, coverageData, getMockChainState, getTxs, getUtxo)
 import Convex.CoinSelection (BalanceTxError (..), BalancingError (..), coverageFromBalanceTxError)
-import Convex.MockChain (MockChainState (..), MockchainT, fromLedgerUTxO, initialStateFor, runMockchainIO, runMockchainT)
+import Convex.CoinSelection.Class (BalancingT (..), MonadBalance)
+import Convex.MockChain (MockChainState (..), MockchainT (..), fromLedgerUTxO, initialStateFor, runMockchainIO, runMockchainT)
 import Convex.MockChain.Defaults qualified as Defaults
 import Convex.MonadLog (MonadLog)
 import Convex.NodeParams (NodeParams (..))
@@ -164,7 +168,11 @@ class (Show state, Eq state, Show (Action state), ToJSON state) => TestingInterf
   -}
   data Action state
 
-  -- | The initial state of the model, before any actions are performed.
+  {- | The initial state of the model, before any actions are performed.
+  Any transactions submitted during initialization will not be subjected to tests.
+  If you want to test the initialization transactions, you can add an initialization action,
+  and keep the 'initialize' method minimal.
+  -}
   initialize :: (MonadIO m) => TestingMonadT m state
 
   {- | Generate a random action given the current state.
@@ -272,10 +280,14 @@ newtype TestingMonadT m a = TestingMonadT
     , Monad
     , C.MonadError (BalanceTxError C.ConwayEra)
     , C.MonadIO
+    , MonadState (MockChainState C.ConwayEra)
     , MonadLog
     , MonadBlockchain C.ConwayEra
     , MonadMockchain C.ConwayEra
+    , MonadUtxoQuery
     )
+
+deriving via (BalancingT (TestingMonadT m)) instance (Monad m) => MonadBalance C.ConwayEra (TestingMonadT m)
 
 runTestingMonadT
   :: NodeParams C.ConwayEra
@@ -630,12 +642,13 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
   let RunOptions{mcOptions = Options{coverageRef, params}} = opts
   result <- runTestingMonadT params $ do
     initialState <- runInitialization @state opts
+    initTxs <- getTxs
+    state0 <- get
 
     (finalState, transitions) <- runActionsTraced opts 10 initialState
 
     allTxs <- getTxs
-    let state0 = initialStateFor params Wallet.initialUTxOs
-        envs = threatModelEnvs params (reverse allTxs) state0
+    let envs = threatModelEnvs params (drop (length initTxs) $ reverse allTxs) state0
     existingResults <- case mGetTmResultsRef of
       Just getTmRef -> liftIO $ do
         tmRef <- getTmRef
@@ -717,12 +730,13 @@ positiveTestFast opts mGetTmResultsRef tms evs = do
   let RunOptions{mcOptions = Options{coverageRef, params}} = opts
   result <- runTestingMonadT params $ do
     initialState <- runInitialization @state opts
+    initTxs <- getTxs
+    state0 <- get
 
     finalState <- runActions opts 10 initialState
 
     allTxs <- getTxs
-    let state0 = initialStateFor params Wallet.initialUTxOs
-        envs = threatModelEnvs params (reverse allTxs) state0
+    let envs = threatModelEnvs params (drop (length initTxs) $ reverse allTxs) state0
     existingResults <- case mGetTmResultsRef of
       Just getTmRef -> liftIO $ do
         tmRef <- getTmRef
