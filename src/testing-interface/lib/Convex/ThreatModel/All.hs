@@ -16,14 +16,12 @@ import Convex.ThreatModel.RedeemerAssetSubstitution (redeemerAssetSubstitution)
 import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
 import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
 import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
-import Convex.ThreatModel.TokenForgery (simpleAlwaysSucceedsMintingPolicyV2, simpleTestAssetName, tokenForgeryAttack)
+import Convex.ThreatModel.TokenForgery (tokenForgeryAttack)
 import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
 import Convex.ThreatModel.ValueUnderpayment (valueUnderpaymentAttack)
 import Data.Maybe (mapMaybe)
 
-{- | A list of all the threat models that don't take parameters.
-Almost all threat models in this library have versions without parameters, except @TokenForgery@.
--}
+-- | A list of all the threat models that don't take parameters.
 allThreatModels :: [ThreatModel ()]
 allThreatModels =
   [ datumListBloatAttack
@@ -42,7 +40,7 @@ allThreatModels =
   , selfReferenceInjection
   , signatoryRemoval
   , timeBoundManipulation
-  , tokenForgeryAttack simpleAlwaysSucceedsMintingPolicyV2 simpleTestAssetName
+  , tokenForgeryAttack
   , unprotectedScriptOutput
   , valueUnderpaymentAttack
   ]
