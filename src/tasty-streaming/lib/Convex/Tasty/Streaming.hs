@@ -30,7 +30,8 @@ import Convex.Tasty.Streaming.TMSummary (
 import Convex.Tasty.Streaming.TreeMap (buildTestMap)
 import Convex.Tasty.Streaming.Types
 import Data.Aeson (encode)
-import Data.ByteString.Lazy.Char8 qualified as BL8
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as BL
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
@@ -328,7 +329,7 @@ streamingJsonReporter = TestReporter
 -- | Emit a single NDJSON event line to stdout
 emitEvent :: Event -> IO ()
 emitEvent evt = do
-  BL8.putStrLn (encode evt)
+  BS.hPut stdout (BL.toStrict (encode evt) <> "\n")
   hFlush stdout
 
 -- | Check if a Result is a success
