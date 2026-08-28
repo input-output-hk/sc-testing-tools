@@ -326,9 +326,11 @@ streamingJsonReporter = TestReporter
           emit $ SuiteDone passed failed totalTime
           pure (failed == 0)
 
--- | Emit a single NDJSON event line to stdout
+-- | Emit a single NDJSON event line to stdout.
 emitEvent :: Event -> IO ()
 emitEvent evt = do
+  -- This was changed from the original code to print the complete JSON line in one
+  -- write to stdout, avoiding interleaving/mixing of event output when running in parallel.
   BS.hPut stdout (BL.toStrict (encode evt) <> "\n")
   hFlush stdout
 
