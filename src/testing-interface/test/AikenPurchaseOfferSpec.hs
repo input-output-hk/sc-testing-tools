@@ -90,7 +90,7 @@ import Convex.Tasty.QuickCheck (
   testProperty,
  )
 import Convex.Tasty.QuickCheck qualified as QC
-import Convex.ThreatModel.TokenForgery (simpleAlwaysSucceedsMintingPolicyV2, simpleTestAssetName, tokenForgeryAttack)
+import Convex.ThreatModel.TokenForgery (tokenForgeryAttack)
 import Data.Aeson (ToJSON (..))
 import System.IO.Unsafe (unsafePerformIO)
 import Test.QuickCheck.Monadic (monadicIO, monitor, run)
@@ -756,7 +756,7 @@ instance TestingInterface PurchaseOfferModel where
       )
 
 instance ThreatModelsFor PurchaseOfferModel where
-  expectedVulnerabilities = [redeemerAssetSubstitution, tokenForgeryAttack simpleAlwaysSucceedsMintingPolicyV2 simpleTestAssetName]
+  expectedVulnerabilities = [redeemerAssetSubstitution, tokenForgeryAttack]
 
 -- ----------------------------------------------------------------------------
 -- Test tree

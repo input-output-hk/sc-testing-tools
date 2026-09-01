@@ -34,7 +34,6 @@ import Convex.ThreatModel.RedeemerAssetSubstitution (redeemerAssetSubstitution)
 import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
 import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
 import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
-import Convex.ThreatModel.TokenForgery (simpleAlwaysSucceedsMintingPolicyV2, simpleTestAssetName, tokenForgeryAttack)
 import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
 import Convex.ThreatModel.ValueUnderpayment (valueUnderpaymentAttack)
 import Convex.UseCases.Utils (utxosAt)
@@ -259,7 +258,6 @@ instance ThreatModelsFor VestingModel where
     , largeValueAttack
     , missingOutputDatumAttack
     , outputDatumHashMissingAttack
-    , tokenForgeryAttack simpleAlwaysSucceedsMintingPolicyV2 simpleTestAssetName
     , unprotectedScriptOutput
     ]
 

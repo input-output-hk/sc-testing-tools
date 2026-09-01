@@ -15,6 +15,7 @@ import Cardano.Ledger.Api.Era qualified as Ledger
 import Cardano.Ledger.Binary qualified as CBOR
 import Cardano.Ledger.Conway.Scripts qualified as Conway
 import Cardano.Ledger.Conway.TxBody qualified as Conway
+import Cardano.Ledger.Core qualified as Ledger
 import Cardano.Ledger.Keys (coerceKeyRole)
 import Cardano.Ledger.Mary.Value qualified as Mary
 import Data.Coerce
@@ -610,13 +611,26 @@ applyTxMod tx utxos (AddPlutusScriptMint script assetName quantity redeemer) =
         oldIdx + 1
     | otherwise = oldIdx
 
-  -- Add the script to the scripts list
+  -- Add the script to the scripts list, unless it's already resolvable --
+  -- either witnessed inline already, or available via one of the tx's
+  -- reference inputs -- in which case witnessing it again makes the ledger
+  -- reject the tx with ExtraneousScriptWitnessesUTXOW (Phase 1), before the
+  -- minting policy itself is ever exercised.
   scriptInEra =
     ScriptInEra
       scriptLanguageInEra
       (PlutusScript plutusScriptVersion script)
   newScript = toShelleyScript @Era scriptInEra
-  scripts' = scripts ++ [newScript]
+  alreadyResolvable =
+    ledgerPolicyId `elem` map (Mary.PolicyID . Ledger.hashScript) scripts
+      || or
+        [ scriptInAnyLangHash s == scriptHash
+        | refIn <- Set.toList ctbReferenceInputs
+        , Just txOut <- [Map.lookup (fromShelleyTxIn refIn) (unUTxO utxos)]
+        , ReferenceScript _ s <- [referenceScriptOfTxOut txOut]
+        ]
+  scriptInAnyLangHash (ScriptInAnyLang _ s) = hashScript s
+  scripts' = if alreadyResolvable then scripts else scripts ++ [newScript]
 
   -- Add the minting redeemer with the correct index
   scriptData' =
