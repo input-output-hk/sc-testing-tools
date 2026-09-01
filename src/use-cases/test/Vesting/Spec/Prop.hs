@@ -249,6 +249,7 @@ instance ThreatModelsFor VestingModel where
     , redeemerAssetSubstitution
     , selfReferenceInjection
     , signatoryRemoval
+    , timeBoundManipulation
     , valueUnderpaymentAttack
     ]
   expectedVulnerabilities =
@@ -257,7 +258,6 @@ instance ThreatModelsFor VestingModel where
     , largeValueAttack
     , missingOutputDatumAttack
     , outputDatumHashMissingAttack
-    , timeBoundManipulation
     , unprotectedScriptOutput
     ]
 

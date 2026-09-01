@@ -64,6 +64,18 @@ fn time_elapsed(range, deadline) {
 This threat model tests by taking a valid transaction and widening its lower
 bound to slot 0. If the script still validates, it doesn't properly check
 that the transaction cannot be submitted early.
+
+Skips (via 'failPrecondition') transactions whose validity range is already
+fully open ([-inf, +inf]): such a transaction never declared any time
+constraint in the first place, so widening its lower bound further proves
+nothing about the validator's time-check logic. Without this precondition,
+a transaction that's unrelated to the script under test (e.g. a setup/deposit
+transaction earlier in an action sequence, which trivially "still validates"
+after any validity-range change since no relevant script runs against it) can
+report a false "vulnerability", and worse, can mask a real one: threat model
+checking stops at the first transaction that fails to reject the mutation, so
+an early false positive from an irrelevant transaction prevents a later,
+actually-relevant transaction from ever being tested.
 -}
 module Convex.ThreatModel.TimeBoundManipulation (
   timeBoundManipulation,
@@ -99,6 +111,13 @@ a transaction valid at that earlier time.
 -}
 timeBoundManipulationWith :: SlotNo -> ThreatModel ()
 timeBoundManipulationWith earlySlot@(C.SlotNo slotNum) = Named ("Time Bound Manipulation (slot " ++ show slotNum ++ ")") $ do
+  tx <- originalTx
+  let bodyContent = C.getTxBodyContent (C.getTxBody tx)
+  case (C.txValidityLowerBound bodyContent, C.txValidityUpperBound bodyContent) of
+    (C.TxValidityNoLowerBound, C.TxValidityUpperBound _ Nothing) ->
+      failPrecondition "Transaction's validity range is already fully open ([-inf, +inf]) -- no time constraint is declared to test"
+    _ -> pure ()
+
   counterexampleTM $
     paragraph
       [ "Testing for Time Bound Manipulation vulnerability."

@@ -396,9 +396,12 @@ propRunActionsWithOptions groupName opts =
                           <> threatModelGroup getTmResultsRef filteredTms
                           <> expectedVulnGroup getTmResultsRef evs
  where
-  negativeTestTree recorder getNegRef = case disableNegativeTesting opts of
-    Nothing -> testProperty "Negative tests" (negativeTest @state opts groupName recorder getNegRef)
-    Just reason -> ignoreTestBecause reason $ testProperty "Negative tests" (negativeTest @state opts groupName recorder getNegRef)
+  negativeTestTree :: (HasCallStack) => TraceRecorder -> IO (IORef Int) -> TestTree
+  negativeTestTree recorder getNegRef =
+    withFrozenCallStack $
+      case disableNegativeTesting opts of
+        Nothing -> testProperty "Negative tests" (negativeTest @state opts groupName recorder getNegRef)
+        Just reason -> ignoreTestBecause reason $ testProperty "Negative tests" (negativeTest @state opts groupName recorder getNegRef)
 
   threatModelGroup _ [] = []
   threatModelGroup getTmResultsRef tms' =
