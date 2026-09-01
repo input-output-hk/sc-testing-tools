@@ -16,6 +16,8 @@ import Cardano.Ledger.Alonzo.Scripts qualified as Ledger (AsIx (AsIx))
 import Cardano.Ledger.Alonzo.TxWits qualified as Ledger (Redeemers (Redeemers))
 import Cardano.Ledger.Conway.Scripts qualified as Conway (ConwayPlutusPurpose (ConwaySpending))
 import Convex.TestingInterface.Trace (
+  AddressLabeler (..),
+  AddressType (..),
   AssetSummary (..),
   RedeemerTag (..),
   RedeemerTagger (..),
@@ -38,22 +40,25 @@ import PlutusTx (Data (..))
 {- | Summarize a full transaction, resolving inputs from the given UTxO set.
 The 'RedeemerTagger' is applied to each script input's parsed redeemer
 'Data' to optionally produce Tier 2 ('tisRedeemerKind' /
-'tisRedeemerPayload') labels. Pass 'mempty' for Tier 1-only behaviour.
+'tisRedeemerPayload') labels. Pass 'mempty' for Tier 1-only behaviour. The
+'AddressLabeler' is applied to every address's credential hash to produce
+'tisAddressLabel' / 'tosAddressLabel'.
 -}
-summarizeTx :: RedeemerTagger -> C.Tx C.ConwayEra -> C.UTxO C.ConwayEra -> TxSummary
-summarizeTx tagger tx utxo =
+summarizeTx :: RedeemerTagger -> AddressLabeler -> C.Tx C.ConwayEra -> C.UTxO C.ConwayEra -> TxSummary
+summarizeTx tagger labeler tx utxo =
   let body = C.getTxBody tx
       txId = C.getTxId body
-      summary = summarizeTxBody tagger body utxo
+      summary = summarizeTxBody tagger labeler body utxo
    in summary{txsId = Just (C.serialiseToRawBytesHexText txId)}
 
 {- | Summarize a transaction body, resolving inputs from the given UTxO set.
 Spend redeemers are read from the body's 'C.TxBodyScriptData' (always
 available on a built 'C.TxBody') and surfaced per script input. The
-'RedeemerTagger' supplies the optional Tier 2 labels.
+'RedeemerTagger' supplies the optional Tier 2 labels, and the
+'AddressLabeler' supplies the optional friendly address labels.
 -}
-summarizeTxBody :: RedeemerTagger -> C.TxBody C.ConwayEra -> C.UTxO C.ConwayEra -> TxSummary
-summarizeTxBody tagger body (C.UTxO utxoMap) =
+summarizeTxBody :: RedeemerTagger -> AddressLabeler -> C.TxBody C.ConwayEra -> C.UTxO C.ConwayEra -> TxSummary
+summarizeTxBody tagger labeler body (C.UTxO utxoMap) =
   let content = C.getTxBodyContent body
 
       -- Spend redeemers keyed by input position (matches 'C.txIns' order).
@@ -64,13 +69,13 @@ summarizeTxBody tagger body (C.UTxO utxoMap) =
       -- inputs are unresolved and filtered out.
       inputTxIns = C.txIns content
       inputs =
-        [ mkInputSummary tagger ix txIn txOut (Map.lookup ix redeemers)
+        [ mkInputSummary tagger labeler ix txIn txOut (Map.lookup ix redeemers)
         | (ix, (txIn, _)) <- zip [0 ..] inputTxIns
         , Just txOut <- [Map.lookup txIn utxoMap]
         ]
 
       -- Outputs
-      outputs = zipWith (mkOutputSummary (C.getTxId body)) [0 ..] (C.txOuts content)
+      outputs = zipWith (mkOutputSummary labeler (C.getTxId body)) [0 ..] (C.txOuts content)
 
       -- Fee
       fee = case C.txFee content of
@@ -106,10 +111,11 @@ summarizeTxBody tagger body (C.UTxO utxoMap) =
 {- | Build an input summary from its (0-based) position in the tx inputs, the
 resolved 'C.TxOut', and the optional spend redeemer's 'C.ScriptData'.
 The 'RedeemerTagger' is applied to the parsed Plutus 'Data' of the
-redeemer to produce Tier 2 labels when present.
+redeemer to produce Tier 2 labels when present. The 'AddressLabeler' is
+applied to the address's credential hash to produce 'tisAddressLabel'.
 -}
-mkInputSummary :: RedeemerTagger -> Word32 -> C.TxIn -> C.TxOut C.CtxUTxO C.ConwayEra -> Maybe C.ScriptData -> TxInputSummary
-mkInputSummary tagger _ix txIn (C.TxOut addr val _datum _refScript) mRedeemer =
+mkInputSummary :: RedeemerTagger -> AddressLabeler -> Word32 -> C.TxIn -> C.TxOut C.CtxUTxO C.ConwayEra -> Maybe C.ScriptData -> TxInputSummary
+mkInputSummary tagger labeler _ix txIn (C.TxOut addr val _datum _refScript) mRedeemer =
   let mTag = do
         sd <- mRedeemer
         let d = C.toPlutusData sd
@@ -117,6 +123,8 @@ mkInputSummary tagger _ix txIn (C.TxOut addr val _datum _refScript) mRedeemer =
    in TxInputSummary
         { tisUtxo = renderTxIn txIn
         , tisAddress = renderAddressInEra addr
+        , tisAddressType = addressType addr
+        , tisAddressLabel = addressCredentialHashHex addr >>= applyAddressLabeler labeler
         , tisValue = toValueSummary (C.txOutValueToValue val)
         , tisRedeemerRaw = redeemerToHex <$> mRedeemer
         , tisRedeemerConstr = mRedeemer >>= redeemerConstrIx
@@ -124,12 +132,17 @@ mkInputSummary tagger _ix txIn (C.TxOut addr val _datum _refScript) mRedeemer =
         , tisRedeemerPayload = mTag >>= rtPayload
         }
 
--- | Build an output summary from a TxId, an index, and a TxOut.
-mkOutputSummary :: C.TxId -> Int -> C.TxOut C.CtxTx C.ConwayEra -> TxOutputSummary
-mkOutputSummary txId idx (C.TxOut addr val datum _refScript) =
+{- | Build an output summary from a TxId, an index, and a TxOut. The
+'AddressLabeler' is applied to the address's credential hash to produce
+'tosAddressLabel'.
+-}
+mkOutputSummary :: AddressLabeler -> C.TxId -> Int -> C.TxOut C.CtxTx C.ConwayEra -> TxOutputSummary
+mkOutputSummary labeler txId idx (C.TxOut addr val datum _refScript) =
   TxOutputSummary
     { tosUtxo = renderTxIn (C.TxIn txId (C.TxIx (fromIntegral idx)))
     , tosAddress = renderAddressInEra addr
+    , tosAddressType = addressType addr
+    , tosAddressLabel = addressCredentialHashHex addr >>= applyAddressLabeler labeler
     , tosValue = toValueSummary (C.txOutValueToValue val)
     , tosDatum = renderDatum datum
     }
@@ -186,6 +199,28 @@ renderAddressInEra (C.AddressInEra C.ByronAddressInAnyEra{} addr) = Text.pack (s
 -- | Render a Shelley address as bech32 text.
 renderAddress :: C.Address C.ShelleyAddr -> Text
 renderAddress = C.serialiseAddress
+
+{- | Classify a payment address's credential as a public key or script
+address, so a client doesn't have to parse the address itself to find out.
+Byron addresses are always key-based (Byron has no script credentials).
+-}
+addressType :: C.AddressInEra C.ConwayEra -> AddressType
+addressType (C.AddressInEra C.ByronAddressInAnyEra{} _) = PublicKey
+addressType (C.AddressInEra C.ShelleyAddressInEra{} (C.ShelleyAddress _ paymentCred _)) =
+  case C.fromShelleyPaymentCredential paymentCred of
+    C.PaymentCredentialByKey _ -> PublicKey
+    C.PaymentCredentialByScript _ -> Script
+
+{- | The raw hex of a payment address's credential hash (key or script hash),
+for looking up a friendly label via 'AddressLabeler'. @Nothing@ for Byron
+addresses.
+-}
+addressCredentialHashHex :: C.AddressInEra C.ConwayEra -> Maybe Text
+addressCredentialHashHex (C.AddressInEra C.ByronAddressInAnyEra{} _) = Nothing
+addressCredentialHashHex (C.AddressInEra C.ShelleyAddressInEra{} (C.ShelleyAddress _ paymentCred _)) =
+  Just $ case C.fromShelleyPaymentCredential paymentCred of
+    C.PaymentCredentialByKey h -> C.serialiseToRawBytesHexText h
+    C.PaymentCredentialByScript h -> C.serialiseToRawBytesHexText h
 
 -- | Build a structured ValueSummary from a cardano-api Value.
 toValueSummary :: C.Value -> ValueSummary

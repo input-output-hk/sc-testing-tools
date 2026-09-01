@@ -37,6 +37,7 @@ import Convex.Tasty.Streaming.Types (
 
 -- Types from convex-testing-interface
 import Convex.TestingInterface.Trace (
+  AddressType (..),
   AssetSummary (..),
   IterationStatus (..),
   IterationTrace (..),
@@ -384,9 +385,19 @@ instance ToSchema ValueSummary where
               ]
           & required .~ ["lovelace", "assets"]
 
+instance ToSchema AddressType where
+  declareNamedSchema _ = do
+    pure $
+      NamedSchema (Just "AddressType") $
+        mempty
+          & type_ ?~ OpenApiString
+          & description ?~ "Whether an address's credential is a public key (\"public-key\") or a script (\"script\"), so a client doesn't have to parse the address itself to find out."
+          & enum_ ?~ ["public-key", "script"]
+
 instance ToSchema TxInputSummary where
   declareNamedSchema _ = do
     valueRef <- declareSchemaRef (Proxy @ValueSummary)
+    addressTypeRef <- declareSchemaRef (Proxy @AddressType)
     pure $
       NamedSchema (Just "TxInputSummary") $
         mempty
@@ -396,17 +407,20 @@ instance ToSchema TxInputSummary where
             .~ InsOrdHashMap.fromList
               [ ("utxo", Inline $ mempty & type_ ?~ OpenApiString)
               , ("address", Inline $ mempty & type_ ?~ OpenApiString)
+              , ("addressType", addressTypeRef)
+              , ("addressLabel", nullableType OpenApiString)
               , ("value", valueRef)
               , ("redeemerRaw", nullableType OpenApiString)
               , ("redeemerConstr", nullableType OpenApiInteger)
               , ("redeemerKind", nullableType OpenApiString)
               , ("redeemerPayload", Inline mempty)
               ]
-          & required .~ ["utxo", "address", "value", "redeemerRaw", "redeemerConstr", "redeemerKind", "redeemerPayload"]
+          & required .~ ["utxo", "address", "addressType", "addressLabel", "value", "redeemerRaw", "redeemerConstr", "redeemerKind", "redeemerPayload"]
 
 instance ToSchema TxOutputSummary where
   declareNamedSchema _ = do
     valueRef <- declareSchemaRef (Proxy @ValueSummary)
+    addressTypeRef <- declareSchemaRef (Proxy @AddressType)
     pure $
       NamedSchema (Just "TxOutputSummary") $
         mempty
@@ -415,10 +429,12 @@ instance ToSchema TxOutputSummary where
             .~ InsOrdHashMap.fromList
               [ ("utxo", Inline $ mempty & type_ ?~ OpenApiString)
               , ("address", Inline $ mempty & type_ ?~ OpenApiString)
+              , ("addressType", addressTypeRef)
+              , ("addressLabel", nullableType OpenApiString)
               , ("value", valueRef)
               , ("datum", nullableType OpenApiString) -- key present, value null when no datum
               ]
-          & required .~ ["utxo", "address", "value", "datum"]
+          & required .~ ["utxo", "address", "addressType", "addressLabel", "value", "datum"]
 
 instance ToSchema TxSummary where
   declareNamedSchema _ = do
