@@ -121,7 +121,7 @@ import Convex.TestingInterface.Trace.RedeemerTag (autoRedeemerTag, labelRedeemer
 import Convex.TestingInterface.Trace.TxSummary (summarizeTx)
 import Convex.ThreatModel (SigningWallet (AutoSign), ThreatModel (..), ThreatModelCheckEntry (..), ThreatModelOutcome (..), ValidityReport (..), getThreatModelName, runThreatModelCheckTraced, threatModelEnvs)
 import Convex.ThreatModel.All (allThreatModels)
-import Convex.ThreatModel.TxModifier (TxModifier (..))
+import Convex.ThreatModel.TxModifier (TxModifier (..), renderTxMod)
 import Convex.Wallet (verificationKeyHash)
 import Convex.Wallet.MockWallet qualified as Wallet
 import Data.Aeson (ToJSON (..), (.=))
@@ -1220,7 +1220,7 @@ toThreatModelTraces findTestId tagger labeler results = concat <$> traverse go r
   outcomeToTrace TMSkippedPhase1 = TMTOSkippedPhase1 "phase 1 invalidation"
   outcomeToTrace (TMError msg) = TMTOError (T.pack msg)
 
-  renderModifications (TxModifier mods) = map toJSON mods
+  renderModifications (TxModifier mods) = map (renderTxMod labeler) mods
 
   emptyTxSummary =
     TxSummary

@@ -29,8 +29,10 @@ import Data.Set qualified as Set
 import PlutusLedgerApi.Test.Examples (alwaysSucceedingNAryFunction)
 
 import Data.Aeson (object, (.=))
+import Data.Aeson qualified as Aeson
 import Data.Text qualified as Text
 
+import Convex.TestingInterface.Trace (AddressLabeler (..), AddressType (..))
 import Convex.TestingInterface.Trace.TxSummary (renderAssetName, renderDatum, toValueSummary)
 import Convex.ThreatModel.Cardano.Api
 
@@ -740,114 +742,147 @@ renderAddressAny :: AddressAny -> Text
 renderAddressAny (AddressShelley addr) = serialiseAddress addr
 renderAddressAny (AddressByron addr) = Text.pack (show addr)
 
+{- | Classify an AddressAny's credential as a public key or script address,
+mirroring 'Convex.TestingInterface.Trace.TxSummary's address classification.
+-}
+addressAnyType :: AddressAny -> AddressType
+addressAnyType (AddressByron _) = PublicKey
+addressAnyType (AddressShelley (ShelleyAddress _ paymentCred _)) =
+  case fromShelleyPaymentCredential paymentCred of
+    PaymentCredentialByKey _ -> PublicKey
+    PaymentCredentialByScript _ -> Script
+
+{- | The raw hex of an AddressAny's credential hash (key or script hash), for
+looking up a friendly label via 'AddressLabeler'. @Nothing@ for Byron
+addresses.
+-}
+addressAnyCredentialHashHex :: AddressAny -> Maybe Text
+addressAnyCredentialHashHex (AddressByron _) = Nothing
+addressAnyCredentialHashHex (AddressShelley (ShelleyAddress _ paymentCred _)) =
+  Just $ case fromShelleyPaymentCredential paymentCred of
+    PaymentCredentialByKey h -> serialiseToRawBytesHexText h
+    PaymentCredentialByScript h -> serialiseToRawBytesHexText h
+
 -- | Render a Datum (TxOutDatum CtxTx Era) as a JSON-friendly text value.
 renderDatumAny :: Datum -> Maybe Text
 renderDatumAny = renderDatum
 
-instance ToJSON TxMod where
-  toJSON (RemoveInput txIn) =
-    object
-      [ "type" .= ("removeInput" :: Text)
-      , "utxo" .= renderTxIn txIn
-      ]
-  toJSON (RemoveOutput (TxIx ix)) =
-    object
-      [ "type" .= ("removeOutput" :: Text)
-      , "index" .= ix
-      ]
-  toJSON (ChangeOutput (TxIx ix) mAddr mVal mDatum mRefScript) =
-    object
-      [ "type" .= ("changeOutput" :: Text)
-      , "index" .= ix
-      , "address" .= fmap renderAddressAny mAddr
-      , "value" .= fmap toValueSummary mVal
-      , "datum" .= (mDatum >>= renderDatumAny)
-      , "referenceScript" .= fmap (Text.pack . show) mRefScript
-      ]
-  toJSON (ChangeInput txIn mAddr mVal mDatum mRefScript) =
-    object
-      [ "type" .= ("changeInput" :: Text)
-      , "utxo" .= renderTxIn txIn
-      , "address" .= fmap renderAddressAny mAddr
-      , "value" .= fmap toValueSummary mVal
-      , "datum" .= (mDatum >>= renderDatumAny)
-      , "referenceScript" .= fmap (Text.pack . show) mRefScript
-      ]
-  toJSON (ChangeScriptInput txIn mVal mDatum mRedeemer mRefScript) =
-    object
-      [ "type" .= ("changeScriptInput" :: Text)
-      , "utxo" .= renderTxIn txIn
-      , "value" .= fmap toValueSummary mVal
-      , "datum" .= (mDatum >>= renderDatumAny)
-      , "redeemer" .= fmap (Text.pack . show) mRedeemer
-      , "referenceScript" .= fmap (Text.pack . show) mRefScript
-      ]
-  toJSON (ChangeValidityRange mLower mUpper) =
-    object
-      [ "type" .= ("changeValidityRange" :: Text)
-      , "lowerBound" .= fmap (Text.pack . show) mLower
-      , "upperBound" .= fmap (Text.pack . show) mUpper
-      ]
-  toJSON (AddOutput addr val datum refScript) =
-    object
-      [ "type" .= ("addOutput" :: Text)
-      , "address" .= renderAddressAny addr
-      , "value" .= toValueSummary val
-      , "datum" .= renderDatumAny datum
-      , "referenceScript" .= Text.pack (show refScript)
-      ]
-  toJSON (AddInput addr val datum refScript isRef) =
-    object
-      [ "type" .= ("addInput" :: Text)
-      , "address" .= renderAddressAny addr
-      , "value" .= toValueSummary val
-      , "datum" .= renderDatumAny datum
-      , "referenceScript" .= Text.pack (show refScript)
-      , "isReferenceInput" .= isRef
-      ]
-  toJSON (AddReferenceScriptInput scriptHash val datum redeemer) =
-    object
-      [ "type" .= ("addReferenceScriptInput" :: Text)
-      , "scriptHash" .= serialiseToRawBytesHexText scriptHash
-      , "value" .= toValueSummary val
-      , "datum" .= renderDatumAny datum
-      , "redeemer" .= Text.pack (show redeemer)
-      ]
-  toJSON (AddPlutusScriptInput _script val datum redeemer refScript) =
-    object
-      [ "type" .= ("addPlutusScriptInput" :: Text)
-      , "value" .= toValueSummary val
-      , "datum" .= renderDatumAny datum
-      , "redeemer" .= Text.pack (show redeemer)
-      , "referenceScript" .= Text.pack (show refScript)
-      ]
-  toJSON (AddPlutusScriptReferenceInput _script val datum refScript) =
-    object
-      [ "type" .= ("addPlutusScriptReferenceInput" :: Text)
-      , "value" .= toValueSummary val
-      , "datum" .= renderDatumAny datum
-      , "referenceScript" .= Text.pack (show refScript)
-      ]
-  toJSON (AddSimpleScriptInput _script val refScript isRef) =
-    object
-      [ "type" .= ("addSimpleScriptInput" :: Text)
-      , "value" .= toValueSummary val
-      , "referenceScript" .= Text.pack (show refScript)
-      , "isReferenceInput" .= isRef
-      ]
-  toJSON (AddPlutusScriptMint _script assetName qty redeemer) =
-    object
-      [ "type" .= ("addPlutusScriptMint" :: Text)
-      , "assetName" .= renderAssetName assetName
-      , "quantity" .= qty
-      , "redeemer" .= Text.pack (show redeemer)
-      ]
-  toJSON (RemoveRequiredSigner keyHash) =
-    object
-      [ "type" .= ("removeRequiredSigner" :: Text)
-      , "keyHash" .= serialiseToRawBytesHexText keyHash
-      ]
-  toJSON (ReplaceTx _tx _utxo) =
-    object
-      [ "type" .= ("replaceTx" :: Text)
-      ]
+{- | Render a 'TxMod' as JSON. The 'AddressLabeler' is applied to every
+address's credential hash to produce an @addressLabel@ alongside the
+@addressType@, on the same terms as 'Convex.TestingInterface.Trace.TxSummary'.
+-}
+renderTxMod :: AddressLabeler -> TxMod -> Aeson.Value
+renderTxMod _labeler (RemoveInput txIn) =
+  object
+    [ "type" .= ("removeInput" :: Text)
+    , "utxo" .= renderTxIn txIn
+    ]
+renderTxMod _labeler (RemoveOutput (TxIx ix)) =
+  object
+    [ "type" .= ("removeOutput" :: Text)
+    , "index" .= ix
+    ]
+renderTxMod labeler (ChangeOutput (TxIx ix) mAddr mVal mDatum mRefScript) =
+  object
+    [ "type" .= ("changeOutput" :: Text)
+    , "index" .= ix
+    , "address" .= fmap renderAddressAny mAddr
+    , "addressType" .= fmap addressAnyType mAddr
+    , "addressLabel" .= (mAddr >>= addressAnyCredentialHashHex >>= applyAddressLabeler labeler)
+    , "value" .= fmap toValueSummary mVal
+    , "datum" .= (mDatum >>= renderDatumAny)
+    , "referenceScript" .= fmap (Text.pack . show) mRefScript
+    ]
+renderTxMod labeler (ChangeInput txIn mAddr mVal mDatum mRefScript) =
+  object
+    [ "type" .= ("changeInput" :: Text)
+    , "utxo" .= renderTxIn txIn
+    , "address" .= fmap renderAddressAny mAddr
+    , "addressType" .= fmap addressAnyType mAddr
+    , "addressLabel" .= (mAddr >>= addressAnyCredentialHashHex >>= applyAddressLabeler labeler)
+    , "value" .= fmap toValueSummary mVal
+    , "datum" .= (mDatum >>= renderDatumAny)
+    , "referenceScript" .= fmap (Text.pack . show) mRefScript
+    ]
+renderTxMod _labeler (ChangeScriptInput txIn mVal mDatum mRedeemer mRefScript) =
+  object
+    [ "type" .= ("changeScriptInput" :: Text)
+    , "utxo" .= renderTxIn txIn
+    , "value" .= fmap toValueSummary mVal
+    , "datum" .= (mDatum >>= renderDatumAny)
+    , "redeemer" .= fmap (Text.pack . show) mRedeemer
+    , "referenceScript" .= fmap (Text.pack . show) mRefScript
+    ]
+renderTxMod _labeler (ChangeValidityRange mLower mUpper) =
+  object
+    [ "type" .= ("changeValidityRange" :: Text)
+    , "lowerBound" .= fmap (Text.pack . show) mLower
+    , "upperBound" .= fmap (Text.pack . show) mUpper
+    ]
+renderTxMod labeler (AddOutput addr val datum refScript) =
+  object
+    [ "type" .= ("addOutput" :: Text)
+    , "address" .= renderAddressAny addr
+    , "addressType" .= addressAnyType addr
+    , "addressLabel" .= (addressAnyCredentialHashHex addr >>= applyAddressLabeler labeler)
+    , "value" .= toValueSummary val
+    , "datum" .= renderDatumAny datum
+    , "referenceScript" .= Text.pack (show refScript)
+    ]
+renderTxMod labeler (AddInput addr val datum refScript isRef) =
+  object
+    [ "type" .= ("addInput" :: Text)
+    , "address" .= renderAddressAny addr
+    , "addressType" .= addressAnyType addr
+    , "addressLabel" .= (addressAnyCredentialHashHex addr >>= applyAddressLabeler labeler)
+    , "value" .= toValueSummary val
+    , "datum" .= renderDatumAny datum
+    , "referenceScript" .= Text.pack (show refScript)
+    , "isReferenceInput" .= isRef
+    ]
+renderTxMod _labeler (AddReferenceScriptInput scriptHash val datum redeemer) =
+  object
+    [ "type" .= ("addReferenceScriptInput" :: Text)
+    , "scriptHash" .= serialiseToRawBytesHexText scriptHash
+    , "value" .= toValueSummary val
+    , "datum" .= renderDatumAny datum
+    , "redeemer" .= Text.pack (show redeemer)
+    ]
+renderTxMod _labeler (AddPlutusScriptInput _script val datum redeemer refScript) =
+  object
+    [ "type" .= ("addPlutusScriptInput" :: Text)
+    , "value" .= toValueSummary val
+    , "datum" .= renderDatumAny datum
+    , "redeemer" .= Text.pack (show redeemer)
+    , "referenceScript" .= Text.pack (show refScript)
+    ]
+renderTxMod _labeler (AddPlutusScriptReferenceInput _script val datum refScript) =
+  object
+    [ "type" .= ("addPlutusScriptReferenceInput" :: Text)
+    , "value" .= toValueSummary val
+    , "datum" .= renderDatumAny datum
+    , "referenceScript" .= Text.pack (show refScript)
+    ]
+renderTxMod _labeler (AddSimpleScriptInput _script val refScript isRef) =
+  object
+    [ "type" .= ("addSimpleScriptInput" :: Text)
+    , "value" .= toValueSummary val
+    , "referenceScript" .= Text.pack (show refScript)
+    , "isReferenceInput" .= isRef
+    ]
+renderTxMod _labeler (AddPlutusScriptMint _script assetName qty redeemer) =
+  object
+    [ "type" .= ("addPlutusScriptMint" :: Text)
+    , "assetName" .= renderAssetName assetName
+    , "quantity" .= qty
+    , "redeemer" .= Text.pack (show redeemer)
+    ]
+renderTxMod _labeler (RemoveRequiredSigner keyHash) =
+  object
+    [ "type" .= ("removeRequiredSigner" :: Text)
+    , "keyHash" .= serialiseToRawBytesHexText keyHash
+    ]
+renderTxMod _labeler (ReplaceTx _tx _utxo) =
+  object
+    [ "type" .= ("replaceTx" :: Text)
+    ]

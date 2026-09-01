@@ -892,6 +892,30 @@
                                 }
                             ]
                         },
+                        "addressLabel": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
+                        },
+                        "addressType": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/$defs/AddressType"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
+                        },
                         "datum": {
                             "anyOf": [
                                 {
@@ -942,6 +966,8 @@
                         "type",
                         "index",
                         "address",
+                        "addressType",
+                        "addressLabel",
                         "value",
                         "datum",
                         "referenceScript"
@@ -954,6 +980,30 @@
                             "anyOf": [
                                 {
                                     "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
+                        },
+                        "addressLabel": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
+                        },
+                        "addressType": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/$defs/AddressType"
                                 },
                                 {
                                     "enum": [
@@ -1012,6 +1062,8 @@
                         "type",
                         "utxo",
                         "address",
+                        "addressType",
+                        "addressLabel",
                         "value",
                         "datum",
                         "referenceScript"
@@ -1133,6 +1185,21 @@
                         "address": {
                             "type": "string"
                         },
+                        "addressLabel": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
+                        },
+                        "addressType": {
+                            "$ref": "#/$defs/AddressType"
+                        },
                         "datum": {
                             "anyOf": [
                                 {
@@ -1161,6 +1228,8 @@
                     "required": [
                         "type",
                         "address",
+                        "addressType",
+                        "addressLabel",
                         "value",
                         "datum",
                         "referenceScript"
@@ -1171,6 +1240,21 @@
                     "properties": {
                         "address": {
                             "type": "string"
+                        },
+                        "addressLabel": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "enum": [
+                                        null
+                                    ]
+                                }
+                            ]
+                        },
+                        "addressType": {
+                            "$ref": "#/$defs/AddressType"
                         },
                         "datum": {
                             "anyOf": [
@@ -1203,6 +1287,8 @@
                     "required": [
                         "type",
                         "address",
+                        "addressType",
+                        "addressLabel",
                         "value",
                         "datum",
                         "referenceScript",

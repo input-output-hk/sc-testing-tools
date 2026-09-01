@@ -580,8 +580,10 @@ instance ToSchema ThreatModelTraceOutcome where
 instance ToSchema TxMod where
   declareNamedSchema _ = do
     valueRef <- declareSchemaRef (Proxy @ValueSummary)
+    addressTypeRef <- declareSchemaRef (Proxy @AddressType)
     let nullableString = nullableType OpenApiString
     let nullableValue = Inline $ mempty & anyOf ?~ [valueRef, null]
+    let nullableAddressType = Inline $ mempty & anyOf ?~ [addressTypeRef, null]
 
     let removeInput =
           mempty
@@ -611,11 +613,13 @@ instance ToSchema TxMod where
                 [ ("type", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["changeOutput"])
                 , ("index", Inline $ mempty & type_ ?~ OpenApiInteger)
                 , ("address", nullableString)
+                , ("addressType", nullableAddressType)
+                , ("addressLabel", nullableString)
                 , ("value", nullableValue)
                 , ("datum", nullableString)
                 , ("referenceScript", nullableString)
                 ]
-            & required .~ ["type", "index", "address", "value", "datum", "referenceScript"]
+            & required .~ ["type", "index", "address", "addressType", "addressLabel", "value", "datum", "referenceScript"]
 
     let changeInput =
           mempty
@@ -625,11 +629,13 @@ instance ToSchema TxMod where
                 [ ("type", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["changeInput"])
                 , ("utxo", Inline $ mempty & type_ ?~ OpenApiString)
                 , ("address", nullableString)
+                , ("addressType", nullableAddressType)
+                , ("addressLabel", nullableString)
                 , ("value", nullableValue)
                 , ("datum", nullableString)
                 , ("referenceScript", nullableString)
                 ]
-            & required .~ ["type", "utxo", "address", "value", "datum", "referenceScript"]
+            & required .~ ["type", "utxo", "address", "addressType", "addressLabel", "value", "datum", "referenceScript"]
 
     let changeScriptInput =
           mempty
@@ -663,11 +669,13 @@ instance ToSchema TxMod where
               .~ InsOrdHashMap.fromList
                 [ ("type", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["addOutput"])
                 , ("address", Inline $ mempty & type_ ?~ OpenApiString)
+                , ("addressType", addressTypeRef)
+                , ("addressLabel", nullableString)
                 , ("value", valueRef)
                 , ("datum", nullableString)
                 , ("referenceScript", Inline $ mempty & type_ ?~ OpenApiString)
                 ]
-            & required .~ ["type", "address", "value", "datum", "referenceScript"]
+            & required .~ ["type", "address", "addressType", "addressLabel", "value", "datum", "referenceScript"]
 
     let addInput =
           mempty
@@ -676,12 +684,14 @@ instance ToSchema TxMod where
               .~ InsOrdHashMap.fromList
                 [ ("type", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["addInput"])
                 , ("address", Inline $ mempty & type_ ?~ OpenApiString)
+                , ("addressType", addressTypeRef)
+                , ("addressLabel", nullableString)
                 , ("value", valueRef)
                 , ("datum", nullableString)
                 , ("referenceScript", Inline $ mempty & type_ ?~ OpenApiString)
                 , ("isReferenceInput", Inline $ mempty & type_ ?~ OpenApiBoolean)
                 ]
-            & required .~ ["type", "address", "value", "datum", "referenceScript", "isReferenceInput"]
+            & required .~ ["type", "address", "addressType", "addressLabel", "value", "datum", "referenceScript", "isReferenceInput"]
 
     let addReferenceScriptInput =
           mempty
