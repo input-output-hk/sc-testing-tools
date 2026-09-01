@@ -14,7 +14,7 @@ module Convex.TestingInterface.Trace.TxSummary (
 import Cardano.Api qualified as C
 import Cardano.Ledger.Alonzo.Scripts qualified as Ledger (AsIx (AsIx))
 import Cardano.Ledger.Alonzo.TxWits qualified as Ledger (Redeemers (Redeemers))
-import Cardano.Ledger.Conway.Scripts qualified as Conway (ConwayPlutusPurpose (ConwaySpending))
+import Cardano.Ledger.Conway.Scripts qualified as Conway (ConwayPlutusPurpose (ConwayRewarding, ConwaySpending))
 import Convex.TestingInterface.Trace (
   AddressLabeler (..),
   AddressType (..),
@@ -24,6 +24,7 @@ import Convex.TestingInterface.Trace (
   TxInputSummary (..),
   TxOutputSummary (..),
   TxSummary (..),
+  TxWithdrawalSummary (..),
   ValueSummary (..),
  )
 import Data.ByteString qualified as BS
@@ -98,6 +99,14 @@ summarizeTxBody tagger labeler body (C.UTxO utxoMap) =
         renderValidityRange
           (C.txValidityLowerBound content)
           (C.txValidityUpperBound content)
+
+      -- Withdrawal redeemers keyed by position (matches the sorted withdrawals list).
+      withdrawalRedeemers = bodyWithdrawalRedeemers body
+
+      -- Withdrawals, including zero-lovelace ones (the "withdraw zero trick").
+      withdrawals = case C.txWithdrawals content of
+        C.TxWithdrawalsNone -> []
+        C.TxWithdrawals _ ws -> zipWith (mkWithdrawalSummary tagger labeler withdrawalRedeemers) [0 ..] ws
    in TxSummary
         { txsId = Nothing
         , txsInputs = inputs
@@ -106,6 +115,7 @@ summarizeTxBody tagger labeler body (C.UTxO utxoMap) =
         , txsFee = fee
         , txsSigners = signers
         , txsValidRange = validRange
+        , txsWithdrawals = withdrawals
         }
 
 {- | Build an input summary from its (0-based) position in the tx inputs, the
@@ -130,6 +140,36 @@ mkInputSummary tagger labeler _ix txIn (C.TxOut addr val _datum _refScript) mRed
         , tisRedeemerConstr = mRedeemer >>= redeemerConstrIx
         , tisRedeemerKind = rtKind <$> mTag
         , tisRedeemerPayload = mTag >>= rtPayload
+        }
+
+{- | Build a withdrawal summary from its (0-based) position in the sorted
+withdrawals list and the raw @(StakeAddress, Coin, _witness)@ triple. The
+'RedeemerTagger' is applied to the parsed Plutus 'Data' of the withdrawal's
+redeemer to produce Tier 2 labels when present. The 'AddressLabeler' is
+applied to the stake credential's hash to produce 'twsAddressLabel'.
+-}
+mkWithdrawalSummary
+  :: RedeemerTagger
+  -> AddressLabeler
+  -> Map Word32 C.ScriptData
+  -> Word32
+  -> (C.StakeAddress, C.Coin, C.BuildTxWith C.ViewTx (C.Witness C.WitCtxStake C.ConwayEra))
+  -> TxWithdrawalSummary
+mkWithdrawalSummary tagger labeler redeemers ix (stakeAddr, coin, _witness) =
+  let mRedeemer = Map.lookup ix redeemers
+      mTag = do
+        sd <- mRedeemer
+        let d = C.toPlutusData sd
+        applyRedeemerTagger tagger d
+   in TxWithdrawalSummary
+        { twsStakeAddress = C.serialiseAddress stakeAddr
+        , twsAddressType = stakeAddressType stakeAddr
+        , twsAddressLabel = applyAddressLabeler labeler (stakeCredentialHashHex stakeAddr)
+        , twsAmount = C.unCoin coin
+        , twsRedeemerRaw = redeemerToHex <$> mRedeemer
+        , twsRedeemerConstr = mRedeemer >>= redeemerConstrIx
+        , twsRedeemerKind = rtKind <$> mTag
+        , twsRedeemerPayload = mTag >>= rtPayload
         }
 
 {- | Build an output summary from a TxId, an index, and a TxOut. The
@@ -170,6 +210,25 @@ scriptDataSpendRedeemers = \case
     Map.fromList
       [ (idx, C.getScriptData (C.fromAlonzoData d))
       | (Conway.ConwaySpending (Ledger.AsIx idx), (d, _exUnits)) <- Map.toList rdmrs
+      ]
+
+{- | Extract the withdrawal (Rewarding-purpose) redeemers from a 'C.TxBody',
+keyed by the 0-based position of the withdrawal in the tx body's sorted
+withdrawals list. Mirrors 'bodySpendRedeemers'.
+-}
+bodyWithdrawalRedeemers :: C.TxBody C.ConwayEra -> Map Word32 C.ScriptData
+bodyWithdrawalRedeemers body =
+  case body of
+    C.ShelleyTxBody _ _ _ scriptData _ _ -> scriptDataWithdrawalRedeemers scriptData
+
+-- | Project the withdrawal redeemers out of a 'C.TxBodyScriptData' value.
+scriptDataWithdrawalRedeemers :: C.TxBodyScriptData C.ConwayEra -> Map Word32 C.ScriptData
+scriptDataWithdrawalRedeemers = \case
+  C.TxBodyNoScriptData -> Map.empty
+  C.TxBodyScriptData _ _ (Ledger.Redeemers rdmrs) ->
+    Map.fromList
+      [ (idx, C.getScriptData (C.fromAlonzoData d))
+      | (Conway.ConwayRewarding (Ledger.AsIx idx), (d, _exUnits)) <- Map.toList rdmrs
       ]
 
 -- | Render a redeemer's 'C.ScriptData' as the hex of its CBOR encoding.
@@ -221,6 +280,25 @@ addressCredentialHashHex (C.AddressInEra C.ShelleyAddressInEra{} (C.ShelleyAddre
   Just $ case C.fromShelleyPaymentCredential paymentCred of
     C.PaymentCredentialByKey h -> C.serialiseToRawBytesHexText h
     C.PaymentCredentialByScript h -> C.serialiseToRawBytesHexText h
+
+{- | Classify a stake address's credential as a public key or script
+address, mirroring 'addressType' for payment addresses.
+-}
+stakeAddressType :: C.StakeAddress -> AddressType
+stakeAddressType (C.StakeAddress _ cred) =
+  case C.fromShelleyStakeCredential cred of
+    C.StakeCredentialByKey _ -> PublicKey
+    C.StakeCredentialByScript _ -> Script
+
+{- | The raw hex of a stake address's credential hash (key or script hash),
+for looking up a friendly label via 'AddressLabeler', mirroring
+'addressCredentialHashHex' for payment addresses.
+-}
+stakeCredentialHashHex :: C.StakeAddress -> Text
+stakeCredentialHashHex (C.StakeAddress _ cred) =
+  case C.fromShelleyStakeCredential cred of
+    C.StakeCredentialByKey h -> C.serialiseToRawBytesHexText h
+    C.StakeCredentialByScript h -> C.serialiseToRawBytesHexText h
 
 -- | Build a structured ValueSummary from a cardano-api Value.
 toValueSummary :: C.Value -> ValueSummary

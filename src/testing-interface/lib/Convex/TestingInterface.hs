@@ -1245,6 +1245,7 @@ toThreatModelTraces findTestId tagger labeler results = concat <$> traverse go r
       , txsFee = 0
       , txsSigners = []
       , txsValidRange = Nothing
+      , txsWithdrawals = []
       }
 
 {- | Format a 'BalanceTxError' for display in trace output.
