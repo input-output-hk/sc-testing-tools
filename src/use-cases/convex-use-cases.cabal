@@ -77,6 +77,7 @@ test-suite convex-auction-test
     , cardano-ledger-conway
     , cardano-ledger-core
     , cardano-ledger-shelley
+    , containers
     , convex-base
     , convex-coin-selection
     , convex-mockchain
@@ -169,6 +170,7 @@ test-suite convex-multiplayerpingpong-test
     , cardano-ledger-conway
     , cardano-ledger-core
     , cardano-ledger-shelley
+    , containers
     , convex-base
     , convex-coin-selection
     , convex-mockchain
@@ -190,6 +192,7 @@ test-suite convex-multiplayerpingpong-test
     , tasty
     , tasty-hunit
     , tasty-quickcheck
+    , text
 
 test-suite convex-vesting-test
   import:         lang

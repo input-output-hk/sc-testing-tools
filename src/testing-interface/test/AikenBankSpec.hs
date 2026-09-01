@@ -64,11 +64,13 @@ import Convex.MockChain.CoinSelection (balanceAndSubmit, tryBalanceAndSubmit)
 import Convex.MockChain.Defaults qualified as Defaults
 import Convex.MockChain.Utils (mockchainSucceeds)
 import Convex.TestingInterface (
+  AddressLabeler (..),
   RedeemerTag (..),
   RedeemerTagger (..),
   RunOptions (disableNegativeTesting),
   TestingInterface (..),
   ThreatModelsFor (..),
+  mockWalletAddressLabeler,
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel.Cardano.Api (dummyTxId)
@@ -281,6 +283,16 @@ bankLevel02 = unsafePerformIO $ loadBankLevel "ctf_bank_02_account" "ctf_bank_02
 {-# NOINLINE bankLevel03 #-}
 bankLevel03 :: BankLevel
 bankLevel03 = unsafePerformIO $ loadBankLevel "ctf_bank_03_account" "ctf_bank_03_bank"
+
+-- | Labels the level 00 bank/account script hashes for the 'BankModel' property tests.
+bankAddressLabeler :: AddressLabeler
+bankAddressLabeler = AddressLabeler (`Map.lookup` table)
+ where
+  table =
+    Map.fromList
+      [ (C.serialiseToRawBytesHexText (blBankHash bankLevel00), "Bank vault")
+      , (C.serialiseToRawBytesHexText (blAccountHash bankLevel00), "Account script")
+      ]
 
 -- ----------------------------------------------------------------------------
 -- Transaction builders
@@ -992,6 +1004,14 @@ instance TestingInterface BankModel where
       Constr 0 _ -> Just (RedeemerTag "IncreaseBalance" Nothing)
       Constr 1 _ -> Just (RedeemerTag "DecreaseBalance" Nothing)
       _ -> Nothing
+
+  -- \| Label the two Aiken script addresses distinctly, to check that
+  --  'AddressLabeler' works with parameterized Aiken-compiled scripts too:
+  --  'blBankHash' depends on a runtime-applied UPLC parameter (the account
+  --  script's hash, see 'applyByteStringParam'), not just a Haskell-level
+  --  compile-time parameter as in the PlutusTx use-cases.
+  --
+  addressLabeler = bankAddressLabeler <> mockWalletAddressLabeler
 
 instance ThreatModelsFor BankModel where
   threatModels = [unprotectedScriptOutput, negativeIntegerAttack, valueUnderpaymentAttack, mutualExclusionAttack]

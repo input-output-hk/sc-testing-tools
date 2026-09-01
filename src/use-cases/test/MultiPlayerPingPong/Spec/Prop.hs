@@ -20,7 +20,7 @@ import Convex.MockChain.CoinSelection (tryBalanceAndSubmit)
 import Convex.MockChain.Defaults qualified as Defaults
 import Convex.PlutusLedger.V1 (transPubKeyHash)
 import Convex.Tasty.QuickCheck qualified as QC
-import Convex.TestingInterface (TestingInterface (..), ThreatModelsFor (..), propRunActions)
+import Convex.TestingInterface (AddressLabeler (..), TestingInterface (..), ThreatModelsFor (..), mockWalletAddressLabeler, propRunActions)
 import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
 import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
 import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
@@ -42,6 +42,8 @@ import Convex.Utxos (toApiUtxo)
 import Convex.Wallet (Wallet, verificationKeyHash)
 import Convex.Wallet.MockWallet qualified as MockWallet
 import Data.Aeson (ToJSON (..))
+import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import GHC.Generics (Generic)
 import MultiPlayerPingPong.Scripts (multiPlayerPingPongValidatorScript)
 import MultiPlayerPingPong.Validator (BallState (Pinged, Ponged), MultiPingPongDatum (..), MultiRedeemer (Hit, Stop))
@@ -249,6 +251,14 @@ instance TestingInterface MultiPlayerPingPongModel where
 
   monitoring _ _ = id
 
+  -- \| Label the fixed players by seat ("Player 1".."Player 3") and the
+  --  validator script's own hash, instead of the generic "Wallet N" / no
+  --  label a client would otherwise see. Falls back to
+  --  'mockWalletAddressLabeler' for any other wallet (e.g. the wrong-signer
+  --  wallets used in negative tests).
+  --
+  addressLabeler = playerAddressLabeler <> mockWalletAddressLabeler
+
 nextStateForHitTurn :: MultiPlayerPingPongModel -> MultiPlayerPingPongModel
 nextStateForHitTurn m =
   m
@@ -293,6 +303,21 @@ instance ThreatModelsFor MultiPlayerPingPongModel where
 validatorScriptHash :: C.ScriptHash
 validatorScriptHash =
   C.hashScript $ C.PlutusScript C.plutusScriptVersion multiPlayerPingPongValidatorScript
+
+{- | Labels the fixed players ('MockWallet.w1'..'MockWallet.w3', in seat
+order) as @"Player 1".."Player 3"@, and the validator's own script hash as
+@"PingPong script"@ — something 'mockWalletAddressLabeler' can't do on its
+own, since it only knows key hashes.
+-}
+playerAddressLabeler :: AddressLabeler
+playerAddressLabeler = AddressLabeler (`Map.lookup` table)
+ where
+  table =
+    Map.fromList $
+      [ (C.serialiseToRawBytesHexText (verificationKeyHash w), "Player " <> T.pack (show i))
+      | (i, w) <- zip [1 :: Int ..] [MockWallet.w1, MockWallet.w2, MockWallet.w3]
+      ]
+        <> [(C.serialiseToRawBytesHexText validatorScriptHash, "PingPong script")]
 
 playerPkh :: Wallet -> PubKeyHash
 playerPkh = transPubKeyHash . verificationKeyHash

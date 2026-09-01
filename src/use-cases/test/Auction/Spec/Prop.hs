@@ -21,7 +21,7 @@ import Convex.MockChain.CoinSelection (tryBalanceAndSubmit)
 import Convex.MockChain.Defaults qualified as Defaults
 import Convex.PlutusLedger.V1 (transPubKeyHash, unTransAssetName)
 import Convex.Tasty.QuickCheck qualified as QC
-import Convex.TestingInterface (TestingInterface (..), ThreatModelsFor (..), propRunActions)
+import Convex.TestingInterface (AddressLabeler (..), TestingInterface (..), ThreatModelsFor (..), mockWalletAddressLabeler, propRunActions)
 import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
 import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
 import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
@@ -46,6 +46,7 @@ import Convex.Wallet qualified as MockWallet
 import Convex.Wallet.MockWallet qualified as MockWallet
 import Data.Aeson (ToJSON (..))
 import Data.Foldable (for_)
+import Data.Map.Strict qualified as Map
 import GHC.Generics (Generic)
 import PlutusLedgerApi.Common qualified as PlutusTx
 import PlutusLedgerApi.V1 (CurrencySymbol (..), tokenName)
@@ -117,29 +118,8 @@ instance TestingInterface AuctionModel where
     -- \^ Advance blockchain time
     deriving (Show, Eq)
 
-  -- \| Initial state for auction scenario.
-  --
-  --    Configuration:
-  --    - Seller: MockWallet.w1
-  --    - Minimum bid: 10 ADA (10_000_000 lovelace)
-  --    - Auction end: slot 50
-  --    - Start time: slot 0
-  --    - No bids initially
-  initialize =
-    pure
-      AuctionModel
-        { _highestBidAmount = 0
-        , _highestBidder = Nothing
-        , _curSlot = 0
-        , _seller = MockWallet.w1
-        , _minBid = 10_000_000
-        , _endSlot = 50
-        , _auctionInitialized = False
-        , _auctionClosed = False
-        , _policyId = Nothing
-        , _scriptHash = Nothing
-        , _auctionTxIn = Nothing
-        }
+  -- \| Initial state for auction scenario. See 'initialAuctionModel'.
+  initialize = pure initialAuctionModel
 
   -- \| Generate random actions weighted by likelihood and current state.
   arbitraryAction am =
@@ -274,6 +254,14 @@ instance TestingInterface AuctionModel where
 
   monitoring _ _ = id
 
+  -- \| Label the fixed seller as "Seller" and the auction validator's own
+  --  script hash as "Auction script". Bidders keep their default "Wallet N"
+  --  labels (via the 'mockWalletAddressLabeler' fallback) — any bidder is
+  --  interchangeable in an auction, so there's nothing more specific to say
+  --  about them.
+  --
+  addressLabeler = auctionAddressLabeler <> mockWalletAddressLabeler
+
 instance ThreatModelsFor AuctionModel where
   threatModels =
     [ datumListBloatAttack
@@ -300,6 +288,45 @@ instance ThreatModelsFor AuctionModel where
 -- | Available bidders (excluding the seller)
 bidders :: [Wallet]
 bidders = [MockWallet.w2, MockWallet.w3, MockWallet.w4, MockWallet.w5, MockWallet.w6, MockWallet.w7, MockWallet.w8, MockWallet.w9, MockWallet.w10]
+
+{- | Fixed initial state for auction scenario.
+
+  Configuration:
+  - Seller: MockWallet.w1
+  - Minimum bid: 10 ADA (10_000_000 lovelace)
+  - Auction end: slot 50
+  - Start time: slot 0
+  - No bids initially
+-}
+initialAuctionModel :: AuctionModel
+initialAuctionModel =
+  AuctionModel
+    { _highestBidAmount = 0
+    , _highestBidder = Nothing
+    , _curSlot = 0
+    , _seller = MockWallet.w1
+    , _minBid = 10_000_000
+    , _endSlot = 50
+    , _auctionInitialized = False
+    , _auctionClosed = False
+    , _policyId = Nothing
+    , _scriptHash = Nothing
+    , _auctionTxIn = Nothing
+    }
+
+-- | The auction validator's script hash, fixed by 'initialAuctionModel'.
+auctionScriptHash :: C.ScriptHash
+auctionScriptHash =
+  C.hashScript $ C.PlutusScript C.plutusScriptVersion (auctionValidatorScript (paramsFromModel initialAuctionModel))
+
+auctionAddressLabeler :: AddressLabeler
+auctionAddressLabeler = AddressLabeler (`Map.lookup` table)
+ where
+  table =
+    Map.fromList
+      [ (C.serialiseToRawBytesHexText (verificationKeyHash (_seller initialAuctionModel)), "Seller")
+      , (C.serialiseToRawBytesHexText auctionScriptHash, "Auction script")
+      ]
 
 -- | Create AuctionParams matching the model state.
 paramsFromModel :: AuctionModel -> AuctionParams
