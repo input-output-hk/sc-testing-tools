@@ -19,6 +19,7 @@ module Convex.TestingInterface.Trace (
   TxSummary (..),
   TxInputSummary (..),
   TxOutputSummary (..),
+  AddressType (..),
 
   -- * Value representation
   ValueSummary (..),
@@ -31,6 +32,9 @@ module Convex.TestingInterface.Trace (
   -- * Redeemer tagging (Tier 2)
   RedeemerTag (..),
   RedeemerTagger (..),
+
+  -- * Address labeling
+  AddressLabeler (..),
 ) where
 
 import Control.Applicative ((<|>))
@@ -139,6 +143,12 @@ data TxInputSummary = TxInputSummary
   -- ^ @"txid#index"@
   , tisAddress :: !Text
   -- ^ Bech32 or hex address
+  , tisAddressType :: !AddressType
+  -- ^ Whether 'tisAddress' is a public-key or a script address
+  , tisAddressLabel :: !(Maybe Text)
+  {- ^ Friendly label for the address's credential (e.g. @"Wallet 1"@), from the
+  implementor's 'AddressLabeler'. @Nothing@ when unrecognised.
+  -}
   , tisValue :: ValueSummary
   -- ^ Structured value (ada + tokens)
   , tisRedeemerRaw :: !(Maybe Text)
@@ -166,11 +176,29 @@ data TxOutputSummary = TxOutputSummary
   { tosUtxo :: !Text
   -- ^ @"txid#index"@ – the UTxO reference for this output
   , tosAddress :: !Text
+  , tosAddressType :: !AddressType
+  -- ^ Whether 'tosAddress' is a public-key or a script address
+  , tosAddressLabel :: !(Maybe Text)
+  {- ^ Friendly label for the address's credential (e.g. @"Wallet 1"@), from the
+  implementor's 'AddressLabeler'. @Nothing@ when unrecognised.
+  -}
   , tosValue :: !ValueSummary
   , tosDatum :: !(Maybe Text)
   -- ^ @"inline:\<hash\>"@, @"hash:\<hash\>"@, or @Nothing@
   }
   deriving (Eq, Show, Generic)
+
+{- | Whether an address's credential is a public key or a script, so a client
+doesn't have to parse the address itself to find out.
+-}
+data AddressType
+  = PublicKey
+  | Script
+  deriving (Eq, Show, Generic)
+
+instance ToJSON AddressType where
+  toJSON PublicKey = "public-key"
+  toJSON Script = "script"
 
 -- | Structured representation of a Cardano value for JSON serialization.
 data ValueSummary = ValueSummary
@@ -212,6 +240,25 @@ instance Semigroup RedeemerTagger where
 
 instance Monoid RedeemerTagger where
   mempty = RedeemerTagger (const Nothing)
+
+{- | An opt-in function from the hex-encoded hash of an address's payment or
+stake credential (key hash or script hash) to a human-readable label, so a
+client doesn't need to recognise raw hashes to tell wallets and scripts
+apart. The 'TestingInterface' default ('Convex.TestingInterface.mockWalletAddressLabeler')
+labels the standard mock wallets as @"Wallet 1".."Wallet 10"@; override or extend it
+(via the 'Monoid' instance, which picks the first 'Just' result) to label a
+model's own script hashes or additional keys.
+-}
+newtype AddressLabeler = AddressLabeler
+  { applyAddressLabeler :: Text -> Maybe Text
+  }
+
+instance Semigroup AddressLabeler where
+  AddressLabeler f <> AddressLabeler g =
+    AddressLabeler (\h -> f h <|> g h)
+
+instance Monoid AddressLabeler where
+  mempty = AddressLabeler (const Nothing)
 
 instance ToJSON ValueSummary where
   toJSON v =
@@ -330,6 +377,8 @@ instance ToJSON TxInputSummary where
     object
       [ "utxo" .= tisUtxo t
       , "address" .= tisAddress t
+      , "addressType" .= tisAddressType t
+      , "addressLabel" .= tisAddressLabel t
       , "value" .= tisValue t
       , "redeemerRaw" .= tisRedeemerRaw t
       , "redeemerConstr" .= tisRedeemerConstr t
@@ -342,6 +391,8 @@ instance ToJSON TxOutputSummary where
     object
       [ "utxo" .= tosUtxo t
       , "address" .= tosAddress t
+      , "addressType" .= tosAddressType t
+      , "addressLabel" .= tosAddressLabel t
       , "value" .= tosValue t
       , "datum" .= tosDatum t
       ]
