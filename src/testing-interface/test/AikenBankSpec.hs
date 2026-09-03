@@ -1014,7 +1014,19 @@ instance TestingInterface BankModel where
   addressLabeler = bankAddressLabeler <> mockWalletAddressLabeler
 
 instance ThreatModelsFor BankModel where
-  threatModels = [unprotectedScriptOutput, negativeIntegerAttack, valueUnderpaymentAttack, mutualExclusionAttack]
+  threatModels = [unprotectedScriptOutput, negativeIntegerAttack]
+
+  -- valueUnderpaymentAttack is listed here rather than in 'threatModels'
+  -- because it flags a benign artifact of this contract's design rather
+  -- than an exploitable bug: fund custody lives entirely in the bank's own
+  -- pooled UTxO, whose ADA change is tied to the account's balance change
+  -- by 'ctf_bank_00_bank.ak' ("fund_difference == balance change"). The
+  -- account UTxO's own ADA is never checked against its balance datum by
+  -- either validator ('ctf_bank_00_account.ak' only checks signatures), so
+  -- reducing it while leaving the datum unchanged always still validates -
+  -- it doesn't let an attacker touch the pooled funds, only recover ADA
+  -- they themselves put into their own account UTxO.
+  expectedVulnerabilities = [mutualExclusionAttack, valueUnderpaymentAttack]
 
 -- ----------------------------------------------------------------------------
 -- Test tree

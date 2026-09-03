@@ -58,10 +58,6 @@ import Cardano.Api qualified as C
 import Convex.ThreatModel
 import Test.QuickCheck (Gen, choose, shrinkRealFrac)
 
--- | Minimum ADA to leave in the output (to avoid min-UTxO violations)
-minOutputAda :: C.Lovelace
-minOutputAda = 2_000_000
-
 {- | Default value-underpayment attack. The reduction factor is drawn per
 transaction from a curated range, so QuickCheck explores the parameter space
 and shrinks counterexamples toward the smallest triggering value.
@@ -87,6 +83,20 @@ valueUnderpaymentAttackWithGen reductionFactorGen =
     -- Skip iterations where the draw is too small to be a meaningful attack.
     ensure (reductionFactor > 0)
 
+    requireScriptInput
+
+    {- The floor for the reduced ADA amount has to be each output's own
+    protocol-mandated minimum, not a hardcoded guess: 'rebalanceAndSign' runs
+    'Convex.ThreatModel.Cardano.Api.topUpUnderfundedOutputs' on every output
+    before validation, which would silently restore ADA a reduction below
+    that real minimum, masking a genuine underpayment vulnerability behind a
+    false "still passes". Flooring at the real minimum here means the
+    reduced output is never below it, so that top-up is a no-op and the
+    deliberate reduction reaches the validator intact.
+    -}
+    ThreatModelEnv _ _ envPParams <- getThreatModelEnv
+    let minRequiredAda out = C.calculateMinimumUTxO C.shelleyBasedEra (C.unLedgerProtocolParameters envPParams) (outputTxOut out)
+
     -- Get all outputs from the transaction
     outputs <- getTxOutputs
 
@@ -96,10 +106,8 @@ valueUnderpaymentAttackWithGen reductionFactorGen =
     -- Precondition: there must be at least one script output
     threatPrecondition $ ensure (not $ null scriptOutputs)
 
-    -- Further filter to outputs that have enough ADA to be reduced
-    let hasEnoughAda out =
-          let adaValue = C.selectLovelace (valueOf out)
-           in adaValue > minOutputAda
+    -- Further filter to outputs that have enough ADA to be reduced.
+    let hasEnoughAda out = C.selectLovelace (valueOf out) > minRequiredAda out
         reducibleOutputs = filter hasEnoughAda scriptOutputs
 
     -- Precondition: there must be at least one script output with enough ADA
@@ -111,9 +119,11 @@ valueUnderpaymentAttackWithGen reductionFactorGen =
     -- Calculate reduced value
     let currentValue = valueOf target
         currentAda = C.selectLovelace currentValue
-        -- Calculate reduced ADA, ensuring we don't go below minimum
-        -- Lovelace has a Num instance, so we can use numeric operations
-        reducedAda = max minOutputAda (fromInteger $ round (fromIntegral currentAda * (1 - reductionFactor)))
+        requiredAda = minRequiredAda target
+        -- Calculate reduced ADA, ensuring we don't go below the output's own
+        -- minimum. Lovelace has a Num instance, so we can use numeric
+        -- operations.
+        reducedAda = max requiredAda (fromInteger $ round (fromIntegral currentAda * (1 - reductionFactor)))
         adaDifference = C.negateValue $ C.lovelaceToValue (currentAda - reducedAda)
         reducedValue = currentValue <> adaDifference
 

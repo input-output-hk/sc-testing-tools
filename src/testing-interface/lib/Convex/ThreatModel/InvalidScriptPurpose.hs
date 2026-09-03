@@ -71,7 +71,7 @@ invalidScriptPurposeAttackWith
   -> ThreatModel ()
 invalidScriptPurposeAttackWith redeemer assetName quantity spendingValidator = Named "Invalid Script Purpose Attack" $ do
   -- Precondition: at least one script input must be spent so a script validator runs.
-  _ <- anyInputSuchThat (not . isKeyAddressAny . addressOf)
+  requireScriptInput
 
   -- Prefer a key-address output to receive minted test tokens.
   output <- anyOutputSuchThat (isKeyAddressAny . addressOf)
