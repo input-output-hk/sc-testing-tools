@@ -45,7 +45,6 @@ module AikenKingOfCardanoSpec (
 ) where
 
 import Cardano.Api qualified as C
-import Control.Lens ((^.))
 import Control.Monad (void)
 import Control.Monad.Except (MonadError, runExceptT)
 import Control.Monad.IO.Class (MonadIO (..))
@@ -54,13 +53,12 @@ import Convex.Aiken.Blueprint (Blueprint (..))
 import Convex.Aiken.Blueprint qualified as Blueprint
 import Convex.BuildTx (MonadBuildTx, execBuildTx)
 import Convex.BuildTx qualified as BuildTx
-import Convex.Class (MonadMockchain, getUtxo)
+import Convex.Class (MockChainState, MonadMockchain, getMockChainState, getUtxo)
 import Convex.CoinSelection (BalanceTxError, ChangeOutputPosition (TrailingChange))
 import Convex.MockChain (fromLedgerUTxO, runMockchain0IOWith)
 import Convex.MockChain.CoinSelection (balanceAndSubmit, tryBalanceAndSubmit)
 import Convex.MockChain.Defaults qualified as Defaults
 import Convex.MockChain.Utils (mockchainSucceeds)
-import Convex.NodeParams (ledgerProtocolParameters)
 import Convex.PlutusLedger.V1 (transAddressInEra)
 import Convex.TestingInterface (
   Options (Options, params),
@@ -71,7 +69,7 @@ import Convex.TestingInterface (
   labelRedeemer,
   propRunActionsWithOptions,
  )
-import Convex.ThreatModel (SigningWallet (SignWith), ThreatModelEnv (..), runThreatModelM)
+import Convex.ThreatModel (SigningWallet (SignWith), mkThreatModelEnv, runThreatModelM)
 import Convex.ThreatModel.Cardano.Api (dummyTxId)
 import Convex.ThreatModel.LargeData (largeDataAttackWith)
 import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
@@ -658,14 +656,14 @@ kingScenario
      , MonadError (BalanceTxError C.ConwayEra) m
      , MonadFail m
      )
-  => m (C.Tx C.ConwayEra, C.UTxO C.ConwayEra)
+  => m (C.Tx C.ConwayEra, MockChainState C.ConwayEra)
 kingScenario = do
   -- Initialize competition with w1 as king
   let initTxBody = execBuildTx $ initCompetition @C.ConwayEra Defaults.networkId Wallet.w1 20_000_000
   _ <- tryBalanceAndSubmit mempty Wallet.w1 initTxBody TrailingChange []
 
-  -- Capture UTxO BEFORE overthrow (for threat model)
-  utxoBefore <- fromLedgerUTxO C.shelleyBasedEra <$> getUtxo
+  -- Capture the chain state BEFORE overthrow (for the threat model)
+  chainStateBefore <- getMockChainState
 
   -- w2 overthrows w1 (using w1 for balance because threat model rebalancer uses w1)
   result <- findKingUtxos
@@ -674,7 +672,7 @@ kingScenario = do
     ((txIn, _, datum) : _) -> do
       let overthrowTxBody = execBuildTx $ overthrowKing @C.ConwayEra Defaults.networkId txIn datum 20_000_000 Wallet.w2 25_000_000
       overthrowTx <- tryBalanceAndSubmit mempty Wallet.w1 overthrowTxBody TrailingChange []
-      pure (overthrowTx, utxoBefore)
+      pure (overthrowTx, chainStateBefore)
 
 {- | Test unprotectedScriptOutput threat model on the king_of_cardano contract.
 
@@ -693,15 +691,10 @@ propKingUnprotectedOutput opts = monadicIO $ do
   result <- run $
     runMockchain0IOWith Wallet.initialUTxOs params $
       runExceptT $ do
-        (tx, utxo) <- kingScenario
+        (tx, chainStateBefore) <- kingScenario
 
-        let pparams' = params ^. ledgerProtocolParameters
-            env =
-              ThreatModelEnv
-                { currentTx = tx
-                , currentUTxOs = utxo
-                , pparams = pparams'
-                }
+        let env =
+              mkThreatModelEnv tx chainStateBefore
 
         -- Run the threat model INSIDE MockchainT with full Phase 1 + Phase 2 validation
         lift $ runThreatModelM (SignWith Wallet.w1) unprotectedScriptOutput [env]

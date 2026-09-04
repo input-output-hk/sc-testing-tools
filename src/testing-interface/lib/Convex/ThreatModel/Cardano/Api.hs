@@ -61,6 +61,8 @@ module Convex.ThreatModel.Cardano.Api (
   validateTx,
   validateTxM,
   buildMockState,
+  chainStateUTxO,
+  chainStatePParams,
 
   -- * Rebalancing
   rebalanceAndSign,
@@ -119,6 +121,7 @@ import Cardano.Slotting.Time (SlotLength, mkSlotLength)
 import Control.Lens ((&), (.~), (^.), _1)
 import Data.List (isPrefixOf)
 
+import Cardano.Ledger.Shelley.Rules (LedgerEnv (ledgerPp))
 import Convex.CardanoApi.Lenses qualified as L
 import Convex.Class (
   ExUnitsError (..),
@@ -129,12 +132,11 @@ import Convex.Class (
   ValidationError (VExUnits),
   coverageData,
   env,
-  getMockChainState,
   getSlot,
   poolState,
   setTimeToValidRange,
  )
-import Convex.MockChain (applyTransaction, initialState)
+import Convex.MockChain (applyTransaction)
 import Convex.NodeParams (NodeParams (..))
 import Convex.Wallet (Wallet)
 import Convex.Wallet qualified as Wallet
@@ -143,7 +145,7 @@ import Data.ByteString.Short qualified as SBS
 import Data.Either (isRight)
 import Data.Foldable (foldrM)
 import Data.Map qualified as Map
-import Data.Maybe (listToMaybe, mapMaybe)
+import Data.Maybe (isJust, listToMaybe, mapMaybe)
 import Data.Maybe.Strict
 import Data.SOP.NonEmpty (NonEmpty (NonEmptyOne))
 import Data.Sequence.Strict qualified as Seq
@@ -151,7 +153,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as Text
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Word
-import GHC.Exts (toList)
+import GHC.Exts (fromList, toList)
 import Ouroboros.Consensus.Block (GenesisWindow (..))
 import Ouroboros.Consensus.Cardano.Block (CardanoEras, StandardCrypto)
 import Ouroboros.Consensus.HardFork.History qualified as History
@@ -555,14 +557,27 @@ convValidityInterval (lowerBound, upperBound) =
         TxValidityUpperBound _ (Just s) -> SJust s
     }
 
--- | Build a MockChainState from NodeParams, slot, and UTxO for validation
+-- | The UTxO set of a chain state.
+chainStateUTxO :: MockChainState Era -> UTxO Era
+chainStateUTxO state =
+  fromLedgerUTxO shelleyBasedEra (state ^. poolState . L.utxoState . L._UTxOState . _1)
+
+-- | The protocol parameters a chain state validates with.
+chainStatePParams :: MockChainState Era -> LedgerProtocolParameters Era
+chainStatePParams state = LedgerProtocolParameters (ledgerPp (state ^. env))
+
+{- | Build a MockChainState for validation: the given base state - typically
+the state the original transaction validated against, so its certificate
+state (stake registrations, deposits, DRep and pool state) is intact - with
+the slot and the UTxO set replaced.
+-}
 buildMockState
-  :: NodeParams Era
+  :: MockChainState Era
   -> SlotNo
   -> UTxO Era
   -> MockChainState Era
-buildMockState params slot utxo =
-  initialState params
+buildMockState baseState slot utxo =
+  baseState
     & env . L.slot .~ slot
     & poolState . L.utxoState . L._UTxOState . _1 .~ toLedgerUTxO shelleyBasedEra utxo
 
@@ -598,10 +613,14 @@ This uses 'applyTransaction' which performs complete ledger validation including
 validateTxM
   :: (MonadMockchain Era m)
   => NodeParams Era
+  -> MockChainState Era
+  {- ^ The state the original transaction validated against (see
+  'currentChainState'); its slot and UTxO set are replaced below.
+  -}
   -> Tx Era
   -> UTxO Era
   -> m (ValidityReport, CoverageData)
-validateTxM params tx utxo = do
+validateTxM params baseState tx utxo = do
   -- Validate at a slot within the transaction's own validity interval (like
   -- 'threatModelEnvs' does when replaying). Otherwise the ledger rejects the
   -- transaction with 'OutsideValidityIntervalUTxO' (Phase 1) whenever the
@@ -610,7 +629,7 @@ validateTxM params tx utxo = do
   let txBodyContent = getTxBodyContent $ getTxBody tx
   setTimeToValidRange (txValidityLowerBound txBodyContent, txValidityUpperBound txBodyContent)
   slot <- getSlot
-  let mockState = buildMockState params slot utxo
+  let mockState = buildMockState baseState slot utxo
       NodeParams{npSystemStart, npEraHistory, npProtocolParameters} = params
   pure $ case applyTransaction params mockState tx of
     Left (ApplyTxFailure err)
@@ -673,11 +692,17 @@ check each step's comment before moving anything.
 -}
 rebalanceAndSign
   :: (MonadMockchain Era m)
-  => Wallet
+  => MockChainState Era
+  {- ^ The state the original transaction validated against (see
+  'currentChainState'): deposits looked up for the value balance below
+  must come from the same state the modified transaction is re-validated
+  against.
+  -}
+  -> Wallet
   -> Tx Era
   -> UTxO Era
   -> m (Either String (Tx Era))
-rebalanceAndSign wallet tx utxo = do
+rebalanceAndSign chainState wallet tx utxo = do
   pparams <- Convex.Class.queryProtocolParameters
   networkId <- Convex.Class.queryNetworkId
   systemStart <- Convex.Class.querySystemStart
@@ -697,7 +722,18 @@ rebalanceAndSign wallet tx utxo = do
   balancing) see the transaction's true final shape (see
   'topUpUnderfundedOutputs').
   -}
-  let txWithFundedOutputs = topUpUnderfundedOutputs pparams txWithUpdatedExUnits
+  let txWithFundedOutputs' = topUpUnderfundedOutputs pparams txWithUpdatedExUnits
+
+  {- The script integrity hash commits to the transaction's redeemers, datums,
+  and the cost models of the languages it uses - all of which are final from
+  here on (execution units were recalculated above; every step below only
+  moves the fee, the outputs, and the collateral fields, none of which the
+  hash covers). Set it now rather than after the fee is fixed: a TxModifier
+  that introduces the FIRST Plutus script into a previously script-free
+  transaction flips this body field from absent to present (~35 bytes), and
+  only by setting it here does the fee estimation below see those bytes.
+  -}
+  let txWithFundedOutputs = recalculateScriptIntegrityHash utxo pparams txWithFundedOutputs'
 
   {- If a TxModifier introduced a Plutus script into a transaction that
   previously ran none, it now needs a collateral input and return output that
@@ -715,15 +751,15 @@ rebalanceAndSign wallet tx utxo = do
   {- 'evaluateTransactionBalance' needs to know, for every stake/DRep/pool
   credential a certificate here registers or deregisters, the deposit
   already on file for it in the chain's live cert state - that's what its
-  three lookup arguments are for. Pull them out of the mockchain's ledger
-  state (which reflects the chain as of this transaction, i.e. before it is
+  three lookup arguments are for. Pull them out of the supplied chain state
+  (which reflects the chain as of this transaction, i.e. before it is
   applied), so a certificate's deposit or refund lands in the residual just
   like any other value flow. Passing 'mempty' here instead would silently
   treat every deregistration's refund as zero, unbalancing e.g. the
   withdrawal use-case's stake-registration transactions.
   -}
-  certState <- lsCertState . (^. poolState) <$> getMockChainState
-  let registeredPools =
+  let certState = lsCertState (chainState ^. poolState)
+      registeredPools =
         Set.map StakePoolKeyHash $
           Map.keysSet (psStakePools (certState ^. certPStateL))
       stakeDeposits =
@@ -810,11 +846,10 @@ rebalanceAndSign wallet tx utxo = do
       case recalculateTotalCollateral pparams utxo modifiedTx of
         Left err -> pure (Left err)
         Right txWithCollateral -> do
-          -- Recalculate script integrity hash (after updating execution units)
-          let finalTx = recalculateScriptIntegrityHash utxo pparams txWithCollateral
-
-          -- Re-sign (strip old signatures and add new one)
-          let Tx finalBody _ = finalTx
+          -- Re-sign (strip old signatures and add new one). The script
+          -- integrity hash was set before the fee estimation above and is
+          -- unaffected by the fee/output/collateral updates since.
+          let Tx finalBody _ = txWithCollateral
               unsignedTx = makeSignedTransaction [] finalBody
               signers = txSigners tx
               sign hash tx' = case lookup hash mockWalletHashes of
@@ -1071,11 +1106,8 @@ findAdaOnlyKeyInput utxo body =
     | txIn <- Set.toList (Conway.ctbSpendInputs body)
     , Just txOut@(TxOut _ val _ _) <- [Map.lookup (fromShelleyTxIn txIn) (unUTxO utxo)]
     , isKeyAddressAny (addressOfTxOut txOut)
-    , isAdaOnlyValue (txOutValueToValue val)
+    , isJust (valueToLovelace (txOutValueToValue val))
     ]
-
-isAdaOnlyValue :: Value -> Bool
-isAdaOnlyValue v = lovelaceToValue (selectLovelace v) == v
 
 {- | Ensure every output in a transaction carries at least the protocol's
 minimum required ADA for its current size (its value's assets, its datum,
@@ -1291,7 +1323,7 @@ adjustChangeOutput pparams walletAddr delta outputs = do
           -- more of the token than the transaction consumes, and only an
           -- input holding that token (or its minting policy validating)
           -- could supply it.
-          shortfall = valueFromList [(aId, negate q) | (aId, q) <- valueToList newValue, q < 0]
+          shortfall = fromList [(aId, negate q) | (aId, q) <- toList newValue, q < 0]
       if shortfall /= mempty
         then
           Left $

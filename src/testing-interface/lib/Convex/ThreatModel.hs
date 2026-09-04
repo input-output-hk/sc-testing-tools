@@ -60,7 +60,9 @@ module Convex.ThreatModel (
 
   -- * Threat models
   ThreatModel (Named),
-  ThreatModelEnv (..),
+  ThreatModelEnv (currentTx, currentUTxOs, currentChainState),
+  mkThreatModelEnv,
+  pparams,
   ThreatModelOutcome (..),
   threatModelEnvs,
   runThreatModel,
@@ -146,7 +148,7 @@ module Convex.ThreatModel (
 
 import Cardano.Api as X
 
-import Control.Lens ((%~), (&), (^.))
+import Control.Lens ((%~), (&))
 import Control.Monad
 import Data.Containers.ListUtils (nubOrd)
 import Data.List (intercalate)
@@ -157,9 +159,9 @@ import Text.Printf
 import Test.QuickCheck
 import Test.QuickCheck qualified as QC
 
-import Convex.Class (MockChainState, MonadMockchain (..), coverageData, getUtxo, setTimeToValidRange)
+import Convex.Class (MockChainState, MonadMockchain (..), coverageData, setTimeToValidRange)
 import Convex.MockChain (applyTransaction, runMockchain)
-import Convex.NodeParams (NodeParams, ledgerProtocolParameters)
+import Convex.NodeParams (NodeParams)
 import Convex.ThreatModel.Cardano.Api
 import Convex.ThreatModel.Cardano.Api qualified as TM (detectSigningWallet, rebalanceAndSign, txRequiredSigners)
 import Convex.ThreatModel.Pretty
@@ -176,15 +178,49 @@ transactions in counterexamples. To include more information you can use `counte
 the functions below.
 -}
 
-{- | The context in which a `ThreatModel` is executed. Contains a transaction, its UTxO set, the
-  replayed slot, and the protocol parameters. See `getThreatModelEnv` and `originalTx` to access
-  this information in a threat model.
+{- | The context in which a `ThreatModel` is executed: a transaction and the
+  chain state it validated against. See `getThreatModelEnv` and `originalTx`
+  to access this information in a threat model; the UTxO set and protocol
+  parameters are derived from the chain state via 'currentUTxOs' and
+  'pparams'.
 -}
 data ThreatModelEnv = ThreatModelEnv
   { currentTx :: Tx Era
   , currentUTxOs :: UTxO Era
-  , pparams :: LedgerProtocolParameters Era
+  {- ^ The UTxO set the transaction validated against. This is always the
+  cached projection @'chainStateUTxO' . 'currentChainState'@ - the field is
+  deliberately lazy so the ledger-to-api conversion happens at most once per
+  env, shared between all its users. The data constructor is not exported;
+  'mkThreatModelEnv' maintains the invariant.
+  -}
+  , currentChainState :: MockChainState Era
+  {- ^ The chain state the transaction validated against (just before it was
+  applied). Modified transactions are rebalanced and re-validated against
+  this state (with the UTxO set swapped for the modified one), so ledger
+  state beyond the UTxO set - stake registrations and their deposits, DRep
+  and pool state - matches what the original transaction saw. Validating
+  against a fresh initial state instead would phase-1-reject e.g. every
+  withdrawal (@WithdrawalsNotInRewards@: the reward account only exists in
+  the certificate state). Capture it *before* the transaction is submitted:
+  a state captured afterwards no longer resolves the transaction's inputs.
+  -}
   }
+
+{- | Construct a 'ThreatModelEnv' from a transaction and the chain state it
+validated against (captured *before* the transaction was submitted - a state
+captured afterwards no longer resolves the transaction's inputs).
+-}
+mkThreatModelEnv :: Tx Era -> MockChainState Era -> ThreatModelEnv
+mkThreatModelEnv tx chainState =
+  ThreatModelEnv
+    { currentTx = tx
+    , currentUTxOs = chainStateUTxO chainState
+    , currentChainState = chainState
+    }
+
+-- | The protocol parameters, derived from 'currentChainState'.
+pparams :: ThreatModelEnv -> LedgerProtocolParameters Era
+pparams = chainStatePParams . currentChainState
 
 -- | How to determine the wallet for re-balancing and re-signing modified transactions.
 data SigningWallet
@@ -200,14 +236,9 @@ threatModelEnvs params txs chainState0 = fst $ foldM go chainState0 txs
   go chainState tx =
     let txBodyContent = getTxBodyContent $ getTxBody tx
         rng = (txValidityLowerBound txBodyContent, txValidityUpperBound txBodyContent)
-        (utxo, chainState') = runMockchain (setTimeToValidRange rng >> getUtxo) params chainState
+        ((), chainState') = runMockchain (setTimeToValidRange rng) params chainState
         res = applyTransaction params chainState' tx
-        threatModelEnv =
-          ThreatModelEnv
-            { currentTx = tx
-            , currentUTxOs = fromLedgerUTxO shelleyBasedEra utxo
-            , pparams = params ^. ledgerProtocolParameters
-            }
+        threatModelEnv = mkThreatModelEnv tx chainState'
      in case res of
           Left e -> error $ "Unexpected error after replaying transactions: " ++ show e
           Right (chainState'', _) -> ([threatModelEnv], chainState'')
@@ -220,9 +251,15 @@ data ThreatModelOutcome
     TMFailed String
   | -- | Preconditions were never met (all transactions skipped)
     TMSkipped
-  | {- | No transaction ran to completion, and at least one was skipped
-    due to a Phase 1 invalidation (other transactions may have been
-    skipped because of unmet preconditions)
+  | {- | No transaction ran to completion, and at least one was skipped for
+    an environmental reason rather than an unmet precondition: the modified
+    transaction was Phase 1 invalid, or rebalancing failed (the modification
+    couldn't be realized as a well-formed transaction, see
+    'Convex.ThreatModel.Cardano.Api.rebalanceAndSign'). Other transactions
+    may additionally have been skipped because of unmet preconditions.
+    Distinguished from 'TMSkipped' so an all-skipped run of an explicitly
+    listed model only counts as vacuous - and fails the suite - when every
+    skip was a precondition miss.
     -}
     TMSkippedPhase1
   | -- | Threat model crashed with an exception
@@ -334,18 +371,15 @@ runThreatModel = go False
       Done{} -> go True model envs
       Named _n k -> interp mon k
 
--- | Evaluate a `ThreatModel` on a list of transactions.
+{- | Evaluate a `ThreatModel` on a list of transactions, each paired with the
+chain state it validated against.
+-}
 assertThreatModel
   :: ThreatModel a
-  -> LedgerProtocolParameters Era
-  -> [(Tx Era, UTxO Era)]
+  -> [(Tx Era, MockChainState Era)]
   -> Property
-assertThreatModel m pparams' txs = runThreatModel m envs
- where
-  envs =
-    [ ThreatModelEnv tx utxo pparams'
-    | (tx, utxo) <- txs
-    ]
+assertThreatModel m txs =
+  runThreatModel m [mkThreatModelEnv tx chainState | (tx, chainState) <- txs]
 
 {- | Run threat model inside MockchainT with full Phase 1 + Phase 2 validation.
 
@@ -438,7 +472,7 @@ runThreatModelM' quiet signingWallet = go False
         let (modifiedTx, modifiedUtxo) = applyTxModifier (currentTx env) (currentUTxOs env) mods
         -- Re-balance and re-sign the modified transaction
         params <- askNodeParams
-        rebalanceResult <- TM.rebalanceAndSign wallet modifiedTx modifiedUtxo
+        rebalanceResult <- TM.rebalanceAndSign (currentChainState env) wallet modifiedTx modifiedUtxo
         case rebalanceResult of
           Left err ->
             -- Rebalancing failed: the modification cannot be realized as a
@@ -456,7 +490,7 @@ runThreatModelM' quiet signingWallet = go False
             QC.tabulate "Rebalancing failed with reason" [err] <$> go b model envs
           Right rebalancedTx -> do
             -- Validate with full Phase 1 + Phase 2
-            (report, covData) <- validateTxM params rebalancedTx modifiedUtxo
+            (report, covData) <- validateTxM params (currentChainState env) rebalancedTx modifiedUtxo
             -- Accumulate coverage into the running MockChainState
             modifyMockChainState $ \s -> ((), s & coverageData %~ (<> covData))
             interpM mon wallet (k report)
@@ -514,12 +548,16 @@ runThreatModelCheck signingWallet = go False False []
         let (modifiedTx, modifiedUtxo) = applyTxModifier (currentTx env) (currentUTxOs env) mods
         params <- askNodeParams
         -- Try rebalancing - failure means this modification can't be tested on this tx
-        rebalanceResult <- TM.rebalanceAndSign wallet modifiedTx modifiedUtxo
+        rebalanceResult <- TM.rebalanceAndSign (currentChainState env) wallet modifiedTx modifiedUtxo
         case rebalanceResult of
           Left _err ->
-            go b hadPhase1Error mons' model envs -- Rebalancing failed, skip to next tx (like precondition failure)
+            -- Rebalancing failed, skip to next tx. The True marks this as an
+            -- environmental skip (like a Phase 1 invalidation), NOT a
+            -- precondition miss: the model applied, the attack transaction
+            -- just couldn't be built.
+            go b True mons' model envs
           Right rebalancedTx -> do
-            (report, covData) <- validateTxM params rebalancedTx modifiedUtxo
+            (report, covData) <- validateTxM params (currentChainState env) rebalancedTx modifiedUtxo
             modifyMockChainState $ \s -> ((), s & coverageData %~ (<> covData))
             case validity report of
               Phase1Invalid -> go b True mons' model envs
@@ -553,6 +591,10 @@ data ThreatModelCheckEntry = ThreatModelCheckEntry
   -- ^ The modified UTxO
   , tmceValidation :: !(Maybe ValidityReport)
   -- ^ Nothing if rebalancing failed (skipped)
+  , tmceRebalanceError :: !(Maybe String)
+  {- ^ Just the rebalancing failure when the modified transaction couldn't
+  be rebalanced (in which case 'tmceValidation' is Nothing)
+  -}
   }
 
 {- | Like 'runThreatModelCheck' but additionally accumulates trace data.
@@ -583,9 +625,9 @@ runThreatModelCheckTraced signingWallet = go False False [] [] 0
         let (modifiedTx, modifiedUtxo) = applyTxModifier (currentTx env) (currentUTxOs env) mods
         params <- askNodeParams
         -- Try rebalancing - failure means this modification can't be tested on this tx
-        rebalanceResult <- TM.rebalanceAndSign wallet modifiedTx modifiedUtxo
+        rebalanceResult <- TM.rebalanceAndSign (currentChainState env) wallet modifiedTx modifiedUtxo
         case rebalanceResult of
-          Left _err -> do
+          Left err -> do
             let entry =
                   ThreatModelCheckEntry
                     { tmceEnvIndex = envIdx
@@ -595,10 +637,15 @@ runThreatModelCheckTraced signingWallet = go False False [] [] 0
                     , tmceModifiedTx = Nothing
                     , tmceModifiedUtxo = modifiedUtxo
                     , tmceValidation = Nothing
+                    , tmceRebalanceError = Just err
                     }
-            go b hadPhase1Error (entry : acc') mons' (envIdx + 1) model envs -- Rebalancing failed, skip to next tx
+            -- Rebalancing failed, skip to next tx. The True marks this as an
+            -- environmental skip (like a Phase 1 invalidation), NOT a
+            -- precondition miss: the model applied, the attack transaction
+            -- just couldn't be built.
+            go b True (entry : acc') mons' (envIdx + 1) model envs
           Right rebalancedTx -> do
-            (report, covData) <- validateTxM params rebalancedTx modifiedUtxo
+            (report, covData) <- validateTxM params (currentChainState env) rebalancedTx modifiedUtxo
             modifyMockChainState $ \s -> ((), s & coverageData %~ (<> covData))
             let entry =
                   ThreatModelCheckEntry
@@ -609,6 +656,7 @@ runThreatModelCheckTraced signingWallet = go False False [] [] 0
                     , tmceModifiedTx = Just rebalancedTx
                     , tmceModifiedUtxo = modifiedUtxo
                     , tmceValidation = Just report
+                    , tmceRebalanceError = Nothing
                     }
             case validity report of
               Phase1Invalid -> go b True (entry : acc') mons' (envIdx + 1) model envs
@@ -710,8 +758,9 @@ shouldNotValidate = shouldValidateOrNot False
 shouldValidateOrNot :: Bool -> TxModifier -> ThreatModel ()
 shouldValidateOrNot should txMod = do
   validReport <- validate txMod
-  ThreatModelEnv tx utxos _ <- getThreatModelEnv
-  let newTx = fst $ applyTxModifier tx utxos txMod
+  env <- getThreatModelEnv
+  let tx = currentTx env
+      newTx = fst $ applyTxModifier tx (currentUTxOs env) txMod
       info str =
         block
           (text str)
@@ -766,7 +815,9 @@ getTxOutputs = zipWith (flip Output . TxIx) [0 ..] . txOutputs <$> originalTx
 -- | Get the inputs from the original transaction.
 getTxInputs :: ThreatModel [Input]
 getTxInputs = do
-  ThreatModelEnv tx (UTxO utxos) _ <- getThreatModelEnv
+  env <- getThreatModelEnv
+  let tx = currentTx env
+      UTxO utxos = currentUTxOs env
   pure
     [ Input txout i
     | i <- txInputs tx
@@ -776,7 +827,9 @@ getTxInputs = do
 -- | Get the reference inputs from the original transaction.
 getTxReferenceInputs :: ThreatModel [Input]
 getTxReferenceInputs = do
-  ThreatModelEnv tx (UTxO utxos) _ <- getThreatModelEnv
+  env <- getThreatModelEnv
+  let tx = currentTx env
+      UTxO utxos = currentUTxOs env
   pure
     [ Input txout i
     | i <- txReferenceInputs tx

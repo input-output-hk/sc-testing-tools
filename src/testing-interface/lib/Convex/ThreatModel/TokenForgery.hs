@@ -76,7 +76,7 @@ e.g. one unrelated to anything the transaction does.
 tokenForgeryAttack :: ThreatModel ()
 tokenForgeryAttack = Named "Token Forgery Attack" $ do
   tx <- originalTx
-  ThreatModelEnv _ utxos _ <- getThreatModelEnv
+  utxos <- currentUTxOs <$> getThreatModelEnv
   let candidates =
         [ (assetName, scriptInAnyLang, redeemer)
         | (_policyId, assets, scriptInAnyLang, redeemer) <- mintedPlutusPolicies tx utxos
@@ -151,7 +151,7 @@ mintExtraUnit redeemer mintScript assetName = do
   -- new asset to the output can push it below the min-UTxO for its (now
   -- larger) value, tripping BabbageOutputTooSmallUTxO in Phase 1 before the
   -- minting policy is ever exercised -- silently defeating the attack.
-  ThreatModelEnv _ _ envPParams <- getThreatModelEnv
+  envPParams <- pparams <$> getThreatModelEnv
   let C.TxOut outAddr _ outDatum outRefScript = outputTxOut output
       candidateTxOut =
         C.TxOut

@@ -15,25 +15,23 @@ module BountySpec (
 ) where
 
 import Cardano.Api qualified as C
-import Control.Lens ((^.))
 import Control.Monad.Except (MonadError, runExceptT)
 import Control.Monad.Trans (lift)
 import Convex.BuildTx (execBuildTx)
 import Convex.BuildTx qualified as BuildTx
 import Convex.Class (
+  MockChainState,
   MonadMockchain,
-  getUtxo,
+  getMockChainState,
  )
 import Convex.CoinSelection (BalanceTxError, ChangeOutputPosition (TrailingChange))
 import Convex.MockChain (
-  fromLedgerUTxO,
   runMockchain0IOWith,
  )
 import Convex.MockChain.CoinSelection (
   tryBalanceAndSubmit,
  )
 import Convex.MockChain.Defaults qualified as Defaults
-import Convex.NodeParams (ledgerProtocolParameters)
 import Convex.PlutusLedger.V1 (transPubKeyHash)
 import Convex.Tasty.QuickCheck (
   Property,
@@ -47,7 +45,7 @@ import Convex.TestingInterface (
  )
 import Convex.ThreatModel (
   SigningWallet (SignWith),
-  ThreatModelEnv (..),
+  mkThreatModelEnv,
   runThreatModelM,
   runThreatModelMQuiet,
  )
@@ -100,15 +98,10 @@ propBountyVulnerableToDoubleSatisfaction opts = QC.expectFailure $
     result <- run $
       runMockchain0IOWith Wallet.initialUTxOs params $
         runExceptT $ do
-          (tx, utxo) <- bountyVulnerableScenario
+          (tx, chainStateBefore) <- bountyVulnerableScenario
 
-          let pparams' = params ^. ledgerProtocolParameters
-              env =
-                ThreatModelEnv
-                  { currentTx = tx
-                  , currentUTxOs = utxo
-                  , pparams = pparams'
-                  }
+          let env =
+                mkThreatModelEnv tx chainStateBefore
 
           -- Run the threat model INSIDE MockchainT with full Phase 1 + Phase 2 validation
           -- Use runThreatModelMQuiet to suppress verbose counterexample output
@@ -125,7 +118,7 @@ propBountyVulnerableToDoubleSatisfaction opts = QC.expectFailure $
        , MonadError (BalanceTxError C.ConwayEra) m
        , MonadFail m
        )
-    => m (C.Tx C.ConwayEra, C.UTxO C.ConwayEra)
+    => m (C.Tx C.ConwayEra, MockChainState C.ConwayEra)
   bountyVulnerableScenario = do
     let value = 10_000_000
         -- Use VULNERABLE script
@@ -152,7 +145,7 @@ propBountyVulnerableToDoubleSatisfaction opts = QC.expectFailure $
         []
 
     -- Capture UTxO BEFORE claiming (contains the script UTxO)
-    utxoBefore <- fromLedgerUTxO C.shelleyBasedEra <$> getUtxo
+    chainStateBefore <- getMockChainState
 
     -- Claim the bounty - this transaction pays to wallet2 (beneficiary)
     let txIn = C.TxIn (C.getTxId $ C.getTxBody deployTx) (C.TxIx 0)
@@ -165,7 +158,7 @@ propBountyVulnerableToDoubleSatisfaction opts = QC.expectFailure $
         TrailingChange
         []
 
-    pure (claimTx, utxoBefore)
+    pure (claimTx, chainStateBefore)
 
 {- | Test that demonstrates the SECURE bounty is NOT vulnerable to double satisfaction.
 
@@ -190,15 +183,10 @@ propBountySecureAgainstDoubleSatisfaction opts = monadicIO $ do
   result <- run $
     runMockchain0IOWith Wallet.initialUTxOs params $
       runExceptT $ do
-        (tx, utxo) <- bountySecureScenario
+        (tx, chainStateBefore) <- bountySecureScenario
 
-        let pparams' = params ^. ledgerProtocolParameters
-            env =
-              ThreatModelEnv
-                { currentTx = tx
-                , currentUTxOs = utxo
-                , pparams = pparams'
-                }
+        let env =
+              mkThreatModelEnv tx chainStateBefore
 
         -- Run the threat model INSIDE MockchainT with full Phase 1 + Phase 2 validation
         lift $ runThreatModelM (SignWith Wallet.w1) doubleSatisfaction [env]
@@ -216,7 +204,7 @@ propBountySecureAgainstDoubleSatisfaction opts = monadicIO $ do
        , MonadError (BalanceTxError C.ConwayEra) m
        , MonadFail m
        )
-    => m (C.Tx C.ConwayEra, C.UTxO C.ConwayEra)
+    => m (C.Tx C.ConwayEra, MockChainState C.ConwayEra)
   bountySecureScenario = do
     let value = 10_000_000
         -- Use SECURE script
@@ -243,7 +231,7 @@ propBountySecureAgainstDoubleSatisfaction opts = monadicIO $ do
         []
 
     -- Capture UTxO BEFORE claiming (contains the script UTxO)
-    utxoBefore <- fromLedgerUTxO C.shelleyBasedEra <$> getUtxo
+    chainStateBefore <- getMockChainState
 
     -- Claim the bounty - this transaction pays to wallet2 with TxOutRef datum
     let txIn = C.TxIn (C.getTxId $ C.getTxBody deployTx) (C.TxIx 0)
@@ -256,4 +244,4 @@ propBountySecureAgainstDoubleSatisfaction opts = monadicIO $ do
         TrailingChange
         []
 
-    pure (claimTx, utxoBefore)
+    pure (claimTx, chainStateBefore)

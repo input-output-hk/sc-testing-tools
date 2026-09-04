@@ -61,7 +61,9 @@ UTxOs are available.
 inputDuplication :: ThreatModel ()
 inputDuplication = Named "Input Duplication" $ do
   -- Get the environment to access the full UTxO set and the original transaction
-  ThreatModelEnv tx (C.UTxO utxoMap) _ <- getThreatModelEnv
+  env <- getThreatModelEnv
+  let tx = currentTx env
+      C.UTxO utxoMap = currentUTxOs env
 
   -- Find a script input (non-key address = script address)
   scriptInput <- anyInputSuchThat (not . isKeyAddressAny . addressOf)
