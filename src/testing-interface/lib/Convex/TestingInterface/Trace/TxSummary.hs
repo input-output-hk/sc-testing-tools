@@ -197,39 +197,47 @@ the destructure used by 'Convex.ThreatModel.Cardano.Api.redeemerOfTxIn':
 the redeemers live in the 'C.TxBodyScriptData' carried by the
 'C.ShelleyTxBody' constructor (cardano-api 10.x).
 -}
-bodySpendRedeemers :: C.TxBody C.ConwayEra -> Map Word32 C.ScriptData
-bodySpendRedeemers body =
-  case body of
-    C.ShelleyTxBody _ _ _ scriptData _ _ -> scriptDataSpendRedeemers scriptData
 
--- | Project the spend redeemers out of a 'C.TxBodyScriptData' value.
-scriptDataSpendRedeemers :: C.TxBodyScriptData C.ConwayEra -> Map Word32 C.ScriptData
-scriptDataSpendRedeemers = \case
+{- | Extract redeemers of a given script purpose from a 'C.TxBody', keyed by
+the 0-based index ('Ledger.AsIx') within that purpose's own list. Used to
+get 'bodySpendRedeemers' and 'bodyWithdrawalRedeemers' by specialising
+@selectIx@ to the Spending and Rewarding purposes respectively.
+-}
+bodyRedeemersOfPurpose
+  :: (Conway.ConwayPlutusPurpose Ledger.AsIx (C.ShelleyLedgerEra C.ConwayEra) -> Maybe Word32)
+  -> C.TxBody C.ConwayEra
+  -> Map Word32 C.ScriptData
+bodyRedeemersOfPurpose selectIx body =
+  case body of
+    C.ShelleyTxBody _ _ _ scriptData _ _ -> scriptDataRedeemersOfPurpose selectIx scriptData
+
+-- | Project the redeemers of a given purpose out of a 'C.TxBodyScriptData' value.
+scriptDataRedeemersOfPurpose
+  :: (Conway.ConwayPlutusPurpose Ledger.AsIx (C.ShelleyLedgerEra C.ConwayEra) -> Maybe Word32)
+  -> C.TxBodyScriptData C.ConwayEra
+  -> Map Word32 C.ScriptData
+scriptDataRedeemersOfPurpose selectIx = \case
   C.TxBodyNoScriptData -> Map.empty
   C.TxBodyScriptData _ _ (Ledger.Redeemers rdmrs) ->
     Map.fromList
       [ (idx, C.getScriptData (C.fromAlonzoData d))
-      | (Conway.ConwaySpending (Ledger.AsIx idx), (d, _exUnits)) <- Map.toList rdmrs
+      | (purpose, (d, _exUnits)) <- Map.toList rdmrs
+      , Just idx <- [selectIx purpose]
       ]
 
-{- | Extract the withdrawal (Rewarding-purpose) redeemers from a 'C.TxBody',
-keyed by the 0-based position of the withdrawal in the tx body's sorted
-withdrawals list. Mirrors 'bodySpendRedeemers'.
+-- | Spend (Spending-purpose) redeemers, keyed by input position.
+bodySpendRedeemers :: C.TxBody C.ConwayEra -> Map Word32 C.ScriptData
+bodySpendRedeemers = bodyRedeemersOfPurpose $ \case
+  Conway.ConwaySpending (Ledger.AsIx idx) -> Just idx
+  _ -> Nothing
+
+{- | Withdrawal (Rewarding-purpose) redeemers, keyed by the 0-based position
+of the withdrawal in the tx body's sorted withdrawals list.
 -}
 bodyWithdrawalRedeemers :: C.TxBody C.ConwayEra -> Map Word32 C.ScriptData
-bodyWithdrawalRedeemers body =
-  case body of
-    C.ShelleyTxBody _ _ _ scriptData _ _ -> scriptDataWithdrawalRedeemers scriptData
-
--- | Project the withdrawal redeemers out of a 'C.TxBodyScriptData' value.
-scriptDataWithdrawalRedeemers :: C.TxBodyScriptData C.ConwayEra -> Map Word32 C.ScriptData
-scriptDataWithdrawalRedeemers = \case
-  C.TxBodyNoScriptData -> Map.empty
-  C.TxBodyScriptData _ _ (Ledger.Redeemers rdmrs) ->
-    Map.fromList
-      [ (idx, C.getScriptData (C.fromAlonzoData d))
-      | (Conway.ConwayRewarding (Ledger.AsIx idx), (d, _exUnits)) <- Map.toList rdmrs
-      ]
+bodyWithdrawalRedeemers = bodyRedeemersOfPurpose $ \case
+  Conway.ConwayRewarding (Ledger.AsIx idx) -> Just idx
+  _ -> Nothing
 
 -- | Render a redeemer's 'C.ScriptData' as the hex of its CBOR encoding.
 redeemerToHex :: C.ScriptData -> Text
@@ -259,6 +267,23 @@ renderAddressInEra (C.AddressInEra C.ByronAddressInAnyEra{} addr) = Text.pack (s
 renderAddress :: C.Address C.ShelleyAddr -> Text
 renderAddress = C.serialiseAddress
 
+{- | Classify a credential as a public key or script, alongside the raw hex
+of its hash. 'addressType'/'addressCredentialHashHex' (payment credentials)
+and 'stakeAddressType'/'stakeCredentialHashHex' (stake credentials) both
+specialise this one rule to their respective credential types.
+-}
+classifyCredential :: Either Text Text -> (AddressType, Text)
+classifyCredential (Left keyHashHex) = (PublicKey, keyHashHex)
+classifyCredential (Right scriptHashHex) = (Script, scriptHashHex)
+
+classifyPaymentCredential :: C.PaymentCredential -> (AddressType, Text)
+classifyPaymentCredential (C.PaymentCredentialByKey h) = classifyCredential (Left (C.serialiseToRawBytesHexText h))
+classifyPaymentCredential (C.PaymentCredentialByScript h) = classifyCredential (Right (C.serialiseToRawBytesHexText h))
+
+classifyStakeCredential :: C.StakeCredential -> (AddressType, Text)
+classifyStakeCredential (C.StakeCredentialByKey h) = classifyCredential (Left (C.serialiseToRawBytesHexText h))
+classifyStakeCredential (C.StakeCredentialByScript h) = classifyCredential (Right (C.serialiseToRawBytesHexText h))
+
 {- | Classify a payment address's credential as a public key or script
 address, so a client doesn't have to parse the address itself to find out.
 Byron addresses are always key-based (Byron has no script credentials).
@@ -266,9 +291,7 @@ Byron addresses are always key-based (Byron has no script credentials).
 addressType :: C.AddressInEra C.ConwayEra -> AddressType
 addressType (C.AddressInEra C.ByronAddressInAnyEra{} _) = PublicKey
 addressType (C.AddressInEra C.ShelleyAddressInEra{} (C.ShelleyAddress _ paymentCred _)) =
-  case C.fromShelleyPaymentCredential paymentCred of
-    C.PaymentCredentialByKey _ -> PublicKey
-    C.PaymentCredentialByScript _ -> Script
+  fst (classifyPaymentCredential (C.fromShelleyPaymentCredential paymentCred))
 
 {- | The raw hex of a payment address's credential hash (key or script hash),
 for looking up a friendly label via 'AddressLabeler'. @Nothing@ for Byron
@@ -277,28 +300,20 @@ addresses.
 addressCredentialHashHex :: C.AddressInEra C.ConwayEra -> Maybe Text
 addressCredentialHashHex (C.AddressInEra C.ByronAddressInAnyEra{} _) = Nothing
 addressCredentialHashHex (C.AddressInEra C.ShelleyAddressInEra{} (C.ShelleyAddress _ paymentCred _)) =
-  Just $ case C.fromShelleyPaymentCredential paymentCred of
-    C.PaymentCredentialByKey h -> C.serialiseToRawBytesHexText h
-    C.PaymentCredentialByScript h -> C.serialiseToRawBytesHexText h
+  Just $ snd (classifyPaymentCredential (C.fromShelleyPaymentCredential paymentCred))
 
 {- | Classify a stake address's credential as a public key or script
 address, mirroring 'addressType' for payment addresses.
 -}
 stakeAddressType :: C.StakeAddress -> AddressType
-stakeAddressType (C.StakeAddress _ cred) =
-  case C.fromShelleyStakeCredential cred of
-    C.StakeCredentialByKey _ -> PublicKey
-    C.StakeCredentialByScript _ -> Script
+stakeAddressType (C.StakeAddress _ cred) = fst (classifyStakeCredential (C.fromShelleyStakeCredential cred))
 
 {- | The raw hex of a stake address's credential hash (key or script hash),
 for looking up a friendly label via 'AddressLabeler', mirroring
 'addressCredentialHashHex' for payment addresses.
 -}
 stakeCredentialHashHex :: C.StakeAddress -> Text
-stakeCredentialHashHex (C.StakeAddress _ cred) =
-  case C.fromShelleyStakeCredential cred of
-    C.StakeCredentialByKey h -> C.serialiseToRawBytesHexText h
-    C.StakeCredentialByScript h -> C.serialiseToRawBytesHexText h
+stakeCredentialHashHex (C.StakeAddress _ cred) = snd (classifyStakeCredential (C.fromShelleyStakeCredential cred))
 
 -- | Build a structured ValueSummary from a cardano-api Value.
 toValueSummary :: C.Value -> ValueSummary

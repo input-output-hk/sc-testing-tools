@@ -146,6 +146,7 @@ test-suite convex-testing-interface-test
     Paths_convex_testing_interface
     PingPongCoverageSpec
     PingPongSpec
+    RebalanceSpec
     SampleSpec
     Scripts
     Scripts.Bounty

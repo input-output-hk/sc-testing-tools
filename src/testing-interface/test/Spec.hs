@@ -37,6 +37,7 @@ import AikenVestingSpec (aikenVestingTests)
 import BountySpec (bountyTests)
 import PingPongCoverageSpec (pingPongCoverageTests)
 import PingPongSpec (pingPongTests)
+import RebalanceSpec (rebalanceTests)
 import SampleSpec (sampleScriptTest)
 import Scripts (pingPongCovIdx)
 import Scripts qualified
@@ -74,6 +75,7 @@ tests opts runOpts =
         , bountyTests runOpts
         , pingPongCoverageTests opts
         ]
+    , rebalanceTests
     , aikenTests opts
     , aikenBankTests runOpts
     , aikenHelloWorldTests runOpts
