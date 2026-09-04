@@ -105,6 +105,17 @@ mutualExclusionAttack = Named "Mutual Exclusion Attack" $ do
   -- validator that simply aggregates value at its own address (rather than
   -- picking "its" output via list.find) would trivially "still validate"
   -- without that indicating a Mutual Exclusion vulnerability.
+  --
+  -- This is a hard applicability bound, not a harness limitation: the
+  -- tempting alternative of *fabricating* a second script input (a sibling
+  -- account the attacker created) doesn't produce a sound test. The sibling
+  -- has to be funded by the attacker, so for an aggregate-value validator
+  -- the two-identical-inputs transaction validates legitimately - the
+  -- attacker merely gets their own funding back, and flagging that would be
+  -- a false positive. Cross-matching is only meaningfully testable on
+  -- transactions that *organically* spend two or more script inputs (the
+  -- account-style contracts this attack was written for); contracts whose
+  -- transactions never do should not list this model.
   inputs <- getTxInputs
   let scriptInputs = filter (not . isKeyAddressAny . addressOf) inputs
   threatPrecondition $ ensure (length scriptInputs >= 2)

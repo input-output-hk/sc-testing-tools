@@ -19,19 +19,11 @@ import Convex.MockChain.Defaults qualified as Defaults
 import Convex.PlutusLedger.V1 (transPubKeyHash)
 import Convex.Tasty.QuickCheck qualified as QC
 import Convex.TestingInterface (RunOptions, TestingInterface (..), ThreatModelsFor (..), propRunActionsWithOptions)
-import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
-import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
-import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
-import Convex.ThreatModel.InputDuplication (inputDuplication)
 import Convex.ThreatModel.InvalidDatumIndex (invalidDatumIndexAttack)
 import Convex.ThreatModel.LargeData (largeDataAttack)
 import Convex.ThreatModel.LargeValue (largeValueAttack)
 import Convex.ThreatModel.MissingOutputDatum (missingOutputDatumAttack)
-import Convex.ThreatModel.MutualExclusion (mutualExclusionAttack)
-import Convex.ThreatModel.NegativeInteger (negativeIntegerAttack)
 import Convex.ThreatModel.OutputDatumHashMissing (outputDatumHashMissingAttack)
-import Convex.ThreatModel.RedeemerAssetSubstitution (redeemerAssetSubstitution)
-import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
 import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
 import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
 import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
@@ -238,17 +230,13 @@ instance TestingInterface VestingModel where
   monitoring _ _ = id
 
 instance ThreatModelsFor VestingModel where
+  -- Notably absent: 'mutualExclusionAttack', 'inputDuplication' and
+  -- 'doubleSatisfaction' need a second script input / a second UTxO at the
+  -- script address, but vesting locks a single state UTxO; the ()-datum
+  -- rules out every datum-shaped attack, and the redeemer/self-reference
+  -- substitutions never find the shape they target here.
   threatModels =
-    [ datumListBloatAttack
-    , datumByteBloatAttack
-    , doubleSatisfaction
-    , duplicateListEntryAttack
-    , inputDuplication
-    , mutualExclusionAttack
-    , negativeIntegerAttack
-    , redeemerAssetSubstitution
-    , selfReferenceInjection
-    , signatoryRemoval
+    [ signatoryRemoval
     , timeBoundManipulation
     ]
 

@@ -440,13 +440,20 @@ runThreatModelM' quiet signingWallet = go False
         params <- askNodeParams
         rebalanceResult <- TM.rebalanceAndSign wallet modifiedTx modifiedUtxo
         case rebalanceResult of
-          Left _err ->
+          Left err ->
             -- Rebalancing failed: the modification cannot be realized as a
             -- well-formed transaction on this particular tx (e.g. no usable
             -- collateral or change output). Skip to the next tx, like the
             -- check runners and precondition failures do - failing the
             -- property here would blame the contract for a harness limit.
-            go b model envs
+            -- Surface the reason as a QuickCheck table (even in quiet mode),
+            -- so partial coverage loss is visible: when some envs rebalance
+            -- and others don't, the passing property's tables name the
+            -- failures. Note QuickCheck only prints tables from completed
+            -- tests, so a run where EVERY iteration is discarded still ends
+            -- in a bare "Gave up!" - use the check runners (which record
+            -- 'tmceRebalanceError') to diagnose that case.
+            QC.tabulate "Rebalancing failed with reason" [err] <$> go b model envs
           Right rebalancedTx -> do
             -- Validate with full Phase 1 + Phase 2
             (report, covData) <- validateTxM params rebalancedTx modifiedUtxo
