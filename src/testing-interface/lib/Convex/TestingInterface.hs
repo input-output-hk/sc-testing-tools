@@ -265,7 +265,7 @@ class (TestingInterface state) => ThreatModelsFor state where
   Default: the list of all threat models that don't take parameters.
   -}
   threatModels :: [ThreatModel ()]
-  threatModels = deleteFirstsBy eqName allThreatModels (expectedVulnerabilities @state)
+  threatModels = deleteFirstsBy eqName allThreatModels (expectedVulnerabilities @state <> acceptedFindings @state)
    where
     eqName (Named s _) (Named t _) = s == t
     eqName _ _ =
@@ -281,9 +281,27 @@ class (TestingInterface state) => ThreatModelsFor state where
 
   Output is quiet — no verbose transaction dumps.
   Default: empty, backward compatible.
+
+  Use this only for *genuine* vulnerabilities the contract is known (or
+  designed, e.g. in a CTF exercise) to have. A benign finding — an attack
+  that "succeeds" against a design artifact that isn't exploitable — belongs
+  in 'acceptedFindings' instead: listing it here fails the suite as soon as
+  the finding is no longer detected (punishing an improvement to the attack
+  or the contract), and advertises the contract as vulnerable in reports.
   -}
   expectedVulnerabilities :: [ThreatModel ()]
   expectedVulnerabilities = []
+
+  {- | Threat models whose findings are known, accepted artifacts of the
+  contract's design rather than exploitable bugs. They run like
+  'expectedVulnerabilities' (always, quietly, exempt from the threat-model
+  name filter) but the outcome is purely informational: the test passes
+  whether or not the finding is detected, and the report labels a detection
+  as accepted by design.
+  Default: empty.
+  -}
+  acceptedFindings :: [ThreatModel ()]
+  acceptedFindings = []
 
 {- | Default 'AddressLabeler': labels the credential hashes of the standard
 mock wallets ('Convex.Wallet.MockWallet.mockWallets') as @"Wallet 1".."Wallet
@@ -418,7 +436,8 @@ propRunActionsWithOptions groupName opts =
         let tms = threatModels @state
             filteredTms = filterThreatModelsByOptions opts tms
             evs = expectedVulnerabilities @state
-         in if null tms && null evs
+            afs = acceptedFindings @state
+         in if null tms && null evs && null afs
               then
                 -- No threat models: simple structure (backward compatible)
                 withResource (newIORef (0 :: Int)) (\_ -> pure ()) $ \getPosRef ->
@@ -434,11 +453,14 @@ propRunActionsWithOptions groupName opts =
                   withResource (newIORef (0 :: Int)) (\_ -> pure ()) $ \getPosRef ->
                     withResource (newIORef (0 :: Int)) (\_ -> pure ()) $ \getNegRef ->
                       sequentialTestGroup groupName AllFinish $
-                        [ testProperty "Positive tests" (positiveTest @state opts groupName (Just getTmResultsRef) filteredTms evs recorder getPosRef)
+                        [ -- Accepted findings ride along with the expected vulnerabilities
+                          -- here: both always run, quietly; they only differ in reporting.
+                          testProperty "Positive tests" (positiveTest @state opts groupName (Just getTmResultsRef) filteredTms (evs <> afs) recorder getPosRef)
                         , negativeTestTree recorder getNegRef
                         ]
                           <> threatModelGroup getTmResultsRef filteredTms
                           <> expectedVulnGroup getTmResultsRef evs
+                          <> acceptedFindingsGroup getTmResultsRef afs
  where
   negativeTestTree :: (HasCallStack) => TraceRecorder -> IO (IORef Int) -> TestTree
   negativeTestTree recorder getNegRef =
@@ -454,6 +476,10 @@ propRunActionsWithOptions groupName opts =
   expectedVulnGroup _ [] = []
   expectedVulnGroup getTmResultsRef evs' =
     [testGroup "Expected vulnerabilities" $ zipWith (expectedVulnTestCase getTmResultsRef "Expected vulnerabilities") [1 ..] evs']
+
+  acceptedFindingsGroup _ [] = []
+  acceptedFindingsGroup getTmResultsRef afs' =
+    [testGroup "Accepted findings" $ zipWith (acceptedFindingTestCase getTmResultsRef "Accepted findings") [1 ..] afs']
 
 -- | Negative test: check that invalid actions fail
 negativeTest
@@ -1047,6 +1073,72 @@ expectedVulnTestCase getTmResultsRef groupName idx tm =
                               <> show total
                               <> " tests applicable)"
                           tmRecord recorder key summary
+
+{- | Build a test case for an accepted finding (see
+'ThreatModelsFor.acceptedFindings'): the attack's outcome is reported for
+visibility but nothing is asserted about it, so the case never fails. A
+detection is labeled as accepted by design; no detection at all suggests the
+entry has become stale and can be dropped.
+-}
+acceptedFindingTestCase
+  :: IO (IORef ThreatModelResults)
+  -> String
+  -- ^ Tasty group name (for keying summaries)
+  -> Int
+  -- ^ Index for fallback naming
+  -> ThreatModel ()
+  -- ^ The threat model whose finding is accepted
+  -> TestTree
+acceptedFindingTestCase getTmResultsRef groupName idx tm =
+  let name = fromMaybe ("Accepted finding " <> show idx) (getThreatModelName tm)
+      key = groupName <> "/" <> name
+   in askOption $ \(recorder :: TMRecorder) ->
+        testCaseSteps name $ \step -> do
+          tmRef <- getTmResultsRef
+          allResults <- readIORef tmRef
+          let outcomeEntries = fromMaybe [] (Map.lookup name allResults)
+              outcomes = map fst outcomeEntries
+              total = length outcomes
+              numFound = length [() | TMFailed _ <- outcomes]
+              numNotFound = length [() | TMPassed <- outcomes]
+              numSkipped = length [() | TMSkipped <- outcomes]
+              numSkippedPhase1 = length [() | TMSkippedPhase1 <- outcomes]
+              numErrors = length [() | TMError _ <- outcomes]
+              tested = numFound + numNotFound
+              summary =
+                ThreatModelSummary
+                  { tmsName = T.pack name
+                  , tmsTested = tested
+                  , tmsTotal = total
+                  , tmsPassed = numNotFound
+                  , tmsFailed = numFound
+                  , tmsSkipped = numSkipped
+                  , tmsSkippedPhase1 = numSkippedPhase1
+                  , tmsErrors = numErrors
+                  }
+          tmRecord recorder key summary
+          if numFound > 0
+            then
+              step $
+                "Finding detected ("
+                  <> show numFound
+                  <> "/"
+                  <> show total
+                  <> " tests) - accepted by design, not counted as a vulnerability"
+            else
+              if tested > 0
+                then
+                  step $
+                    "Finding not detected (0/"
+                      <> show total
+                      <> " tests) - if this stays undetected, consider removing it from 'acceptedFindings'"
+                else
+                  step $
+                    "SKIPPED: Precondition never met ("
+                      <> show numSkipped
+                      <> " precondition, 0/"
+                      <> show total
+                      <> " tests applicable)"
 
 summarizeThreatModelIteration :: ThreatModelOutcome -> [ThreatModelCheckEntry] -> (ThreatModelOutcome, [String])
 summarizeThreatModelIteration outcome entries =
