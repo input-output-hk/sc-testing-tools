@@ -197,16 +197,19 @@ inputDuplication = Named "Input Duplication" $ do
     -- Use withPlutusScript to get the language at runtime
     Ledger.withPlutusScript ps $ \(plutus :: Plutus.Plutus l) ->
       let binaryBytes = Plutus.unPlutusBinary (Plutus.plutusBinary plutus)
-          serialised :: C.PlutusScript (C.FromLedgerPlutusLanguage l)
-          serialised = C.PlutusScriptSerialised binaryBytes
+          -- The target language is fixed by the 'C.PlutusScriptVersion'
+          -- argument, so no ledger-to-api language mapping is needed.
           asScript
-            :: (lang ~ C.FromLedgerPlutusLanguage l, IsPlutusScriptInEra lang)
+            :: forall lang
+             . (IsPlutusScriptInEra lang)
             => C.PlutusScriptVersion lang
             -> Maybe SomePlutusScript
           asScript ver =
-            if C.hashScript (C.PlutusScript ver serialised) == targetHash
-              then Just (SomePlutusScript serialised)
-              else Nothing
+            let serialised :: C.PlutusScript lang
+                serialised = C.PlutusScriptSerialised binaryBytes
+             in if C.hashScript (C.PlutusScript ver serialised) == targetHash
+                  then Just (SomePlutusScript serialised)
+                  else Nothing
        in case Plutus.isLanguage @l of
             Plutus.SPlutusV1 -> asScript C.PlutusScriptV1
             Plutus.SPlutusV2 -> asScript C.PlutusScriptV2

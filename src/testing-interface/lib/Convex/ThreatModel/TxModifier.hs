@@ -8,7 +8,72 @@
 
 module Convex.ThreatModel.TxModifier where
 
-import Cardano.Api
+import Cardano.Api (
+  Address (ShelleyAddress),
+  AddressAny (..),
+  AddressInEra (AddressInEra),
+  AssetName,
+  CtxTx,
+  CtxUTxO,
+  ExecutionUnits (ExecutionUnits),
+  HasScriptLanguageInEra (scriptLanguageInEra),
+  Hash (PaymentKeyHash, ScriptDataHash),
+  IsPlutusScriptLanguage (plutusScriptVersion),
+  IsShelleyBasedEra (shelleyBasedEra),
+  PaymentCredential (
+    PaymentCredentialByKey,
+    PaymentCredentialByScript
+  ),
+  PaymentKey,
+  PlutusScript (..),
+  PlutusScriptV2,
+  Quantity (..),
+  ReferenceScript (..),
+  Script (PlutusScript, SimpleScript),
+  ScriptData,
+  ScriptHash,
+  ScriptInAnyLang (ScriptInAnyLang),
+  ScriptInEra (ScriptInEra),
+  ScriptLanguageInEra (SimpleScriptInConway),
+  SerialiseAddress (serialiseAddress),
+  SimpleScript,
+  Tx (Tx),
+  TxBody (ShelleyTxBody),
+  TxBodyContent (
+    TxBodyContent,
+    txOuts,
+    txValidityLowerBound,
+    txValidityUpperBound
+  ),
+  TxBodyScriptData (TxBodyNoScriptData, TxBodyScriptData),
+  TxIn (..),
+  TxIx (..),
+  TxOut (..),
+  TxOutDatum (..),
+  TxOutValue (TxOutValueShelleyBased),
+  TxValidityLowerBound,
+  TxValidityUpperBound,
+  UTxO (..),
+  Value,
+  anyAddressInShelleyBasedEra,
+  fromShelleyPaymentCredential,
+  fromShelleyTxIn,
+  getTxBodyContent,
+  hashScript,
+  hashScriptDataBytes,
+  renderTxIn,
+  serialiseToRawBytesHexText,
+  toAddressAny,
+  toAlonzoData,
+  toAlonzoExUnits,
+  toMaryValue,
+  toShelleyScript,
+  toShelleyScriptHash,
+  toShelleyTxIn,
+  toShelleyTxOut,
+  txOutValueToValue,
+  unsafeHashableScriptData,
+ )
 import Cardano.Ledger.Alonzo.TxBody qualified as Ledger
 import Cardano.Ledger.Alonzo.TxWits qualified as Ledger
 import Cardano.Ledger.Api.Era qualified as Ledger
@@ -26,6 +91,7 @@ import Data.Maybe
 import Data.Maybe.Strict
 import Data.Sequence.Strict qualified as Seq
 import Data.Set qualified as Set
+import Data.Text (Text)
 import PlutusLedgerApi.Test.Examples (alwaysSucceedingNAryFunction)
 
 import Data.Aeson (object, (.=))
