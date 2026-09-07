@@ -715,152 +715,168 @@ rebalanceAndSign chainState wallet tx utxo = do
 
   let walletAddr = Wallet.addressInEra networkId wallet
 
-  -- First, recalculate execution units for all scripts in the transaction
-  -- This is necessary because TxModifier may add scripts with ExecutionUnits 0 0
-  let txWithUpdatedExUnits = updateExecutionUnits pparams systemStart eraHistory utxo tx
-
-  {- A TxModifier that bloats an output's value or datum (e.g. adding junk
-  tokens or extra datum fields) only adds what it's testing - it doesn't also
-  top up that output's ADA to cover the larger minimum UTxO requirement its
-  new size demands, which a real attacker constructing this transaction
-  would have to do anyway. Do that now, so later steps (fee estimation, value
-  balancing) see the transaction's true final shape (see
-  'topUpUnderfundedOutputs').
-  -}
-  let txWithFundedOutputs' = topUpUnderfundedOutputs pparams txWithUpdatedExUnits
-
-  {- The script integrity hash commits to the transaction's redeemers, datums,
-  and the cost models of the languages it uses - all of which are final from
-  here on (execution units were recalculated above; every step below only
-  moves the fee, the outputs, and the collateral fields, none of which the
-  hash covers). Set it now rather than after the fee is fixed: a TxModifier
-  that introduces the FIRST Plutus script into a previously script-free
-  transaction flips this body field from absent to present (~35 bytes), and
-  only by setting it here does the fee estimation below see those bytes.
-  -}
-  let txWithFundedOutputs = recalculateScriptIntegrityHash utxo pparams txWithFundedOutputs'
-
-  {- If a TxModifier introduced a Plutus script into a transaction that
-  previously ran none, it now needs a collateral input and return output that
-  didn't exist before. Give it that shape *before* estimating the fee below,
-  so the fee calculation sees the transaction's true final size (see
-  'ensureCollateralInputShape'). This shape is used only to size 'tempTx'
-  below - it is not the shape the final transaction ends up with.
-  'recalculateTotalCollateral' (called later, after the fee and change are
-  both final) re-derives the collateral input and return from scratch rather
-  than building on this one, since only then is the real required collateral
-  amount known.
-  -}
-  let txWithCollateralShape = ensureCollateralInputShape utxo txWithFundedOutputs
-
-  {- 'evaluateTransactionBalance' needs to know, for every stake/DRep/pool
-  credential a certificate here registers or deregisters, the deposit
-  already on file for it in the chain's live cert state - that's what its
-  three lookup arguments are for. Pull them out of the supplied chain state
-  (which reflects the chain as of this transaction, i.e. before it is
-  applied), so a certificate's deposit or refund lands in the residual just
-  like any other value flow. Passing 'mempty' here instead would silently
-  treat every deregistration's refund as zero, unbalancing e.g. the
-  withdrawal use-case's stake-registration transactions.
-  -}
-  let certState = lsCertState (chainState ^. poolState)
-      registeredPools =
-        Set.map StakePoolKeyHash $
-          Map.keysSet (psStakePools (certState ^. certPStateL))
-      stakeDeposits =
-        Map.map (fromCompact . (^. depositAccountStateL)) $
-          Map.mapKeys fromShelleyStakeCredential $
-            certState ^. certDStateL . accountsL . accountsMapL
-      drepDeposits =
-        Map.map (fromCompact . drepDeposit) (Conway.vsDReps (certState ^. Conway.certVStateL))
-
-  {- The fee and the change output determine each other: the fee is part of
-  the value balance, so it moves the residual the change output has to
-  absorb - and absorbing the residual can change the change output's
-  serialized size (new multi-asset entries from a token residual, or the
-  coin crossing a CBOR width boundary), which moves the minimum fee right
-  back. So the two are solved together as a fixed point: compute the fee
-  for the current outputs, absorb the residual that fee leaves, re-check
-  the fee against the absorbed outputs, and repeat until the fee covers
-  its own consequences. The fee only ever grows across iterations and the
-  change output's size is bounded, so this settles almost immediately
-  (one extra round at most in practice; the iteration cap is pure
-  paranoia).
-  -}
-  let maxFee = Coin (2 ^ (32 :: Integer) - 1)
-
-      -- The witness count matches the re-signing step at the end: one vkey
-      -- witness per original signer (at least 1, so an unsigned transaction
-      -- doesn't get its fee underestimated).
-      witnessCount = fromIntegral (max 1 (length (txSigners tx)))
-
-      -- The minimum fee for the transaction with the given outputs: sized
-      -- over the collateral shape, with the fee field itself at its
-      -- worst-case width.
-      feeFor outs =
-        let Tx body' _ = setTxOutputsList outs (setTxFeeCoin maxFee txWithCollateralShape)
-         in calculateMinTxFee
-              shelleyBasedEra
-              (unLedgerProtocolParameters pparams)
-              utxo
-              body'
-              witnessCount
-
-      {- Measure how far the transaction is from being value-conserved at the
-      given fee, and let the change output absorb it. This single number
-      subsumes the old fee-increase-only case (a plain fee change is all the
-      previous code compensated for) as well as any value a TxModifier
-      added, removed, or resized elsewhere in the transaction (e.g. a
-      duplicated or shrunk output) without a matching change on the input
-      side - instead of every TxModifier having to hand-balance its own
-      mutation.
+  -- First, recalculate execution units for all scripts in the transaction.
+  -- This is necessary because TxModifier may add scripts with ExecutionUnits
+  -- 0 0. A structural evaluation failure (the modified transaction cannot be
+  -- meaningfully executed at all) is a Left and skips the run; a script that
+  -- runs and rejects is not an error here (see 'updateExecutionUnits').
+  case updateExecutionUnits pparams systemStart eraHistory utxo tx of
+    Left err -> pure (Left err)
+    Right txWithUpdatedExUnits -> do
+      {- A TxModifier that bloats an output's value or datum (e.g. adding junk
+      tokens or extra datum fields) only adds what it's testing - it doesn't also
+      top up that output's ADA to cover the larger minimum UTxO requirement its
+      new size demands, which a real attacker constructing this transaction
+      would have to do anyway. Do that now, so later steps (fee estimation, value
+      balancing) see the transaction's true final shape (see
+      'topUpUnderfundedOutputs').
       -}
-      absorbAt fee =
-        let Tx body' _ = setTxFeeCoin fee txWithFundedOutputs
-            residual =
-              txOutValueToValue $
-                evaluateTransactionBalance
+      let txWithFundedOutputs' = topUpUnderfundedOutputs pparams txWithUpdatedExUnits
+
+      {- The script integrity hash commits to the transaction's redeemers, datums,
+      and the cost models of the languages it uses - all of which are final from
+      here on (execution units were recalculated above; every step below only
+      moves the fee, the outputs, and the collateral fields, none of which the
+      hash covers). Set it now rather than after the fee is fixed: a TxModifier
+      that introduces the FIRST Plutus script into a previously script-free
+      transaction flips this body field from absent to present (~35 bytes), and
+      only by setting it here does the fee estimation below see those bytes.
+      -}
+      let txWithFundedOutputs = recalculateScriptIntegrityHash utxo pparams txWithFundedOutputs'
+
+      {- If a TxModifier introduced a Plutus script into a transaction that
+      previously ran none, it now needs a collateral input and return output that
+      didn't exist before. Give it that shape *before* estimating the fee below,
+      so the fee calculation sees the transaction's true final size (see
+      'ensureCollateralInputShape'). This shape is used only to size 'tempTx'
+      below - it is not the shape the final transaction ends up with.
+      'recalculateTotalCollateral' (called later, after the fee and change are
+      both final) re-derives the collateral input and return from scratch rather
+      than building on this one, since only then is the real required collateral
+      amount known.
+      -}
+      let txWithCollateralShape = ensureCollateralInputShape utxo txWithFundedOutputs
+
+      {- 'evaluateTransactionBalance' needs to know, for every stake/DRep/pool
+      credential a certificate here registers or deregisters, the deposit
+      already on file for it in the chain's live cert state - that's what its
+      three lookup arguments are for. Pull them out of the supplied chain state
+      (which reflects the chain as of this transaction, i.e. before it is
+      applied), so a certificate's deposit or refund lands in the residual just
+      like any other value flow. Passing 'mempty' here instead would silently
+      treat every deregistration's refund as zero, unbalancing e.g. the
+      withdrawal use-case's stake-registration transactions.
+      -}
+      let certState = lsCertState (chainState ^. poolState)
+          registeredPools =
+            Set.map StakePoolKeyHash $
+              Map.keysSet (psStakePools (certState ^. certPStateL))
+          stakeDeposits =
+            Map.map (fromCompact . (^. depositAccountStateL)) $
+              Map.mapKeys fromShelleyStakeCredential $
+                certState ^. certDStateL . accountsL . accountsMapL
+          drepDeposits =
+            Map.map (fromCompact . drepDeposit) (Conway.vsDReps (certState ^. Conway.certVStateL))
+
+      {- The fee and the change output determine each other: the fee is part of
+      the value balance, so it moves the residual the change output has to
+      absorb - and absorbing the residual can change the change output's
+      serialized size (new multi-asset entries from a token residual, or the
+      coin crossing a CBOR width boundary), which moves the minimum fee right
+      back. So the two are solved together as a fixed point: compute the fee
+      for the current outputs, absorb the residual that fee leaves, re-check
+      the fee against the absorbed outputs, and repeat until the fee covers
+      its own consequences. The fee only ever grows across iterations and the
+      change output's size is bounded, so this settles almost immediately
+      (one extra round at most in practice; the iteration cap is pure
+      paranoia).
+      -}
+      let maxFee = Coin (2 ^ (32 :: Integer) - 1)
+
+          -- The witness count matches the re-signing step at the end: one vkey
+          -- witness per original signer (at least 1, so an unsigned transaction
+          -- doesn't get its fee underestimated).
+          witnessCount = fromIntegral (max 1 (length (txSigners tx)))
+
+          -- The minimum fee for the transaction with the given outputs: sized
+          -- over the collateral shape, with the fee field itself at its
+          -- worst-case width.
+          feeFor outs =
+            let Tx body' _ = setTxOutputsList outs (setTxFeeCoin maxFee txWithCollateralShape)
+             in calculateMinTxFee
                   shelleyBasedEra
                   (unLedgerProtocolParameters pparams)
-                  registeredPools
-                  stakeDeposits
-                  drepDeposits
                   utxo
                   body'
-         in adjustChangeOutput pparams walletAddr residual (txOutputs txWithFundedOutputs)
+                  witnessCount
 
-      settle :: Int -> Coin -> Either String (Coin, [TxOut CtxTx Era])
-      settle 0 _ = Left "Fee and change output failed to reach a fixed point"
-      settle n fee = do
-        outs <- absorbAt fee
-        let fee' = feeFor outs
-        -- fee' <= fee is enough (fee' == fee is the common case): the
-        -- outputs absorbed the residual at fee, so the transaction is
-        -- exactly balanced at fee, and its minimum fee fee' is covered.
-        if fee' <= fee
-          then Right (fee, outs)
-          else settle (n - 1) fee'
+          {- Measure how far the transaction is from being value-conserved at the
+          given fee, and let the change output absorb it. This single number
+          subsumes the old fee-increase-only case (a plain fee change is all the
+          previous code compensated for) as well as any value a TxModifier
+          added, removed, or resized elsewhere in the transaction (e.g. a
+          duplicated or shrunk output) without a matching change on the input
+          side - instead of every TxModifier having to hand-balance its own
+          mutation.
+          -}
+          absorbAt fee =
+            let Tx body' _ = setTxFeeCoin fee txWithFundedOutputs
+                residual =
+                  txOutValueToValue $
+                    evaluateTransactionBalance
+                      shelleyBasedEra
+                      (unLedgerProtocolParameters pparams)
+                      registeredPools
+                      stakeDeposits
+                      drepDeposits
+                      utxo
+                      body'
+             in adjustChangeOutput pparams walletAddr residual (txOutputs txWithFundedOutputs)
 
-  case settle 5 (feeFor (txOutputs txWithFundedOutputs)) of
-    Left err -> pure (Left err)
-    Right (newFee, adjustedOutputs) -> do
-      -- Apply the settled fee and outputs
-      let modifiedTx = setTxOutputsList adjustedOutputs (setTxFeeCoin newFee txWithFundedOutputs)
+          settle :: Int -> Coin -> Either String (Coin, [TxOut CtxTx Era])
+          settle 0 _ = Left "Fee and change output failed to reach a fixed point"
+          settle n fee = do
+            outs <- absorbAt fee
+            let fee' = feeFor outs
+            -- fee' <= fee is enough (fee' == fee is the common case): the
+            -- outputs absorbed the residual at fee, so the transaction is
+            -- exactly balanced at fee, and its minimum fee fee' is covered.
+            if fee' <= fee
+              then Right (fee, outs)
+              else settle (n - 1) fee'
 
-      -- Recalculate total collateral based on new fee
-      case recalculateTotalCollateral pparams utxo modifiedTx of
+      case settle 5 (feeFor (txOutputs txWithFundedOutputs)) of
         Left err -> pure (Left err)
-        Right txWithCollateral -> do
-          -- Re-sign (strip old signatures and add new one). The script
-          -- integrity hash was set before the fee estimation above and is
-          -- unaffected by the fee/output/collateral updates since.
-          let Tx finalBody _ = txWithCollateral
-              unsignedTx = makeSignedTransaction [] finalBody
-              signers = txSigners tx
-              sign hash tx' = case lookup hash mockWalletHashes of
-                Just w -> Right $ Wallet.signTx w tx'
-                Nothing -> Left "Transaction was signed by an unknown wallet"
-          pure $ foldrM sign unsignedTx signers
+        Right (newFee, adjustedOutputs) -> do
+          -- Apply the settled fee and outputs
+          let modifiedTx = setTxOutputsList adjustedOutputs (setTxFeeCoin newFee txWithFundedOutputs)
+
+          -- Recalculate total collateral based on new fee
+          case recalculateTotalCollateral pparams utxo modifiedTx of
+            Left err -> pure (Left err)
+            Right txWithCollateral -> do
+              {- The script integrity hash was already set before fee estimation
+              above - that is where its body bytes must be sized. Recompute it
+              here as well: a no-op today, since nothing after the early
+              computation touches redeemers, datums, or language views (the
+              recomputation ignores the fee/output/collateral fields updated
+              since). But if a future fix-up step ever invalidates the hash,
+              this keeps every modified transaction from failing phase 1 with
+              @PPViewHashesDontMatch@ - a failure mode the environmental-skip
+              tolerance would silently absorb, leaving suites green with zero
+              attack coverage. The hash is 32 bytes either way, so recomputing
+              late can never invalidate the fee.
+              -}
+              let finalTx = recalculateScriptIntegrityHash utxo pparams txWithCollateral
+
+              -- Re-sign (strip old signatures and add new one)
+              let Tx finalBody _ = finalTx
+                  unsignedTx = makeSignedTransaction [] finalBody
+                  signers = txSigners tx
+                  sign hash tx' = case lookup hash mockWalletHashes of
+                    Just w -> Right $ Wallet.signTx w tx'
+                    Nothing -> Left "Transaction was signed by an unknown wallet"
+              pure $ foldrM sign unsignedTx signers
 
 {- | Update execution units in a transaction by evaluating all scripts.
 
@@ -868,6 +884,17 @@ This computes the actual execution units required for each script and updates
 the redeemers in the transaction with those values. This is necessary because
 TxModifier operations like addPlutusScriptMint use ExecutionUnits 0 0 as
 placeholders.
+
+A script that runs and *rejects* the transaction shows up here as
+'ScriptErrorEvaluationFailed'; its redeemer keeps its previous execution
+units and the rejection is reported by the Phase 2 validation later - the
+very outcome 'shouldNotValidate' attacks look for. Every other evaluation
+error is structural (a missing input, datum, script, or cost model, a
+redeemer pointing nowhere, an execution-units overflow): the transaction the
+modifier built cannot be meaningfully executed at all, so it is returned as
+a 'Left' and the run is skipped as environmental. Silently keeping the
+placeholder units instead would fail Phase 2 on budget and be miscounted as
+the validator rejecting the attack - a false negative.
 -}
 updateExecutionUnits
   :: LedgerProtocolParameters Era
@@ -875,7 +902,7 @@ updateExecutionUnits
   -> EraHistory
   -> UTxO Era
   -> Tx Era
-  -> Tx Era
+  -> Either String (Tx Era)
 updateExecutionUnits pparams systemStart eraHistory utxo tx =
   let exUnitsMap =
         evaluateTransactionExecutionUnits
@@ -885,6 +912,11 @@ updateExecutionUnits pparams systemStart eraHistory utxo tx =
           pparams
           utxo
           (getTxBody tx)
+      structuralErrors =
+        [ (idx, err)
+        | (idx, Left err) <- Map.toList exUnitsMap
+        , not (isEvaluationFailure err)
+        ]
       -- Extract only successful execution unit results
       successfulExUnits =
         Map.mapMaybe
@@ -893,7 +925,17 @@ updateExecutionUnits pparams systemStart eraHistory utxo tx =
               Left _ -> Nothing
           )
           exUnitsMap
-   in updateTxRedeemersWithExUnits successfulExUnits tx
+   in case structuralErrors of
+        [] -> Right (updateTxRedeemersWithExUnits successfulExUnits tx)
+        ((idx, err) : _) ->
+          Left $
+            "Recalculating execution units failed for "
+              <> show idx
+              <> ": "
+              <> show err
+ where
+  isEvaluationFailure ScriptErrorEvaluationFailed{} = True
+  isEvaluationFailure _ = False
 
 {- | Update the execution units in a transaction's redeemers.
 
@@ -1155,11 +1197,12 @@ this, the collateral return output would be added only after the fee had
 already been set, undercounting the transaction's size and its minimum fee.
 
 A transaction that already has collateral inputs isn't necessarily done
-either: 'recalculateTotalCollateral' unconditionally sets the
-total-collateral field and may create a collateral return output that
-didn't exist before (its 'setCollateralReturn' @SNothing@ branch), so if
-either field is missing here it gets a placeholder too, for the same
-sizing reason.
+either: 'recalculateTotalCollateral' unconditionally rebuilds the
+total-collateral field and the collateral return output (possibly creating
+one that didn't exist before, and possibly *growing* an existing one when
+the modification shrinks the fee), so both fields are replaced here with
+upper-bound placeholders derived from the summed collateral inputs, for the
+same sizing reason.
 
 Does nothing if no Plutus script needs to run.
 -}
@@ -1167,24 +1210,33 @@ ensureCollateralInputShape :: UTxO Era -> Tx Era -> Tx Era
 ensureCollateralInputShape utxo tx@(Tx (ShelleyTxBody era body scripts scriptData auxData validity) wits)
   | not (needsCollateral scriptData) = tx
   | not (Set.null (Conway.ctbCollateralInputs body)) =
-      -- Collateral inputs already exist; only pad the fields
-      -- 'recalculateTotalCollateral' will (re)create later, if they are
-      -- missing from the shape. Placeholder values are the whole collateral
-      -- inputs' worth - a safe upper bound on the eventual fields' size,
-      -- since the real required collateral (a percentage of the fee) is
-      -- always far smaller.
+      {- Collateral inputs already exist; pad the fields
+      'recalculateTotalCollateral' will rebuild later so the fee estimation
+      sizes them at an upper bound. That pass rebuilds the return output's
+      value as the SUM of all collateral inputs' tokens plus their summed
+      lovelace minus the required collateral, so the full sum (without the
+      subtraction) is never smaller in encoded size - even when a modifier
+      shrinks the fee and thereby *grows* the real return, or when several
+      collateral inputs sum to more than any single one. An existing return
+      output's stale value is therefore replaced too (keeping its address,
+      datum and reference script, exactly like the rebuild does), and the
+      total-collateral field gets the summed lovelace, an upper bound on the
+      required collateral's width.
+      -}
       case resolvedCollateralOuts of
         [] -> tx -- Unresolvable; let recalculateTotalCollateral report the error later.
-        (TxOut addr val _ _ : _) ->
-          let collValue = sum [txOutValueToLovelace v | TxOut _ v _ _ <- resolvedCollateralOuts]
+        (TxOut fallbackAddr _ _ _ : _) ->
+          let summedValue = mconcat [txOutValueToValue v | TxOut _ v _ _ <- resolvedCollateralOuts]
+              placeholderValue = TxOutValueShelleyBased shelleyBasedEra (toMaryValue summedValue)
+              placeholderReturn = case Conway.ctbCollateralReturn body of
+                SJust sizedOut ->
+                  let TxOut retAddr _ datum rscript = fromShelleyTxOut shelleyBasedEra (CBOR.sizedValue sizedOut)
+                   in TxOut retAddr placeholderValue datum rscript
+                SNothing -> TxOut fallbackAddr placeholderValue TxOutDatumNone ReferenceScriptNone
               body' =
                 body
-                  { Conway.ctbCollateralReturn = case Conway.ctbCollateralReturn body of
-                      SJust r -> SJust r
-                      SNothing -> SJust (mkSizedShelleyTxOut (TxOut addr val TxOutDatumNone ReferenceScriptNone))
-                  , Conway.ctbTotalCollateral = case Conway.ctbTotalCollateral body of
-                      SJust c -> SJust c
-                      SNothing -> SJust collValue
+                  { Conway.ctbCollateralReturn = SJust (mkSizedShelleyTxOut placeholderReturn)
+                  , Conway.ctbTotalCollateral = SJust (selectLovelace summedValue)
                   }
            in Tx (ShelleyTxBody era body' scripts scriptData auxData validity) wits
   | otherwise = case findAdaOnlyKeyInput utxo body of
