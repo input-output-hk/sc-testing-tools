@@ -1,0 +1,144 @@
+name: pbt-cli release
+
+# Tagged `pbt-cli-v*` (e.g. pbt-cli-v0.1.0.0) rather than a bare version, so a
+# pbt-cli release is unambiguous in a repository that also tags library
+# releases. Note that the existing nix.yaml triggers on `tags: ["*.*.*"]` and a
+# GitHub tag glob's `*` matches `.`, so this tag also kicks off a flake check;
+# that is harmless duplication of the main-branch check and is left alone
+# rather than editing an unrelated workflow.
+on:
+  push:
+    tags:
+      - "pbt-cli-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  create_release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Created as a PRERELEASE, not a draft. A draft release is untagged until
+      # it is published, so its tag does not resolve and the
+      # `gh release upload <tag>` in every build leg below would fail with
+      # "release not found" -- the failure mode documented in plu-stan's
+      # release workflow, where all six binaries built and all six uploads
+      # failed.
+      #
+      # A prerelease is published, so its tag resolves and uploads work. It is
+      # safe for one to sit empty while the matrix builds: GitHub's
+      # /releases/latest ignores prereleases, so no auto-download resolves to
+      # it. promote_release flips it to a full latest release once assets exist.
+      - name: Create release
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --prerelease \
+            --title "pbt-cli ${GITHUB_REF_NAME#pbt-cli-v}" \
+            --notes "Binaries for linux-x64, linux-arm64 and darwin-arm64. See src/pbt-cli/CHANGELOG.md."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: [create_release]
+    name: pbt-cli / ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Don't fail fast: one platform failing must not stop the others from
+      # shipping. Whatever builds gets uploaded, and promote_release publishes
+      # the release as long as at least one asset made it.
+      fail-fast: false
+      matrix:
+        # No darwin-x64: Intel macOS is considered obsolete in the Cardano
+        # ecosystem, so an x86_64 Darwin leg would burn a runner on a platform
+        # nobody targets. Adding it back is one `include` entry
+        # (`{ os: macos-13, target: darwin-x64 }`) if that ever changes.
+        include:
+          - { os: ubuntu-latest, target: linux-x64 }
+          - { os: ubuntu-24.04-arm, target: linux-arm64 }
+          - { os: macos-latest, target: darwin-arm64 }
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Haskell
+        uses: haskell-actions/setup@v2
+        id: setup-haskell
+        with:
+          ghc-version: "9.6.6"
+          cabal-version: "3.10.3.0"
+          cabal-update: true
+
+      # cabal.project.pbt-cli does not import cabal.project, so this solve
+      # never sees cardano-api or plutus and therefore never needs libsodium
+      # (VRF fork), secp256k1 or blst. No Cardano system libraries are
+      # installed on any runner, on purpose -- that is the whole reason the
+      # binary lives in its own package.
+      - name: Generate build plan (for the cache key)
+        run: cabal build --project-file=cabal.project.pbt-cli exe:pbt-cli --dry-run
+
+      - name: Cache the cabal store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.setup-haskell.outputs.cabal-store }}
+          key: ${{ runner.os }}-${{ matrix.target }}-pbt-cli-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-pbt-cli-
+
+      - name: Build pbt-cli
+        run: cabal build --project-file=cabal.project.pbt-cli exe:pbt-cli
+
+      - name: Upload the asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          VERSION="${GITHUB_REF_NAME#pbt-cli-v}"     # pbt-cli-v0.1.0.0 -> 0.1.0.0
+          BIN=$(cabal list-bin --project-file=cabal.project.pbt-cli exe:pbt-cli)
+          ASSET="pbt-cli-${VERSION}-${{ matrix.target }}"
+          cp "$BIN" "./dist/${ASSET}"
+          chmod +x "./dist/${ASSET}"
+          # Fail here rather than shipping a binary that reports a different
+          # version than its own filename.
+          REPORTED=$("./dist/${ASSET}" --version)
+          echo "asset ${ASSET} reports: ${REPORTED}"
+          case "$REPORTED" in
+            "pbt-cli ${VERSION} "*) ;;
+            *)
+              echo "::error::--version says '${REPORTED}' but the tag says ${VERSION}." >&2
+              echo "Bump the version in src/pbt-cli/convex-pbt-cli.cabal to match the tag." >&2
+              exit 1
+              ;;
+          esac
+          gh release upload "${GITHUB_REF_NAME}" "./dist/${ASSET}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  promote_release:
+    # `if: always()` so a failed platform leg never blocks shipping the
+    # binaries that did build.
+    needs: [build]
+    if: always()
+    name: Promote release to latest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Publish the release, if any binaries were uploaded
+        run: |
+          # Never promote an EMPTY release to --latest: that would point every
+          # auto-download at a release with no binaries. Require at least one
+          # asset before clearing the prerelease flag.
+          COUNT=$(gh release view "${{ github.ref_name }}" --json assets --jq '.assets | length')
+          echo "Uploaded assets: ${COUNT}"
+          if [ "${COUNT}" -gt 0 ]; then
+            gh release edit "${{ github.ref_name }}" --prerelease=false --latest
+          else
+            echo "::error::No assets were uploaded -- leaving the release as a prerelease." >&2
+            echo "It stays out of /releases/latest, so no auto-download resolves to it." >&2
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

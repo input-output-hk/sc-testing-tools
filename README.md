@@ -108,11 +108,50 @@ cabal build all
 cabal test all
 ```
 
-To inspect a repository's test suites and project layout *without* compiling,
-use `scripts/list-test-suites/list-test-suites.sh`. It statically lists every test suite, how to
-run or discover it, and the surrounding `cabal.project` structure — handy for
-editor and IDE integrations. It needs no `nix develop` (and runs faster outside
-it); see [scripts/README.md](scripts/README.md) for details.
+### pbt-cli
+
+> **Optional, and not the recommended way to run your tests.** You never need
+> `pbt-cli` to use sc-testing-tools — prefer the plain `cabal` commands above,
+> and `cabal test --test-options=...` for the custom options. A `pbt-cli`
+> binary installed on your machine (or downloaded from a release) is versioned
+> independently of the sc-testing-tools your project depends on, so the two can
+> drift apart: the one you have may not match the suites, options or event
+> schema of the version your project actually builds against. `cabal` always
+> drives exactly the code in your project.
+>
+> `pbt-cli` is a convenience for interactive use and for tooling that wants
+> structured output — an editor test explorer, a CI script — where a single
+> binary is easier to invoke than a hand-assembled `cabal test` line.
+
+`pbt-cli` is a single self-contained binary that wraps `cabal test` for this
+stack. It discovers test suites without compiling anything, reports which are
+sc-testing-tools compatible, runs all or individual suites, and exposes the
+custom test options (`--list-tests-json`, `--streaming-json`, `--test-id`,
+`--threat-model-name`) as first-class flags.
+
+```bash
+cabal build pbt-cli                       # or: cabal install --project-file=cabal.project.pbt-cli exe:pbt-cli
+
+pbt-cli suites                            # just the suite names, no compilation
+pbt-cli suites --compatible-only          # only the streaming-capable ones
+pbt-cli suites --table                    # package, compatibility and main-is
+pbt-cli run                               # run every suite
+pbt-cli run convex-vesting-test -p 'first bid'
+pbt-cli run --stream --compatible-only    # live event rendering
+pbt-cli run --json --compatible-only      # the same events as NDJSON
+pbt-cli tests convex-vesting-test         # the authoritative test list, with ids
+pbt-cli doctor
+```
+
+Prebuilt binaries for linux-x64, linux-arm64 and darwin-arm64 are attached to
+`pbt-cli-v*` releases. See
+[src/pbt-cli/README.md](src/pbt-cli/README.md) for the full command reference,
+JSON contracts, exit codes and release process.
+
+`pbt-cli suites` supersedes the shell and Node tools in
+[`scripts/`](scripts/README.md), which do the same static discovery but need
+bash 4, Node and an `npm install`; those remain as the reference
+implementation `pbt-cli` is differentially tested against.
 
 ## TestingInterface: Property-Based Testing for Smart Contracts
 
@@ -275,6 +314,7 @@ The framework runs three types of tests:
 
 Test suites integrated with `convex-tasty-streaming` support `--streaming-json` (real-time NDJSON output of test results) and `--list-tests-json` (structured JSON test-tree discovery without execution), intended for IDE integrations and external tooling.
 See [src/tasty-streaming/README.md](src/tasty-streaming/README.md) for integration instructions, the NDJSON event schema, and `jq` parsing examples.
+`pbt-cli run --json` and `pbt-cli tests` drive both flags for you and filter cabal's own output out of the NDJSON — see [src/pbt-cli/README.md](src/pbt-cli/README.md).
 
 ## Working with cardano node
 - **Positive tests**: Valid action sequences should succeed and pass `validate`

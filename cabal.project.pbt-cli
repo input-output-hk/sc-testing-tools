@@ -1,0 +1,36 @@
+-- cabal.project.pbt-cli
+--
+-- Separate project file for the `pbt-cli` binary.
+--
+-- Deliberately does NOT `import: cabal.project`. The main project pulls in
+-- cardano-api / plutus via a source-repository-package and CHaP, which in turn
+-- require the libsodium (VRF fork), secp256k1 and blst system libraries. The
+-- release matrix builds this binary on plain GitHub runners with no Cardano
+-- system libraries installed, so the solve here must stay on Hackage only.
+--
+-- Same quarantine pattern as cabal.project.schema-gen, for the opposite
+-- reason: that one keeps openapi3 OUT of the Nix build, this one keeps the
+-- Cardano stack OUT of the release build.
+--
+-- No `with-compiler:` on purpose: the release matrix picks the GHC via
+-- haskell-actions/setup, and any GHC >= 9.6 works.
+--
+-- src/pbt-cli is also listed in the main cabal.project, so `cabal build
+-- pbt-cli` works in a normal dev shell. This file is what the release build
+-- and the pbt-cli CI job use.
+--
+-- Usage:
+--   cabal build --project-file=cabal.project.pbt-cli exe:pbt-cli
+--   cabal test  --project-file=cabal.project.pbt-cli all
+--   cabal run   --project-file=cabal.project.pbt-cli pbt-cli -- suites .
+
+index-state: hackage.haskell.org 2026-02-09T00:00:00Z
+
+write-ghc-environment-files: never
+
+test-show-details: direct
+tests: True
+
+packages:
+  src/pbt-cli
+  src/tasty-streaming
