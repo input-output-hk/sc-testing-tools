@@ -88,8 +88,7 @@ invalidDatumIndexAttackWithGen invalidIdxGen =
     -- Negative indices belong to the negative-integer attack, not this model.
     ensure (invalidIdx >= 0)
 
-    -- Precondition: transaction must spend a script input (otherwise no validator runs)
-    _ <- anyInputSuchThat (not . isKeyAddressAny . addressOf)
+    requireScriptInput
 
     -- Get all outputs from the transaction
     outputs <- getTxOutputs

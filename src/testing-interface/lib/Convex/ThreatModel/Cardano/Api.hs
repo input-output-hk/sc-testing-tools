@@ -109,6 +109,7 @@ import Cardano.Ledger.Mary.Value qualified as Mary
 import Cardano.Ledger.Plutus.Language qualified as Plutus
 import Cardano.Ledger.Shelley.API.Mempool (ApplyTxError (..))
 import Cardano.Ledger.State (getScriptsHashesNeeded, getScriptsNeeded, getScriptsProvided)
+import Cardano.Ledger.TxIn qualified as Ledger (TxIn)
 import Cardano.Slotting.Slot ()
 import Cardano.Slotting.Time (SlotLength, mkSlotLength)
 import Control.Lens ((&), (.~), (^.), _1)
@@ -683,12 +684,27 @@ rebalanceAndSign wallet tx utxo = do
   -- This is necessary because TxModifier may add scripts with ExecutionUnits 0 0
   let txWithUpdatedExUnits = updateExecutionUnits pparams systemStart eraHistory utxo tx
 
-  -- Get the current fee from the transaction (from the ledger body)
-  let currentFee = getTxFeeCoin txWithUpdatedExUnits
+  {- A TxModifier that bloats an output's value or datum (e.g. adding junk
+  tokens or extra datum fields) only adds what it's testing - it doesn't also
+  top up that output's ADA to cover the larger minimum UTxO requirement its
+  new size demands, which a real attacker constructing this transaction
+  would have to do anyway. Do that now, so later steps (fee estimation, value
+  balancing) see the transaction's true final shape (see
+  'topUpUnderfundedOutputs').
+  -}
+  let txWithFundedOutputs = topUpUnderfundedOutputs pparams txWithUpdatedExUnits
+
+  {- If a TxModifier introduced a Plutus script into a transaction that
+  previously ran none, it now needs a collateral input and return output that
+  didn't exist before. Give it that shape *before* estimating the fee below,
+  so the fee calculation sees the transaction's true final size (see
+  'ensureCollateralInputShape').
+  -}
+  let txWithCollateralShape = ensureCollateralInputShape utxo txWithFundedOutputs
 
   -- Create a temp tx with max fee to calculate the actual required fee
   let maxFee = Coin (2 ^ (32 :: Integer) - 1)
-      tempTx = setTxFeeCoin maxFee txWithUpdatedExUnits
+      tempTx = setTxFeeCoin maxFee txWithCollateralShape
       Tx tempBody _ = tempTx
       newFee =
         calculateMinTxFee
@@ -698,16 +714,35 @@ rebalanceAndSign wallet tx utxo = do
           tempBody
           1
 
-  -- Calculate fee difference
-  let feeDiff = newFee - currentFee -- positive = fee increased
+  {- Measure how far the transaction is from being value-conserved, once the
+  recalculated fee is in place. This single number subsumes the old
+  fee-increase-only case (a plain fee change is all the previous code
+  compensated for) as well as any value a TxModifier added, removed, or
+  resized elsewhere in the transaction (e.g. a duplicated or shrunk output)
+  without a matching change on the input side. Passing this to
+  'adjustChangeOutput' lets the change output absorb it generically, instead
+  of every TxModifier having to hand-balance its own mutation.
+  -}
+  let txWithNewFee = setTxFeeCoin newFee txWithFundedOutputs
+      Tx bodyWithNewFee _ = txWithNewFee
+      residual =
+        txOutValueToValue $
+          evaluateTransactionBalance
+            shelleyBasedEra
+            (unLedgerProtocolParameters pparams)
+            mempty
+            mempty
+            mempty
+            utxo
+            bodyWithNewFee
 
-  -- Adjust the change output and set the new fee
-  let currentOuts = txOutputs txWithUpdatedExUnits
-  case adjustChangeOutput walletAddr feeDiff currentOuts of
+  -- Adjust the change output to absorb the residual (with the new fee already set)
+  let currentOuts = txOutputs txWithNewFee
+  case adjustChangeOutput pparams walletAddr residual currentOuts of
     Left err -> pure (Left err)
     Right adjustedOutputs -> do
-      -- Apply the changes: new fee and adjusted outputs
-      let modifiedTx = setTxOutputsList adjustedOutputs $ setTxFeeCoin newFee txWithUpdatedExUnits
+      -- Apply the adjusted outputs
+      let modifiedTx = setTxOutputsList adjustedOutputs txWithNewFee
 
       -- Recalculate total collateral based on new fee
       case recalculateTotalCollateral pparams utxo modifiedTx of
@@ -836,55 +871,217 @@ When the fee increases (e.g., due to bloated datum), we need to:
 1. Increase the total collateral field
 2. Decrease the collateral return (to provide more collateral)
 
-Returns Left if the collateral inputs don't have enough value to cover the required
-collateral. This can happen when a TxModifier significantly increases the transaction
-size (and thus the fee) - the original collateral may no longer be sufficient.
+If the transaction runs a Plutus script (spending, minting, or otherwise) but
+doesn't have any collateral inputs yet - e.g. a 'TxModifier' introduced a new
+Plutus script, such as a minting policy, into a transaction that previously
+ran no scripts at all - an existing ADA-only key-address input already
+present in the transaction is reused as the collateral input. The same UTxO
+can appear in both the regular input set and the collateral input set: on a
+successful script run the collateral fields are simply ignored by the
+ledger, so this "double duty" is safe and is what a real wallet without a
+dedicated collateral reserve would do too.
+
+Returns Left if no suitable collateral input is available, or if the chosen
+collateral inputs don't have enough value to cover the required collateral.
+The latter can happen when a TxModifier significantly increases the
+transaction size (and thus the fee) - the original collateral may no longer
+be sufficient.
 -}
 recalculateTotalCollateral :: LedgerProtocolParameters Era -> UTxO Era -> Tx Era -> Either String (Tx Era)
 recalculateTotalCollateral pparams utxo tx@(Tx (ShelleyTxBody era body scripts scriptData auxData validity) wits)
-  -- If there are no collateral inputs, this is a simple transaction without Plutus scripts.
-  -- Return it unchanged - no collateral recalculation needed.
-  | Set.null (Conway.ctbCollateralInputs body) = Right tx
+  -- No Plutus script runs in this transaction: no collateral is required at all.
+  | not (needsCollateral utxo body scripts) = Right tx
   | otherwise =
-      let pp = unLedgerProtocolParameters pparams
-          collPerc = pp ^. ppCollateralPercentageL
-          Coin fee = Conway.ctbTxfee body
-          -- Calculate required total collateral: ceiling(fee * collateralPercentage / 100)
-          requiredColl@(Coin requiredCollAmount) = Coin $ ceiling (fromIntegral fee * fromIntegral collPerc / (100 :: Rational))
+      case collateralInputsToUse utxo body of
+        Nothing -> Left "Transaction runs a Plutus script but no ADA-only key-address input is available to use as collateral"
+        Just collInputsSet ->
           -- Calculate total collateral input value
-          collInputs = Set.toList $ Conway.ctbCollateralInputs body
-          Coin collInputValue =
-            sum
-              [ txOutValueToLovelace val
-              | txIn <- collInputs
-              , Just (TxOut _ val _ _) <- [Map.lookup (fromShelleyTxIn txIn) (unUTxO utxo)]
-              ]
-          -- Calculate new collateral return = input value - required collateral
-          newReturnAmount = collInputValue - requiredCollAmount
-       in if newReturnAmount < 0
-            then Left $ "Insufficient collateral: inputs=" ++ show collInputValue ++ ", need=" ++ show requiredCollAmount
-            else
-              -- Update both total collateral and collateral return
-              let body' =
-                    body
-                      { Conway.ctbTotalCollateral = SJust requiredColl
-                      , Conway.ctbCollateralReturn = updateCollateralReturn (Coin newReturnAmount) (Conway.ctbCollateralReturn body)
-                      }
-               in Right $ Tx (ShelleyTxBody era body' scripts scriptData auxData validity) wits
+          let collOuts =
+                [ txOut
+                | txIn <- Set.toList collInputsSet
+                , Just txOut <- [Map.lookup (fromShelleyTxIn txIn) (unUTxO utxo)]
+                ]
+           in case collOuts of
+                -- collInputsSet is non-empty (it comes from 'collateralInputsToUse'), but
+                -- none of its members resolve against the supplied UTxO set.
+                [] -> Left "Transaction's collateral inputs do not resolve in the supplied UTxO set"
+                -- Address to send any collateral return to, if a fresh return
+                -- output needs to be created (i.e. there wasn't one already):
+                -- the address of the collateral input itself.
+                (TxOut fallbackReturnAddr _ _ _ : _) ->
+                  let pp = unLedgerProtocolParameters pparams
+                      collPerc = pp ^. ppCollateralPercentageL
+                      Coin fee = Conway.ctbTxfee body
+                      -- Calculate required total collateral: ceiling(fee * collateralPercentage / 100)
+                      requiredColl@(Coin requiredCollAmount) = Coin $ ceiling (fromIntegral fee * fromIntegral collPerc / (100 :: Rational))
+                      Coin collInputValue = sum [txOutValueToLovelace val | TxOut _ val _ _ <- collOuts]
+                      -- Calculate new collateral return = input value - required collateral
+                      newReturnAmount = collInputValue - requiredCollAmount
+                      -- The output the leftover would be returned in, had we not yet
+                      -- decided whether it's big enough to keep as its own output.
+                      candidateReturnOut = case Conway.ctbCollateralReturn body of
+                        SJust sizedOut ->
+                          let TxOut addr _ datum rscript = fromShelleyTxOut shelleyBasedEra (CBOR.sizedValue sizedOut)
+                           in TxOut addr (TxOutValueShelleyBased shelleyBasedEra (toMaryValue (lovelaceToValue (Coin newReturnAmount)))) datum rscript
+                        SNothing ->
+                          TxOut fallbackReturnAddr (TxOutValueShelleyBased shelleyBasedEra (toMaryValue (lovelaceToValue (Coin newReturnAmount)))) TxOutDatumNone ReferenceScriptNone
+                      minReturnAda = calculateMinimumUTxO shelleyBasedEra pp candidateReturnOut
+                      -- A leftover that's non-zero but still below the minimum ADA an
+                      -- output must carry can't be returned as its own output (the
+                      -- ledger would reject it with BabbageOutputTooSmallUTxO); in
+                      -- that case forfeit the whole collateral input instead of
+                      -- creating an under-funded return output.
+                      canReturnLeftover = newReturnAmount == 0 || Coin newReturnAmount >= minReturnAda
+                   in if newReturnAmount < 0
+                        then Left $ "Insufficient collateral: inputs=" ++ show collInputValue ++ ", need=" ++ show requiredCollAmount
+                        else
+                          -- Update the collateral inputs, total collateral, and collateral return
+                          let (actualTotalCollateral, newCollateralReturn)
+                                | canReturnLeftover =
+                                    (requiredColl, setCollateralReturn fallbackReturnAddr (Coin newReturnAmount) (Conway.ctbCollateralReturn body))
+                                | otherwise = (Coin collInputValue, SNothing)
+                              body' =
+                                body
+                                  { Conway.ctbCollateralInputs = collInputsSet
+                                  , Conway.ctbTotalCollateral = SJust actualTotalCollateral
+                                  , Conway.ctbCollateralReturn = newCollateralReturn
+                                  }
+                           in Right $ Tx (ShelleyTxBody era body' scripts scriptData auxData validity) wits
 
-{- | Update the collateral return output with a new Ada value.
-If there's no existing collateral return, returns SNothing (no collateral return needed).
+{- | Does this transaction run a Plutus script? A script can either be
+witnessed directly (in @scripts@) or, without being witnessed at all,
+attached as a reference script to one of the UTxOs the transaction spends
+or references - so both have to be checked.
 -}
-updateCollateralReturn :: Coin -> StrictMaybe (CBOR.Sized (Ledger.TxOut LedgerEra)) -> StrictMaybe (CBOR.Sized (Ledger.TxOut LedgerEra))
-updateCollateralReturn (Coin 0) _ = SNothing -- No return needed if all collateral is used
-updateCollateralReturn _newCoin SNothing = SNothing -- No existing return output to modify
-updateCollateralReturn newCoin (SJust sizedOut) =
+needsCollateral :: UTxO Era -> Conway.TxBody LedgerEra -> [Ledger.AlonzoScript LedgerEra] -> Bool
+needsCollateral utxo body scripts =
+  any isPlutusScript scripts || any isPlutusRefScript resolvedInputs
+ where
+  isPlutusScript Ledger.PlutusScript{} = True
+  isPlutusScript _ = False
+
+  resolvedInputs =
+    [ txOut
+    | txIn <- Set.toList (Conway.ctbSpendInputs body) <> Set.toList (Conway.ctbReferenceInputs body)
+    , Just txOut <- [Map.lookup (fromShelleyTxIn txIn) (unUTxO utxo)]
+    ]
+
+  isPlutusRefScript txOut = case referenceScriptOfTxOut txOut of
+    ReferenceScript _ (ScriptInAnyLang (PlutusScriptLanguage _) _) -> True
+    _ -> False
+
+{- | The collateral inputs to use: the existing ones if there are any,
+otherwise a single reused ADA-only key-address input (see
+'recalculateTotalCollateral').
+-}
+collateralInputsToUse :: UTxO Era -> Conway.TxBody LedgerEra -> Maybe (Set.Set Ledger.TxIn)
+collateralInputsToUse utxo body
+  | not (Set.null existingCollateralInputs) = Just existingCollateralInputs
+  | otherwise = Set.singleton <$> findAdaOnlyKeyInput utxo body
+ where
+  existingCollateralInputs = Conway.ctbCollateralInputs body
+
+{- | An existing regular input that's ADA-only and at a key (non-script)
+address, suitable for reuse as a collateral input.
+-}
+findAdaOnlyKeyInput :: UTxO Era -> Conway.TxBody LedgerEra -> Maybe Ledger.TxIn
+findAdaOnlyKeyInput utxo body =
+  listToMaybe
+    [ txIn
+    | txIn <- Set.toList (Conway.ctbSpendInputs body)
+    , Just txOut@(TxOut _ val _ _) <- [Map.lookup (fromShelleyTxIn txIn) (unUTxO utxo)]
+    , isKeyAddressAny (addressOfTxOut txOut)
+    , isAdaOnlyValue (txOutValueToValue val)
+    ]
+
+isAdaOnlyValue :: Value -> Bool
+isAdaOnlyValue v = lovelaceToValue (selectLovelace v) == v
+
+{- | Ensure every output in a transaction carries at least the protocol's
+minimum required ADA for its current size (its value's assets, its datum,
+etc). A 'TxModifier' that bloats an output's value or datum (e.g. adding
+junk tokens or extra datum fields) only adds what it's testing; it doesn't
+separately account for the larger minimum UTxO requirement that bloat
+demands. Without this, such a mutation fails Phase 1 with
+@BabbageOutputTooSmallUTxO@ before the validator ever gets a chance to
+accept or reject the bloat, wasting the test on a ledger bookkeeping
+artifact instead of the validator's own logic - a real attacker constructing
+this transaction would simply provide the required ADA, so the test should
+too.
+
+The shortfall for whichever outputs need it is made up generically once
+'rebalanceAndSign' absorbs the transaction's overall value residual into the
+wallet's change output.
+-}
+topUpUnderfundedOutputs :: LedgerProtocolParameters Era -> Tx Era -> Tx Era
+topUpUnderfundedOutputs pparams tx = setTxOutputsList (map topUp (txOutputs tx)) tx
+ where
+  pp = unLedgerProtocolParameters pparams
+  topUp out@(TxOut addr val datum refScript)
+    | current >= required = out
+    | otherwise =
+        let newValue = txOutValueToValue val <> negateValue (lovelaceToValue current) <> lovelaceToValue required
+         in TxOut addr (TxOutValueShelleyBased shelleyBasedEra (toMaryValue newValue)) datum refScript
+   where
+    required = calculateMinimumUTxO shelleyBasedEra pp out
+    current = txOutValueToLovelace val
+
+{- | If a transaction runs a Plutus script but has no collateral inputs yet,
+pre-populate the collateral inputs and a placeholder collateral return output
+(reusing an existing ADA-only key-address input, see
+'recalculateTotalCollateral'). This exists purely so that a subsequent min-fee
+calculation over the transaction sees its true final shape - including the
+extra collateral return output a first-time collateral input requires -
+before the fee is fixed; 'recalculateTotalCollateral' then overwrites the
+placeholder amount with the precise one once the real fee is known. Without
+this, the collateral return output would be added only after the fee had
+already been set, undercounting the transaction's size and its minimum fee.
+
+Does nothing if collateral inputs already exist, or if no Plutus script
+needs to run.
+-}
+ensureCollateralInputShape :: UTxO Era -> Tx Era -> Tx Era
+ensureCollateralInputShape utxo tx@(Tx (ShelleyTxBody era body scripts scriptData auxData validity) wits)
+  | not (needsCollateral utxo body scripts) = tx
+  | not (Set.null (Conway.ctbCollateralInputs body)) = tx
+  | otherwise = case findAdaOnlyKeyInput utxo body of
+      Nothing -> tx -- No candidate; let recalculateTotalCollateral report the error later.
+      Just txIn ->
+        case Map.lookup (fromShelleyTxIn txIn) (unUTxO utxo) of
+          Nothing -> tx
+          Just (TxOut addr val _ _) ->
+            let body' =
+                  body
+                    { Conway.ctbCollateralInputs = Set.singleton txIn
+                    , Conway.ctbCollateralReturn = SJust (mkSizedShelleyTxOut (TxOut addr val TxOutDatumNone ReferenceScriptNone))
+                    }
+             in Tx (ShelleyTxBody era body' scripts scriptData auxData validity) wits
+
+{- | Update the collateral return output with a new Ada value. If there's no
+existing collateral return output, a fresh one is created at the given
+fallback address (used when a transaction gains a collateral input for the
+first time and thus never had a return output to begin with).
+-}
+setCollateralReturn
+  :: AddressInEra Era
+  -> Coin
+  -> StrictMaybe (CBOR.Sized (Ledger.TxOut LedgerEra))
+  -> StrictMaybe (CBOR.Sized (Ledger.TxOut LedgerEra))
+setCollateralReturn _ (Coin 0) _ = SNothing -- No return needed if all collateral is used
+setCollateralReturn _ newCoin (SJust sizedOut) =
   let oldOut = CBOR.sizedValue sizedOut
       TxOut addr _ datum rscript = fromShelleyTxOut shelleyBasedEra oldOut
       -- Create new output with updated Ada value (preserve any non-Ada assets)
       newOut = TxOut addr (TxOutValueShelleyBased shelleyBasedEra (toMaryValue (lovelaceToValue newCoin))) datum rscript
-      newLedgerOut = toShelleyTxOut shelleyBasedEra (toCtxUTxOTxOut newOut)
-   in SJust $ CBOR.mkSized (Ledger.eraProtVerLow @LedgerEra) newLedgerOut
+   in SJust $ mkSizedShelleyTxOut newOut
+setCollateralReturn fallbackAddr newCoin SNothing =
+  let newOut = TxOut fallbackAddr (TxOutValueShelleyBased shelleyBasedEra (toMaryValue (lovelaceToValue newCoin))) TxOutDatumNone ReferenceScriptNone
+   in SJust $ mkSizedShelleyTxOut newOut
+
+-- | Convert a 'TxOut' into a sized ledger 'TxOut', as stored in a tx body.
+mkSizedShelleyTxOut :: TxOut CtxTx Era -> CBOR.Sized (Ledger.TxOut LedgerEra)
+mkSizedShelleyTxOut out =
+  CBOR.mkSized (Ledger.eraProtVerLow @LedgerEra) (toShelleyTxOut shelleyBasedEra (toCtxUTxOTxOut out))
 
 -- | Extract the Plutus language from a ledger script, if it's a Plutus script
 getScriptLanguage :: Ledger.AlonzoScript LedgerEra -> Maybe Plutus.Language
@@ -914,35 +1111,47 @@ setTxOutputsList newOuts (Tx (ShelleyTxBody era body scripts scriptData auxData 
       body' = body{Conway.ctbOutputs = newOutsSeq}
    in Tx (ShelleyTxBody era body' scripts scriptData auxData validity) wits
 
-{- | Adjust the last output going to wallet address by fee difference.
+{- | Adjust the last output going to wallet address by a value delta.
 
-If fee increased, we subtract from the change output.
-If fee decreased, we add to the change output.
+The delta is added to the change output's value: a negative Lovelace (or
+other asset) component subtracts from it. This is used both to cover a plain
+fee increase/decrease and, more generally, to absorb whatever residual value
+imbalance ('rebalanceAndSign''s 'evaluateTransactionBalance' check) a
+'TxModifier' introduced elsewhere in the transaction (e.g. an output that was
+added, removed, or resized without a matching change on the input side).
+
+Unlike every other output, the change output can't be fixed up afterwards by
+'topUpUnderfundedOutputs': that helper's top-ups are themselves absorbed by a
+further adjustment of the change output, so applying it to the change output
+itself would just cancel back out. So the minimum-UTxO requirement is checked
+right here, on the one output this function is the last thing to touch.
 -}
 adjustChangeOutputM
   :: (MonadFail m)
-  => AddressInEra Era
+  => LedgerProtocolParameters Era
+  -> AddressInEra Era
   -- ^ Wallet address to find change output
-  -> Coin
-  -- ^ Fee difference (positive = fee increased)
+  -> Value
+  -- ^ Value delta to apply to the change output
   -> [TxOut CtxTx Era]
   -- ^ Transaction outputs
   -> m [TxOut CtxTx Era]
-adjustChangeOutputM walletAddr feeDiff outputs =
-  case adjustChangeOutput walletAddr feeDiff outputs of
+adjustChangeOutputM pparams walletAddr delta outputs =
+  case adjustChangeOutput pparams walletAddr delta outputs of
     Left err -> fail err
     Right result -> pure result
 
 -- | Like 'adjustChangeOutput' but returns Either instead of using MonadFail.
 adjustChangeOutput
-  :: AddressInEra Era
+  :: LedgerProtocolParameters Era
+  -> AddressInEra Era
   -- ^ Wallet address to find change output
-  -> Coin
-  -- ^ Fee difference (positive = fee increased)
+  -> Value
+  -- ^ Value delta to apply to the change output
   -> [TxOut CtxTx Era]
   -- ^ Transaction outputs
   -> Either String [TxOut CtxTx Era]
-adjustChangeOutput walletAddr (Coin feeDiff) outputs = do
+adjustChangeOutput pparams walletAddr delta outputs = do
   -- Find last output to wallet address
   let indexed = zip [0 ..] outputs
       walletOutputs =
@@ -953,18 +1162,17 @@ adjustChangeOutput walletAddr (Coin feeDiff) outputs = do
   case listToMaybe (reverse walletOutputs) of
     Nothing -> Left "No change output found to wallet address"
     Just (idx, TxOut addr val datum refScript) -> do
-      let Coin oldAda = txOutValueToLovelace val
-          newAda = oldAda - feeDiff -- subtract fee increase (or add fee decrease)
-      if newAda < 0
-        then Left "Change output cannot cover fee increase"
+      let oldValue = txOutValueToValue val
+          newValue = oldValue <> delta
+      if not (leqValue mempty newValue)
+        then Left "Change output cannot cover the value shortfall introduced by the transaction modification"
         else do
-          let newLovelace = Coin newAda
-              -- Preserve non-Ada assets in the value
-              oldValue = txOutValueToValue val
-              newValue = oldValue <> negateValue (lovelaceToValue (Coin oldAda)) <> lovelaceToValue newLovelace
-              newVal = TxOutValueShelleyBased shelleyBasedEra (toMaryValue newValue)
+          let newVal = TxOutValueShelleyBased shelleyBasedEra (toMaryValue newValue)
               newOutput = TxOut addr newVal datum refScript
-          Right $ replaceAt idx newOutput outputs
+              required = calculateMinimumUTxO shelleyBasedEra (unLedgerProtocolParameters pparams) newOutput
+          if txOutValueToLovelace newVal < required
+            then Left "Change output would fall below the minimum required ADA after rebalancing"
+            else Right $ replaceAt idx newOutput outputs
 
 -- | Replace element at index in a list
 replaceAt :: Int -> a -> [a] -> [a]

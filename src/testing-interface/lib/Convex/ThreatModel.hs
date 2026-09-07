@@ -77,6 +77,7 @@ module Convex.ThreatModel (
   inPrecondition,
   ensure,
   ensureHasInputAt,
+  requireScriptInput,
   failPrecondition,
 
   -- ** Validation
@@ -647,6 +648,24 @@ ensureHasInputAt :: AddressAny -> ThreatModel ()
 ensureHasInputAt addr = do
   inputs <- getTxInputs
   ensure $ any ((addr ==) . addressOf) inputs
+
+{- | Precondition that requires the original transaction to spend at least one
+script input. Attacks that mutate a script output and then check whether
+spending it still validates need this: on a transaction that runs no script
+at all (e.g. a setup transaction that just pays a key input into a script for
+the first time), no validator ever gets a chance to reject the mutation, so
+"the mutated transaction still validates" is vacuous and proves nothing about
+the validator under test.
+
+Not every attack needs this - one that tests a minting policy in isolation
+(e.g. "Convex.ThreatModel.TokenForgery") is still meaningful on a transaction
+that spends no script - so this is opt-in per attack rather than applied
+globally to every 'ThreatModelEnv'.
+-}
+requireScriptInput :: ThreatModel ()
+requireScriptInput = do
+  inputs <- getTxInputs
+  ensure $ any (not . isKeyAddressAny . addressOf) inputs
 
 -- | Returns @True@ if evaluated under a `threatPrecondition` and @False@ otherwise.
 inPrecondition :: ThreatModel Bool

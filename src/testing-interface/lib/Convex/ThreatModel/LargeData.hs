@@ -81,8 +81,7 @@ largeDataAttackWithGen fieldsGen =
     -- Skip iterations where the draw is too small to be a meaningful attack.
     ensure (n >= 1)
 
-    -- Precondition: transaction must spend a script input (otherwise no validator runs)
-    _ <- anyInputSuchThat (not . isKeyAddressAny . addressOf)
+    requireScriptInput
 
     -- Get all outputs from the transaction
     outputs <- getTxOutputs

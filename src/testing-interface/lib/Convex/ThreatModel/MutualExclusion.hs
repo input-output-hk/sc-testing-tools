@@ -32,6 +32,15 @@ actually correspond to their input).
    list.find returns the first match
 5. This breaks the 1:1 correspondence between inputs and outputs
 
+Note: the duplicate carries the SAME value as the original output, not just
+the same address and datum. This also catches validators that locate "their"
+continuation by @list.find@-ing on the output's value (e.g. matching an
+expected payout amount) rather than on the datum. The transaction's overall
+value conservation is handled by the test harness's rebalancing (it tops up
+or draws down the wallet's change output to absorb whatever a 'TxModifier'
+adds or removes), so this attack doesn't need to hand-balance the duplicate
+itself.
+
 == Consequences ==
 
 1. __Cross-matching__: Input A claims Output B's value, Input B claims nothing
@@ -69,6 +78,8 @@ For a transaction with script continuation outputs:
 
 * Find a script output (continuation) that goes back to a script address
 * Duplicate it — add another output with the SAME address, value, and datum
+  (the test harness's rebalancing absorbs the duplicate's value by adjusting
+  the wallet's change output, so this doesn't trip @ValueNotConservedUtxo@)
 * If the transaction still validates, the script doesn't properly enforce
   mutual exclusion between inputs and outputs
 
@@ -78,6 +89,16 @@ without enforcing uniqueness.
 -}
 mutualExclusionAttack :: ThreatModel ()
 mutualExclusionAttack = Named "Mutual Exclusion Attack" $ do
+  -- Require at least two script inputs, mirroring the "Account A and Account
+  -- B" attack scenario above. With fewer than two script inputs there is
+  -- nothing for a duplicated output to be cross-matched against, so any
+  -- validator that simply aggregates value at its own address (rather than
+  -- picking "its" output via list.find) would trivially "still validate"
+  -- without that indicating a Mutual Exclusion vulnerability.
+  inputs <- getTxInputs
+  let scriptInputs = filter (not . isKeyAddressAny . addressOf) inputs
+  threatPrecondition $ ensure (length scriptInputs >= 2)
+
   -- Get all outputs from the transaction
   outputs <- getTxOutputs
 
