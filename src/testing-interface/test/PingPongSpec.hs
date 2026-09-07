@@ -29,7 +29,6 @@ module PingPongSpec (
 ) where
 
 import Cardano.Api qualified as C
-import Control.Lens ((^.))
 import Control.Monad (void)
 import Control.Monad.Except (MonadError, runExceptT)
 import Control.Monad.Trans (lift)
@@ -49,7 +48,6 @@ import Convex.MockChain.CoinSelection (
   tryBalanceAndSubmit,
  )
 import Convex.MockChain.Defaults qualified as Defaults
-import Convex.NodeParams (ledgerProtocolParameters)
 import Convex.TestingInterface (
   Options (Options, params),
   RunOptions (..),
@@ -65,13 +63,14 @@ import Convex.TestingInterface (
 import Convex.ThreatModel (
   SigningWallet (SignWith),
   ThreatModel (Named),
-  ThreatModelEnv (..),
   counterexampleTM,
   ensure,
   getTxOutputs,
+  mkThreatModelEnv,
   paragraph,
   runThreatModel,
   runThreatModelMQuiet,
+  threatModelEnvs,
  )
 import Convex.ThreatModel.InvalidDatumIndex (invalidDatumIndexAttackWith)
 import Convex.ThreatModel.InvalidScriptPurpose (invalidScriptPurposeAttack)
@@ -494,6 +493,10 @@ propPingPongWithThreatModel opts = monadicIO $ do
 
   -- Run the mockchain and collect transactions
   result <- runTestingMonadT params $ do
+    -- The state before any transaction: 'threatModelEnvs' replays the
+    -- collected transactions from here, capturing the per-transaction
+    -- chain state each one validated against.
+    state0 <- Convex.Class.getMockChainState
     initialState <- initialize @PingPongModel
     -- Generate and execute actions
     let go (0 :: Int) s = pure s
@@ -505,29 +508,15 @@ propPingPongWithThreatModel opts = monadicIO $ do
 
     _ <- go 10 initialState
 
-    -- Collect submitted transactions
+    -- Collect submitted transactions (newest first)
     txs <- Convex.Class.getTxs
-    -- Get the current UTxO set
-    ledgerUtxo <- Convex.Class.getUtxo
-    -- Get the current slot
-    pure (txs, ledgerUtxo)
+    pure (reverse txs, state0)
 
   case result of
     (Left err, _) -> fail (show err)
-    (Right (txs, ledgerUtxo), _finalState) -> do
-      -- Convert ledger UTxO to cardano-api UTxO
-      let utxo = fromLedgerUTxO C.shelleyBasedEra ledgerUtxo
-          pparams' = params ^. ledgerProtocolParameters
-
-      -- Create ThreatModelEnv for each transaction
-      let envs =
-            [ ThreatModelEnv
-                { currentTx = tx
-                , currentUTxOs = utxo
-                , pparams = pparams'
-                }
-            | tx <- txs
-            ]
+    (Right (txs, state0), _finalState) -> do
+      -- Create a ThreatModelEnv for each transaction by replaying them
+      let envs = threatModelEnvs params txs state0
 
       -- Run the basic threat model
       -- This demonstrates the integration pattern
@@ -560,15 +549,10 @@ propPingPongVulnerableToOutputRedirect opts = QC.expectFailure $
     result <- run $
       runMockchain0IOWith Wallet.initialUTxOs params $
         runExceptT $ do
-          (tx, utxo) <- vulnerablePingPongScenario
+          (tx, chainStateBefore) <- vulnerablePingPongScenario
 
-          let pparams' = params ^. ledgerProtocolParameters
-              env =
-                ThreatModelEnv
-                  { currentTx = tx
-                  , currentUTxOs = utxo
-                  , pparams = pparams'
-                  }
+          let env =
+                mkThreatModelEnv tx chainStateBefore
 
           -- Run the threat model INSIDE MockchainT with full Phase 1 + Phase 2 validation
           -- Use runThreatModelMQuiet to suppress verbose counterexample output
@@ -585,7 +569,7 @@ propPingPongVulnerableToOutputRedirect opts = QC.expectFailure $
        , MonadError (BalanceTxError C.ConwayEra) m
        , MonadFail m
        )
-    => m (C.Tx C.ConwayEra, C.UTxO C.ConwayEra)
+    => m (C.Tx C.ConwayEra, Convex.Class.MockChainState C.ConwayEra)
   vulnerablePingPongScenario = do
     let value = 10_000_000
         -- Use VULNERABLE script
@@ -609,7 +593,7 @@ propPingPongVulnerableToOutputRedirect opts = QC.expectFailure $
         []
 
     -- Capture UTxO BEFORE playing a round (contains the script UTxO)
-    utxoBefore <- fromLedgerUTxO C.shelleyBasedEra <$> getUtxo
+    chainStateBefore <- Convex.Class.getMockChainState
 
     -- Play a round - this transaction IS validated by the VULNERABLE script
     let txIn = C.TxIn (C.getTxId $ C.getTxBody deployTx) (C.TxIx 0)
@@ -621,7 +605,7 @@ propPingPongVulnerableToOutputRedirect opts = QC.expectFailure $
         TrailingChange
         []
 
-    pure (playTx, utxoBefore)
+    pure (playTx, chainStateBefore)
 
 {- | Test that demonstrates the vulnerable PingPong script IS vulnerable to
 large data attacks. The 'largeDataAttackWith' threat model should find that
@@ -639,15 +623,10 @@ propPingPongVulnerableToLargeData opts = QC.expectFailure $
     result <- run $
       runMockchain0IOWith Wallet.initialUTxOs params $
         runExceptT $ do
-          (tx, utxo) <- vulnerablePingPongLargeDataScenario
+          (tx, chainStateBefore) <- vulnerablePingPongLargeDataScenario
 
-          let pparams' = params ^. ledgerProtocolParameters
-              env =
-                ThreatModelEnv
-                  { currentTx = tx
-                  , currentUTxOs = utxo
-                  , pparams = pparams'
-                  }
+          let env =
+                mkThreatModelEnv tx chainStateBefore
 
           -- Run threat model inside MockchainT
           -- Use runThreatModelMQuiet to suppress verbose counterexample output
@@ -664,7 +643,7 @@ propPingPongVulnerableToLargeData opts = QC.expectFailure $
        , MonadError (BalanceTxError C.ConwayEra) m
        , MonadFail m
        )
-    => m (C.Tx C.ConwayEra, C.UTxO C.ConwayEra)
+    => m (C.Tx C.ConwayEra, Convex.Class.MockChainState C.ConwayEra)
   vulnerablePingPongLargeDataScenario = do
     let value = 10_000_000
         -- Use VULNERABLE script (uses unstableMakeIsData - permissive parsing)
@@ -688,7 +667,7 @@ propPingPongVulnerableToLargeData opts = QC.expectFailure $
         []
 
     -- Capture UTxO BEFORE playing a round (contains the script UTxO as input)
-    utxoBefore <- fromLedgerUTxO C.shelleyBasedEra <$> getUtxo
+    chainStateBefore <- Convex.Class.getMockChainState
 
     -- Play a round to create a transaction with script output
     let txIn = C.TxIn (C.getTxId $ C.getTxBody deployTx) (C.TxIx 0)
@@ -700,7 +679,7 @@ propPingPongVulnerableToLargeData opts = QC.expectFailure $
         TrailingChange
         []
 
-    pure (playTx, utxoBefore)
+    pure (playTx, chainStateBefore)
 
 {- | Test that demonstrates the vulnerable PingPong script IS vulnerable to
 large value attacks. The 'largeValueAttackWith' threat model should find that
@@ -722,15 +701,10 @@ propPingPongVulnerableToLargeValue opts = QC.expectFailure $
     result <- run $
       runMockchain0IOWith Wallet.initialUTxOs params $
         runExceptT $ do
-          (tx, utxo) <- vulnerablePingPongLargeValueScenario
+          (tx, chainStateBefore) <- vulnerablePingPongLargeValueScenario
 
-          let pparams' = params ^. ledgerProtocolParameters
-              env =
-                ThreatModelEnv
-                  { currentTx = tx
-                  , currentUTxOs = utxo
-                  , pparams = pparams'
-                  }
+          let env =
+                mkThreatModelEnv tx chainStateBefore
 
           -- Run threat model inside MockchainT
           -- Use runThreatModelMQuiet to suppress verbose counterexample output
@@ -747,7 +721,7 @@ propPingPongVulnerableToLargeValue opts = QC.expectFailure $
        , MonadError (BalanceTxError C.ConwayEra) m
        , MonadFail m
        )
-    => m (C.Tx C.ConwayEra, C.UTxO C.ConwayEra)
+    => m (C.Tx C.ConwayEra, Convex.Class.MockChainState C.ConwayEra)
   vulnerablePingPongLargeValueScenario = do
     let value = 10_000_000
         -- Use VULNERABLE script (doesn't validate Value structure)
@@ -771,7 +745,7 @@ propPingPongVulnerableToLargeValue opts = QC.expectFailure $
         []
 
     -- Capture UTxO BEFORE playing a round (contains the script UTxO as input)
-    utxoBefore <- fromLedgerUTxO C.shelleyBasedEra <$> getUtxo
+    chainStateBefore <- Convex.Class.getMockChainState
 
     -- Play a round to create a transaction with script output
     let txIn = C.TxIn (C.getTxId $ C.getTxBody deployTx) (C.TxIx 0)
@@ -783,7 +757,7 @@ propPingPongVulnerableToLargeValue opts = QC.expectFailure $
         TrailingChange
         []
 
-    pure (playTx, utxoBefore)
+    pure (playTx, chainStateBefore)
 
 pingPongMultipleRounds
   :: forall era m

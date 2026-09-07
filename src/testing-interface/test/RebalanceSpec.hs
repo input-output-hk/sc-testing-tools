@@ -28,6 +28,7 @@ import Data.ByteString qualified as BS
 import Data.List (isInfixOf)
 import Data.Map qualified as Map
 import Data.Set qualified as Set
+import GHC.Exts (fromList)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
@@ -66,7 +67,7 @@ mkOut :: C.Value -> C.TxOut ctx C.ConwayEra
 mkOut v = C.TxOut walletAddr (C.TxOutValueShelleyBased C.ShelleyBasedEraConway (C.toMaryValue v)) C.TxOutDatumNone C.ReferenceScriptNone
 
 tokens :: C.Value
-tokens = C.valueFromList [(C.AssetId testPolicy testAssetName, 5)]
+tokens = fromList [(C.AssetId testPolicy testAssetName, 5)]
  where
   testPolicy = either (error . show) id (C.deserialiseFromRawBytes C.AsPolicyId (BS.replicate 28 3))
   testAssetName = either (error . show) id (C.deserialiseFromRawBytes C.AsAssetName "TKN")

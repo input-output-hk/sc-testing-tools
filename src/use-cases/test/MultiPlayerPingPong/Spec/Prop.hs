@@ -21,21 +21,15 @@ import Convex.MockChain.Defaults qualified as Defaults
 import Convex.PlutusLedger.V1 (transPubKeyHash)
 import Convex.Tasty.QuickCheck qualified as QC
 import Convex.TestingInterface (AddressLabeler (..), TestingInterface (..), ThreatModelsFor (..), mockWalletAddressLabeler, propRunActions)
-import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
-import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
+import Convex.ThreatModel.DatumBloat (datumListBloatAttack)
 import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
-import Convex.ThreatModel.InputDuplication (inputDuplication)
 import Convex.ThreatModel.InvalidDatumIndex (invalidDatumIndexAttack)
 import Convex.ThreatModel.LargeData (largeDataAttack)
 import Convex.ThreatModel.LargeValue (largeValueAttack)
 import Convex.ThreatModel.MissingOutputDatum (missingOutputDatumAttack)
-import Convex.ThreatModel.MutualExclusion (mutualExclusionAttack)
 import Convex.ThreatModel.NegativeInteger (negativeIntegerAttack)
 import Convex.ThreatModel.OutputDatumHashMissing (outputDatumHashMissingAttack)
-import Convex.ThreatModel.RedeemerAssetSubstitution (redeemerAssetSubstitution)
-import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
 import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
-import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
 import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
 import Convex.ThreatModel.ValueUnderpayment (valueUnderpaymentAttack)
 import Convex.Utxos (toApiUtxo)
@@ -273,27 +267,28 @@ nextStateForHitTurn m =
   nextRounds = if nextIx == 0 then _roundCount m + 1 else _roundCount m
 
 instance ThreatModelsFor MultiPlayerPingPongModel where
+  -- Notably absent: 'mutualExclusionAttack', 'inputDuplication' and
+  -- 'doubleSatisfaction' need a second script input / a second UTxO at the
+  -- script address, but the game is a single-state-UTxO contract; the
+  -- byte-bloat, redeemer-substitution and self-reference attacks never find
+  -- the datum/redeemer shape they target here. 'timeBoundManipulation' was
+  -- listed as an expected vulnerability but its precondition (a validity
+  -- range constraint to manipulate) never held on any generated
+  -- transaction, so it asserted nothing and is dropped.
   threatModels =
     [ datumListBloatAttack
-    , datumByteBloatAttack
-    , doubleSatisfaction
-    , inputDuplication
     , invalidDatumIndexAttack
     , largeDataAttack
     , largeValueAttack
     , missingOutputDatumAttack
-    , mutualExclusionAttack
     , negativeIntegerAttack
     , outputDatumHashMissingAttack
-    , redeemerAssetSubstitution
-    , selfReferenceInjection
     , signatoryRemoval
     , unprotectedScriptOutput
     , valueUnderpaymentAttack
     ]
   expectedVulnerabilities =
     [ duplicateListEntryAttack
-    , timeBoundManipulation
     ]
 
 -------------------------------------------------------------------------------

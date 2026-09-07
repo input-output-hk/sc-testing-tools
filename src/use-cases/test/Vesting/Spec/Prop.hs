@@ -19,19 +19,11 @@ import Convex.MockChain.Defaults qualified as Defaults
 import Convex.PlutusLedger.V1 (transPubKeyHash)
 import Convex.Tasty.QuickCheck qualified as QC
 import Convex.TestingInterface (RunOptions, TestingInterface (..), ThreatModelsFor (..), propRunActionsWithOptions)
-import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
-import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
-import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
-import Convex.ThreatModel.InputDuplication (inputDuplication)
 import Convex.ThreatModel.InvalidDatumIndex (invalidDatumIndexAttack)
 import Convex.ThreatModel.LargeData (largeDataAttack)
 import Convex.ThreatModel.LargeValue (largeValueAttack)
 import Convex.ThreatModel.MissingOutputDatum (missingOutputDatumAttack)
-import Convex.ThreatModel.MutualExclusion (mutualExclusionAttack)
-import Convex.ThreatModel.NegativeInteger (negativeIntegerAttack)
 import Convex.ThreatModel.OutputDatumHashMissing (outputDatumHashMissingAttack)
-import Convex.ThreatModel.RedeemerAssetSubstitution (redeemerAssetSubstitution)
-import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
 import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
 import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
 import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
@@ -238,32 +230,16 @@ instance TestingInterface VestingModel where
   monitoring _ _ = id
 
 instance ThreatModelsFor VestingModel where
+  -- Notably absent: 'mutualExclusionAttack', 'inputDuplication' and
+  -- 'doubleSatisfaction' need a second script input / a second UTxO at the
+  -- script address, but vesting locks a single state UTxO; the ()-datum
+  -- rules out every datum-shaped attack, and the redeemer/self-reference
+  -- substitutions never find the shape they target here.
   threatModels =
-    [ datumListBloatAttack
-    , datumByteBloatAttack
-    , doubleSatisfaction
-    , duplicateListEntryAttack
-    , inputDuplication
-    , mutualExclusionAttack
-    , negativeIntegerAttack
-    , redeemerAssetSubstitution
-    , selfReferenceInjection
-    , signatoryRemoval
+    [ signatoryRemoval
     , timeBoundManipulation
     ]
 
-  -- valueUnderpaymentAttack is listed here rather than in 'threatModels'
-  -- because it flags a benign artifact of this validator's design rather
-  -- than an exploitable bug: the datum is always (), so the validator
-  -- instead checks that the value remaining locked at its own address is
-  -- at least the amount still owed for the unvested tranches
-  -- ('remainingExpected' in Vesting.Validator). Once the transaction's
-  -- validity range is past both tranche dates, 'remainingExpected' is zero,
-  -- so that check degrades to "leftover >= 0" and validates no matter how
-  -- much the continuing output is reduced by. That's not a fund-safety
-  -- issue: the owner (who must still sign) is by then entitled to withdraw
-  -- everything anyway, so this only ever "underpays" their own already
-  -- fully-vested funds.
   expectedVulnerabilities =
     [ invalidDatumIndexAttack
     , largeDataAttack
@@ -271,8 +247,21 @@ instance ThreatModelsFor VestingModel where
     , missingOutputDatumAttack
     , outputDatumHashMissingAttack
     , unprotectedScriptOutput
-    , valueUnderpaymentAttack
     ]
+
+  -- valueUnderpaymentAttack is listed here rather than in 'threatModels' or
+  -- 'expectedVulnerabilities' because it flags a benign artifact of this
+  -- validator's design rather than an exploitable bug: the datum is always
+  -- (), so the validator instead checks that the value remaining locked at
+  -- its own address is at least the amount still owed for the unvested
+  -- tranches ('remainingExpected' in Vesting.Validator). Once the
+  -- transaction's validity range is past both tranche dates,
+  -- 'remainingExpected' is zero, so that check degrades to "leftover >= 0"
+  -- and validates no matter how much the continuing output is reduced by.
+  -- That's not a fund-safety issue: the owner (who must still sign) is by
+  -- then entitled to withdraw everything anyway, so this only ever
+  -- "underpays" their own already fully-vested funds.
+  acceptedFindings = [valueUnderpaymentAttack]
 
 -------------------------------------------------------------------------------
 -- Helper functions

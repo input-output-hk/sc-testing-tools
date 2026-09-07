@@ -94,7 +94,7 @@ valueUnderpaymentAttackWithGen reductionFactorGen =
     reduced output is never below it, so that top-up is a no-op and the
     deliberate reduction reaches the validator intact.
     -}
-    ThreatModelEnv _ _ envPParams <- getThreatModelEnv
+    envPParams <- pparams <$> getThreatModelEnv
     let minRequiredAda out = C.calculateMinimumUTxO C.shelleyBasedEra (C.unLedgerProtocolParameters envPParams) (outputTxOut out)
 
     -- Get all outputs from the transaction

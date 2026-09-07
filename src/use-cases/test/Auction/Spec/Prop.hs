@@ -22,20 +22,13 @@ import Convex.MockChain.Defaults qualified as Defaults
 import Convex.PlutusLedger.V1 (transPubKeyHash, unTransAssetName)
 import Convex.Tasty.QuickCheck qualified as QC
 import Convex.TestingInterface (AddressLabeler (..), TestingInterface (..), ThreatModelsFor (..), mockWalletAddressLabeler, propRunActions)
-import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
 import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
-import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
-import Convex.ThreatModel.InputDuplication (inputDuplication)
 import Convex.ThreatModel.InvalidDatumIndex (invalidDatumIndexAttack)
 import Convex.ThreatModel.LargeData (largeDataAttack)
 import Convex.ThreatModel.LargeValue (largeValueAttack)
 import Convex.ThreatModel.MissingOutputDatum (missingOutputDatumAttack)
-import Convex.ThreatModel.MutualExclusion (mutualExclusionAttack)
 import Convex.ThreatModel.NegativeInteger (negativeIntegerAttack)
 import Convex.ThreatModel.OutputDatumHashMissing (outputDatumHashMissingAttack)
-import Convex.ThreatModel.RedeemerAssetSubstitution (redeemerAssetSubstitution)
-import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
-import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
 import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
 import Convex.ThreatModel.TokenForgery (tokenForgeryAttack)
 import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
@@ -263,19 +256,17 @@ instance TestingInterface AuctionModel where
   addressLabeler = auctionAddressLabeler <> mockWalletAddressLabeler
 
 instance ThreatModelsFor AuctionModel where
+  -- Notably absent: 'mutualExclusionAttack' and 'inputDuplication' need a
+  -- second script input / a second UTxO at the script address, but the
+  -- auction is a single-state-UTxO contract; the bloat,
+  -- duplicate-list-entry, redeemer-substitution, self-reference, and
+  -- signatory-removal attacks never find the datum/redeemer/witness shape
+  -- they target here.
   threatModels =
-    [ datumListBloatAttack
-    , datumByteBloatAttack
-    , duplicateListEntryAttack
-    , inputDuplication
-    , invalidDatumIndexAttack
+    [ invalidDatumIndexAttack
     , missingOutputDatumAttack
-    , mutualExclusionAttack
     , negativeIntegerAttack
     , outputDatumHashMissingAttack
-    , redeemerAssetSubstitution
-    , selfReferenceInjection
-    , signatoryRemoval
     , unprotectedScriptOutput
     , valueUnderpaymentAttack
     ]

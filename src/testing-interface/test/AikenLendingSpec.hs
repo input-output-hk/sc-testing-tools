@@ -53,7 +53,6 @@ module AikenLendingSpec (
 ) where
 
 import Cardano.Api qualified as C
-import Control.Lens ((^.))
 import Control.Monad (void)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (MonadIO (..))
@@ -62,13 +61,12 @@ import Convex.Aiken.Blueprint (Blueprint (..))
 import Convex.Aiken.Blueprint qualified as Blueprint
 import Convex.BuildTx (MonadBuildTx, execBuildTx)
 import Convex.BuildTx qualified as BuildTx
-import Convex.Class (MonadMockchain, getUtxo)
+import Convex.Class (MonadMockchain, getMockChainState, getUtxo)
 import Convex.CoinSelection (ChangeOutputPosition (TrailingChange))
 import Convex.MockChain (fromLedgerUTxO, runMockchain0IOWith)
 import Convex.MockChain.CoinSelection (balanceAndSubmit, tryBalanceAndSubmit)
 import Convex.MockChain.Defaults qualified as Defaults
 import Convex.MockChain.Utils (mockchainSucceeds)
-import Convex.NodeParams (ledgerProtocolParameters)
 import Convex.PlutusLedger.V1 (transAddressInEra)
 import Convex.TestingInterface (
   Options (Options, params),
@@ -79,7 +77,7 @@ import Convex.TestingInterface (
   labelRedeemer,
   propRunActionsWithOptions,
  )
-import Convex.ThreatModel (SigningWallet (SignWith), ThreatModelEnv (..), runThreatModelMQuiet)
+import Convex.ThreatModel (SigningWallet (SignWith), mkThreatModelEnv, runThreatModelMQuiet)
 import Convex.ThreatModel.Cardano.Api ()
 import Convex.ThreatModel.InputDuplication (inputDuplication)
 import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
@@ -702,20 +700,16 @@ propLendingVulnerableToInputDuplication opts = QC.expectFailure $
           loans <- findLendingUtxos
           case loans of
             ((txIn1, value1, datum1) : _secondLoan : _) -> do
-              -- Capture UTxO BEFORE funding (includes both loan UTxOs)
-              utxoBefore <- fromLedgerUTxO C.shelleyBasedEra <$> getUtxo
+              -- Capture the chain state BEFORE funding (its UTxO set includes
+              -- both loan UTxOs)
+              chainStateBefore <- getMockChainState
 
               -- Fund ONLY the first loan with a valid transaction
               let lendTxBody = execBuildTx $ lendFunds Defaults.networkId txIn1 datum1 value1 Wallet.w3
               lendTx <- tryBalanceAndSubmit mempty Wallet.w3 lendTxBody TrailingChange []
 
-              let pparams' = params ^. ledgerProtocolParameters
-                  env =
-                    ThreatModelEnv
-                      { currentTx = lendTx
-                      , currentUTxOs = utxoBefore
-                      , pparams = pparams'
-                      }
+              let env =
+                    mkThreatModelEnv lendTx chainStateBefore
 
               -- Run inputDuplication threat model
               -- It should find the second loan UTxO and try adding it as another input

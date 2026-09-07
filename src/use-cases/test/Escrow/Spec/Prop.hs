@@ -22,23 +22,9 @@ import Convex.MockChain.Defaults qualified as Defaults
 import Convex.PlutusLedger.V1 (transPubKeyHash)
 import Convex.Tasty.QuickCheck qualified as QC
 import Convex.TestingInterface (TestingInterface (..), ThreatModelsFor (expectedVulnerabilities, threatModels), propRunActions)
-import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
 import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
-import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
-import Convex.ThreatModel.InputDuplication (inputDuplication)
-import Convex.ThreatModel.InvalidDatumIndex (invalidDatumIndexAttack)
-import Convex.ThreatModel.LargeData (largeDataAttack)
-import Convex.ThreatModel.LargeValue (largeValueAttack)
-import Convex.ThreatModel.MissingOutputDatum (missingOutputDatumAttack)
-import Convex.ThreatModel.MutualExclusion (mutualExclusionAttack)
-import Convex.ThreatModel.NegativeInteger (negativeIntegerAttack)
-import Convex.ThreatModel.OutputDatumHashMissing (outputDatumHashMissingAttack)
-import Convex.ThreatModel.RedeemerAssetSubstitution (redeemerAssetSubstitution)
-import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
 import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
 import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
-import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
-import Convex.ThreatModel.ValueUnderpayment (valueUnderpaymentAttack)
 import Convex.Utils (slotToUtcTime, utcTimeToPosixTime)
 import Convex.Utxos (toApiUtxo)
 import Convex.Wallet (Wallet, verificationKeyHash)
@@ -222,23 +208,14 @@ instance TestingInterface EscrowModel where
   monitoring _ _ = id
 
 instance ThreatModelsFor EscrowModel where
+  -- The escrow's transaction shapes rule almost everything out: contribute
+  -- transactions have script outputs but spend no script input, and
+  -- redeem/refund transactions spend script inputs but produce no script
+  -- continuation output - so every model requiring a script input plus an
+  -- attackable script output (the bloat/datum/value/output families,
+  -- 'mutualExclusionAttack', 'valueUnderpaymentAttack', ...) never applies.
   threatModels =
-    [ datumListBloatAttack
-    , datumByteBloatAttack
-    , duplicateListEntryAttack
-    , inputDuplication
-    , invalidDatumIndexAttack
-    , largeDataAttack
-    , largeValueAttack
-    , missingOutputDatumAttack
-    , mutualExclusionAttack
-    , negativeIntegerAttack
-    , outputDatumHashMissingAttack
-    , redeemerAssetSubstitution
-    , selfReferenceInjection
-    , signatoryRemoval
-    , unprotectedScriptOutput
-    , valueUnderpaymentAttack
+    [ signatoryRemoval
     ]
   expectedVulnerabilities =
     [ doubleSatisfaction
