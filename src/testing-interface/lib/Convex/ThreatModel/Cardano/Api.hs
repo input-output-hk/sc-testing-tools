@@ -569,7 +569,11 @@ chainStatePParams state = LedgerProtocolParameters (ledgerPp (state ^. env))
 {- | Build a MockChainState for validation: the given base state - typically
 the state the original transaction validated against, so its certificate
 state (stake registrations, deposits, DRep and pool state) is intact - with
-the slot and the UTxO set replaced.
+the slot and the UTxO set replaced, and the accumulated coverage data
+blanked. The base state carries the coverage of every honest transaction
+replayed to reach it; blanking it makes the coverage read back after
+applying a modified transaction exactly that transaction's own delta,
+instead of honest-run coverage with the attack's mixed in.
 -}
 buildMockState
   :: MockChainState Era
@@ -580,6 +584,7 @@ buildMockState baseState slot utxo =
   baseState
     & env . L.slot .~ slot
     & poolState . L.utxoState . L._UTxOState . _1 .~ toLedgerUTxO shelleyBasedEra utxo
+    & coverageData .~ mempty
 
 {- | Check if an 'ApplyTxError' contains a Phase 2 (script execution) failure.
 
