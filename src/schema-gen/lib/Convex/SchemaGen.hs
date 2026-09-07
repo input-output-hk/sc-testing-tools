@@ -50,6 +50,7 @@ import Convex.TestingInterface.Trace (
   TxInputSummary (..),
   TxOutputSummary (..),
   TxSummary (..),
+  TxWithdrawalSummary (..),
   ValueSummary (..),
  )
 import Convex.ThreatModel.TxModifier (TxMod (..))
@@ -166,9 +167,10 @@ instance ToSchema ThreatModelSummary where
               , ("passed", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("failed", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("skipped", Inline $ mempty & type_ ?~ OpenApiInteger)
+              , ("skipped_phase1", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("errors", Inline $ mempty & type_ ?~ OpenApiInteger)
               ]
-          & required .~ ["name", "tested", "total", "passed", "failed", "skipped", "errors"]
+          & required .~ ["name", "tested", "total", "passed", "failed", "skipped", "skipped_phase1", "errors"]
 
 instance ToSchema MonitoringLabelStat where
   declareNamedSchema _ =
@@ -436,11 +438,33 @@ instance ToSchema TxOutputSummary where
               ]
           & required .~ ["utxo", "address", "addressType", "addressLabel", "value", "datum"]
 
+instance ToSchema TxWithdrawalSummary where
+  declareNamedSchema _ = do
+    addressTypeRef <- declareSchemaRef (Proxy @AddressType)
+    pure $
+      NamedSchema (Just "TxWithdrawalSummary") $
+        mempty
+          & type_ ?~ OpenApiObject
+          & description ?~ "Tier 1 (redeemerRaw, redeemerConstr) is always present for script-witnessed withdrawals; Tier 2 (redeemerKind, redeemerPayload) is only populated when the TestingInterface instance overrides redeemerTagger. All four redeemer fields are nullable (null for key-witnessed withdrawals, or when Tier 2 is not opted in). A zero \"amount\" is how a script attached to the stake credential can be triggered to run without spending or creating any UTxO (the \"withdraw zero trick\")."
+          & properties
+            .~ InsOrdHashMap.fromList
+              [ ("stakeAddress", Inline $ mempty & type_ ?~ OpenApiString)
+              , ("addressType", addressTypeRef)
+              , ("addressLabel", nullableType OpenApiString)
+              , ("amount", Inline $ mempty & type_ ?~ OpenApiInteger)
+              , ("redeemerRaw", nullableType OpenApiString)
+              , ("redeemerConstr", nullableType OpenApiInteger)
+              , ("redeemerKind", nullableType OpenApiString)
+              , ("redeemerPayload", Inline mempty)
+              ]
+          & required .~ ["stakeAddress", "addressType", "addressLabel", "amount", "redeemerRaw", "redeemerConstr", "redeemerKind", "redeemerPayload"]
+
 instance ToSchema TxSummary where
   declareNamedSchema _ = do
     inputRef <- declareSchemaRef (Proxy @TxInputSummary)
     outputRef <- declareSchemaRef (Proxy @TxOutputSummary)
     valueRef <- declareSchemaRef (Proxy @ValueSummary)
+    withdrawalRef <- declareSchemaRef (Proxy @TxWithdrawalSummary)
     pure $
       NamedSchema (Just "TxSummary") $
         mempty
@@ -454,8 +478,9 @@ instance ToSchema TxSummary where
               , ("fee", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("signers", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject (nullableType OpenApiString))
               , ("validRange", nullableType OpenApiString)
+              , ("withdrawals", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject withdrawalRef)
               ]
-          & required .~ ["id", "inputs", "outputs", "mint", "fee", "signers", "validRange"]
+          & required .~ ["id", "inputs", "outputs", "mint", "fee", "signers", "validRange", "withdrawals"]
 
 instance ToSchema TransitionResult where
   declareNamedSchema _ = do
@@ -562,6 +587,15 @@ instance ToSchema ThreatModelTraceOutcome where
                 , ("reason", Inline $ mempty & type_ ?~ OpenApiString)
                 ]
             & required .~ ["status", "reason"]
+    let skippedPhase1 =
+          mempty
+            & type_ ?~ OpenApiObject
+            & properties
+              .~ InsOrdHashMap.fromList
+                [ ("status", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["skipped_phase1"])
+                , ("reason", Inline $ mempty & type_ ?~ OpenApiString)
+                ]
+            & required .~ ["status", "reason"]
     let err =
           mempty
             & type_ ?~ OpenApiObject
@@ -574,7 +608,7 @@ instance ToSchema ThreatModelTraceOutcome where
     pure $
       NamedSchema (Just "ThreatModelTraceOutcome") $
         mempty
-          & oneOf ?~ [Inline passed, Inline failed, Inline skipped, Inline err]
+          & oneOf ?~ [Inline passed, Inline failed, Inline skipped, Inline skippedPhase1, Inline err]
           & discriminator ?~ Discriminator "status" mempty
 
 instance ToSchema TxMod where

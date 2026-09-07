@@ -35,11 +35,19 @@ actually correspond to their input).
 Note: the duplicate carries the SAME value as the original output, not just
 the same address and datum. This also catches validators that locate "their"
 continuation by @list.find@-ing on the output's value (e.g. matching an
-expected payout amount) rather than on the datum. The transaction's overall
-value conservation is handled by the test harness's rebalancing (it tops up
-or draws down the wallet's change output to absorb whatever a 'TxModifier'
-adds or removes), so this attack doesn't need to hand-balance the duplicate
-itself.
+expected payout amount) rather than on the datum. The duplicate's ADA is
+handled by the test harness's rebalancing (it tops up or draws down the
+wallet's change output to absorb whatever a 'TxModifier' adds or removes),
+so this attack doesn't need to hand-balance the duplicate itself.
+
+The rebalancing cannot conjure *native tokens*, though: a duplicate of an
+output that carries tokens (e.g. a state thread token) needs those tokens
+to come from somewhere, and the signing wallet has none, so such
+transactions are skipped rather than tested. For a unique thread token that
+skip mirrors reality - a real attacker cannot obtain a second copy of the
+token either, so the duplicated-output transaction isn't constructible
+on-chain in the first place, and a validator that locates its continuation
+by that token is not vulnerable to this attack.
 
 == Consequences ==
 
@@ -78,8 +86,10 @@ For a transaction with script continuation outputs:
 
 * Find a script output (continuation) that goes back to a script address
 * Duplicate it — add another output with the SAME address, value, and datum
-  (the test harness's rebalancing absorbs the duplicate's value by adjusting
-  the wallet's change output, so this doesn't trip @ValueNotConservedUtxo@)
+  (the test harness's rebalancing absorbs the duplicate's ADA by adjusting
+  the wallet's change output, so this doesn't trip @ValueNotConservedUtxo@;
+  a duplicate carrying native tokens the wallet cannot supply is skipped,
+  see the module header)
 * If the transaction still validates, the script doesn't properly enforce
   mutual exclusion between inputs and outputs
 

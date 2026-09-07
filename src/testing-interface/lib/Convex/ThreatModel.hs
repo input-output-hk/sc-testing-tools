@@ -370,7 +370,7 @@ result <- runMockchain0IOWith utxos params $ do
 @
 -}
 runThreatModelM
-  :: (MonadMockchain Era m, MonadFail m, MonadIO m)
+  :: (MonadMockchain Era m, MonadIO m)
   => SigningWallet
   -> ThreatModel a
   -> [ThreatModelEnv]
@@ -389,7 +389,7 @@ checks, but Monitor/MonitorLocal annotations (counterexampleTM, etc.) are ignore
 The wallet parameter controls signing (see 'runThreatModelM' for details).
 -}
 runThreatModelMQuiet
-  :: (MonadMockchain Era m, MonadFail m, MonadIO m)
+  :: (MonadMockchain Era m, MonadIO m)
   => SigningWallet
   -> ThreatModel a
   -> [ThreatModelEnv]
@@ -398,7 +398,7 @@ runThreatModelMQuiet = runThreatModelM' True
 
 -- | Internal shared implementation for 'runThreatModelM' and 'runThreatModelMQuiet'.
 runThreatModelM'
-  :: (MonadMockchain Era m, MonadFail m, MonadIO m)
+  :: (MonadMockchain Era m, MonadIO m)
   => Bool
   -- ^ quiet: suppress counterexample annotations
   -> SigningWallet
@@ -438,12 +438,21 @@ runThreatModelM' quiet signingWallet = go False
         let (modifiedTx, modifiedUtxo) = applyTxModifier (currentTx env) (currentUTxOs env) mods
         -- Re-balance and re-sign the modified transaction
         params <- askNodeParams
-        rebalancedTx <- rebalanceAndSignM wallet modifiedTx modifiedUtxo
-        -- Validate with full Phase 1 + Phase 2
-        (report, covData) <- validateTxM params rebalancedTx modifiedUtxo
-        -- Accumulate coverage into the running MockChainState
-        modifyMockChainState $ \s -> ((), s & coverageData %~ (<> covData))
-        interpM mon wallet (k report)
+        rebalanceResult <- TM.rebalanceAndSign wallet modifiedTx modifiedUtxo
+        case rebalanceResult of
+          Left _err ->
+            -- Rebalancing failed: the modification cannot be realized as a
+            -- well-formed transaction on this particular tx (e.g. no usable
+            -- collateral or change output). Skip to the next tx, like the
+            -- check runners and precondition failures do - failing the
+            -- property here would blame the contract for a harness limit.
+            go b model envs
+          Right rebalancedTx -> do
+            -- Validate with full Phase 1 + Phase 2
+            (report, covData) <- validateTxM params rebalancedTx modifiedUtxo
+            -- Accumulate coverage into the running MockChainState
+            modifyMockChainState $ \s -> ((), s & coverageData %~ (<> covData))
+            interpM mon wallet (k report)
       Generate gen _shr k -> do
         -- Use QuickCheck's generate in IO
         a <- liftIO $ QC.generate gen

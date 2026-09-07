@@ -19,7 +19,7 @@ module Convex.TestingInterface.Trace (
   TxSummary (..),
   TxInputSummary (..),
   TxOutputSummary (..),
-  AddressType (..),
+  TxWithdrawalSummary (..),
 
   -- * Value representation
   ValueSummary (..),
@@ -34,6 +34,7 @@ module Convex.TestingInterface.Trace (
   RedeemerTagger (..),
 
   -- * Address labeling
+  AddressType (..),
   AddressLabeler (..),
 ) where
 
@@ -134,6 +135,8 @@ data TxSummary = TxSummary
   -- ^ Required signer key hashes
   , txsValidRange :: !(Maybe Text)
   -- ^ Rendered validity interval
+  , txsWithdrawals :: ![TxWithdrawalSummary]
+  -- ^ Stake-reward withdrawals, including zero-lovelace ones (the "withdraw zero trick")
   }
   deriving (Eq, Show, Generic)
 
@@ -199,6 +202,41 @@ data AddressType
 instance ToJSON AddressType where
   toJSON PublicKey = "public-key"
   toJSON Script = "script"
+
+{- | Summary of a stake-reward withdrawal. Includes zero-lovelace withdrawals,
+which are how a script attached to a stake credential can be triggered to run
+its logic without spending or creating any UTxO (the "withdraw zero trick").
+-}
+data TxWithdrawalSummary = TxWithdrawalSummary
+  { twsStakeAddress :: !Text
+  -- ^ Bech32 stake address the withdrawal is drawn from
+  , twsAddressType :: !AddressType
+  -- ^ Whether 'twsStakeAddress' is a public-key or a script stake credential
+  , twsAddressLabel :: !(Maybe Text)
+  {- ^ Friendly label for the stake credential (e.g. @"Wallet 1"@), from the
+  implementor's 'AddressLabeler'. @Nothing@ when unrecognised.
+  -}
+  , twsAmount :: !Integer
+  -- ^ Withdrawn amount in lovelace (0 for the "withdraw zero trick")
+  , twsRedeemerRaw :: !(Maybe Text)
+  {- ^ Hex (CBOR) of the withdrawal redeemer's 'C.ScriptData', @Nothing@ for
+  key-witnessed (non-script) withdrawals.
+  -}
+  , twsRedeemerConstr :: !(Maybe Integer)
+  {- ^ Constr index when the parsed redeemer 'Data' is @Constr n _@;
+  @Nothing@ for non-Constr redeemers or non-script withdrawals.
+  -}
+  , twsRedeemerKind :: !(Maybe Text)
+  {- ^ Tier 2: human-readable redeemer label produced by the implementor's
+  'RedeemerTagger'. @Nothing@ when no tagger is supplied or the tagger
+  declines to label this redeemer.
+  -}
+  , twsRedeemerPayload :: !(Maybe Value)
+  {- ^ Tier 2: optional JSON payload accompanying 'twsRedeemerKind'.
+  @Nothing@ unless the tagger explicitly returns one.
+  -}
+  }
+  deriving (Eq, Show, Generic)
 
 -- | Structured representation of a Cardano value for JSON serialization.
 data ValueSummary = ValueSummary
@@ -370,6 +408,20 @@ instance ToJSON TxSummary where
       , "fee" .= txsFee t
       , "signers" .= txsSigners t
       , "validRange" .= txsValidRange t
+      , "withdrawals" .= txsWithdrawals t
+      ]
+
+instance ToJSON TxWithdrawalSummary where
+  toJSON t =
+    object
+      [ "stakeAddress" .= twsStakeAddress t
+      , "addressType" .= twsAddressType t
+      , "addressLabel" .= twsAddressLabel t
+      , "amount" .= twsAmount t
+      , "redeemerRaw" .= twsRedeemerRaw t
+      , "redeemerConstr" .= twsRedeemerConstr t
+      , "redeemerKind" .= twsRedeemerKind t
+      , "redeemerPayload" .= twsRedeemerPayload t
       ]
 
 instance ToJSON TxInputSummary where

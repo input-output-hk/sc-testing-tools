@@ -530,6 +530,9 @@
                 "skipped": {
                     "type": "integer"
                 },
+                "skipped_phase1": {
+                    "type": "integer"
+                },
                 "tested": {
                     "type": "integer"
                 },
@@ -544,6 +547,7 @@
                 "passed",
                 "failed",
                 "skipped",
+                "skipped_phase1",
                 "errors"
             ],
             "type": "object"
@@ -648,6 +652,24 @@
                         "status": {
                             "enum": [
                                 "skipped"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "status",
+                        "reason"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "reason": {
+                            "type": "string"
+                        },
+                        "status": {
+                            "enum": [
+                                "skipped_phase1"
                             ],
                             "type": "string"
                         }
@@ -1611,6 +1633,12 @@
                             ]
                         }
                     ]
+                },
+                "withdrawals": {
+                    "items": {
+                        "$ref": "#/$defs/TxWithdrawalSummary"
+                    },
+                    "type": "array"
                 }
             },
             "required": [
@@ -1620,7 +1648,82 @@
                 "mint",
                 "fee",
                 "signers",
-                "validRange"
+                "validRange",
+                "withdrawals"
+            ],
+            "type": "object"
+        },
+        "TxWithdrawalSummary": {
+            "description": "Tier 1 (redeemerRaw, redeemerConstr) is always present for script-witnessed withdrawals; Tier 2 (redeemerKind, redeemerPayload) is only populated when the TestingInterface instance overrides redeemerTagger. All four redeemer fields are nullable (null for key-witnessed withdrawals, or when Tier 2 is not opted in). A zero \"amount\" is how a script attached to the stake credential can be triggered to run without spending or creating any UTxO (the \"withdraw zero trick\").",
+            "properties": {
+                "addressLabel": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "enum": [
+                                null
+                            ]
+                        }
+                    ]
+                },
+                "addressType": {
+                    "$ref": "#/$defs/AddressType"
+                },
+                "amount": {
+                    "type": "integer"
+                },
+                "redeemerConstr": {
+                    "anyOf": [
+                        {
+                            "type": "integer"
+                        },
+                        {
+                            "enum": [
+                                null
+                            ]
+                        }
+                    ]
+                },
+                "redeemerKind": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "enum": [
+                                null
+                            ]
+                        }
+                    ]
+                },
+                "redeemerPayload": {},
+                "redeemerRaw": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "enum": [
+                                null
+                            ]
+                        }
+                    ]
+                },
+                "stakeAddress": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "stakeAddress",
+                "addressType",
+                "addressLabel",
+                "amount",
+                "redeemerRaw",
+                "redeemerConstr",
+                "redeemerKind",
+                "redeemerPayload"
             ],
             "type": "object"
         },
