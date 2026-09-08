@@ -35,6 +35,7 @@ import AikenTipJarSpec (aikenTipJarTests)
 import AikenTipJarV2Spec (aikenTipJarV2Tests)
 import AikenVestingSpec (aikenVestingTests)
 import BountySpec (bountyTests)
+import LargeDataSpec (largeDataTests)
 import PingPongCoverageSpec (pingPongCoverageTests)
 import PingPongSpec (pingPongTests)
 import RebalanceSpec (rebalanceTests)
@@ -76,6 +77,7 @@ tests opts runOpts =
         , pingPongCoverageTests opts
         ]
     , rebalanceTests
+    , largeDataTests
     , aikenTests opts
     , aikenBankTests runOpts
     , aikenHelloWorldTests runOpts
