@@ -1,0 +1,112 @@
+cabal-version:   3.0
+name:            convex-pbt-cli
+version:         0.1.0.0
+synopsis:
+  pbt-cli — discover, run and stream sc-testing-tools test suites
+
+license:         Apache-2.0
+license-files:   LICENSE
+maintainer:      bogdan.manole@iohk.io
+author:          Bogdan Manole
+description:
+  A single self-contained binary that wraps @cabal test@ for repositories using
+  the sc-testing-tools property-based testing stack. It discovers cabal test
+  suites without compiling anything, reports which of them are
+  sc-testing-tools compatible (that is, built on @convex-tasty-streaming@), runs
+  all or individual suites, and surfaces the custom test options
+  (@--list-tests-json@, @--streaming-json@, @--test-id@, @--threat-model-name@)
+  as first-class CLI flags.
+  .
+  The package depends only on Hackage libraries — no cardano-api, no plutus, no
+  Cardano system libraries — so the binary can be built and released for every
+  supported platform on a stock CI runner.
+
+build-type:      Simple
+extra-doc-files:
+  CHANGELOG.md
+  README.md
+
+common lang
+  default-language:   Haskell2010
+  default-extensions:
+    DeriveFoldable
+    DeriveFunctor
+    DeriveGeneric
+    DeriveTraversable
+    ExplicitForAll
+    FlexibleContexts
+    ImportQualifiedPost
+    LambdaCase
+    OverloadedStrings
+    ScopedTypeVariables
+    TupleSections
+
+  ghc-options:
+    -Wall -Wnoncanonical-monad-instances -Wunused-packages
+    -Wincomplete-uni-patterns -Wincomplete-record-updates
+    -Wredundant-constraints -Widentities
+
+library
+  import:          lang
+  exposed-modules:
+    PbtCli.Cabal
+    PbtCli.Discover
+    PbtCli.Doctor
+    PbtCli.Events
+    PbtCli.Glob
+    PbtCli.Options
+    PbtCli.Render
+    PbtCli.Run
+    PbtCli.Version
+
+  other-modules:   Paths_convex_pbt_cli
+  autogen-modules: Paths_convex_pbt_cli
+  hs-source-dirs:  lib
+  build-depends:
+    , aeson                 >=2.0
+    , aeson-pretty
+    , base                  >=4.14.0
+    , bytestring
+    , containers
+    , directory
+    , filepath
+    , optparse-applicative  >=0.17
+    , process
+    , text
+
+executable pbt-cli
+  import:         lang
+  main-is:        Main.hs
+  hs-source-dirs: app
+  ghc-options:    -threaded -rtsopts -with-rtsopts=-T
+  build-depends:
+    , base                  >=4.14.0
+    , convex-pbt-cli
+    , optparse-applicative
+
+test-suite convex-pbt-cli-test
+  import:         lang
+  type:           exitcode-stdio-1.0
+  hs-source-dirs: test
+  main-is:        Spec.hs
+  other-modules:
+    PbtCli.DiscoverSpec
+    PbtCli.EventsSpec
+    PbtCli.GlobSpec
+    PbtCli.ReferenceSpec
+    PbtCli.RunSpec
+    PbtCli.TestUtils
+
+  build-depends:
+    , aeson
+    , base                    >=4.14.0
+    , bytestring
+    , convex-pbt-cli
+    , convex-tasty-streaming
+    , directory
+    , filepath
+    , process
+    , tasty
+    , tasty-hunit
+    , temporary
+    , text

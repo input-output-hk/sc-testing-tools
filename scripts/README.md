@@ -1,5 +1,19 @@
 # Test-discovery scripts
 
+> **Superseded by `pbt-cli`.** These tools still work and are still the
+> reference implementation, but for day-to-day use prefer
+> [`pbt-cli`](../src/pbt-cli/README.md): a single self-contained binary that
+> does the same static discovery natively (`pbt-cli suites`, emitting the same
+> JSON) and also runs, streams and filters the tests. It needs neither bash 4,
+> nor Node, nor an `npm install`, and prebuilt binaries are attached to
+> `pbt-cli-v*` releases.
+>
+> `pbt-cli`'s port of `list-test-suites` is checked against this script by a
+> differential test (`src/pbt-cli/test/PbtCli/ReferenceSpec.hs`), so this
+> directory is what keeps that port honest. `list-tests` has no counterpart:
+> its fast, approximate tree was always overridden by the authoritative
+> `--list-tests-json` tree, which `pbt-cli tests` asks for directly.
+
 Fast, **no-compile** discovery of a Cardano/Haskell repo's test structure, for
 editors and CI. Two tools, plus a small wrapper to drive them.
 
