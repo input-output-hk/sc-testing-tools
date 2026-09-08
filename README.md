@@ -268,6 +268,7 @@ testsWithOptions = testGroup "Counter"
       , maxActions = 50
       , mcOptions  = Defaults.defaultOptions
       , disableNegativeTesting = Nothing
+      , threatModelFilter = []
       }
 ```
 

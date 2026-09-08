@@ -578,7 +578,7 @@ negativeTestTraced opts groupName recorder iterIdx = do
   (prefixResult, prefixState) <- runTestingMonadT params $ do
     initialState <- runInitialization @state opts
 
-    (finalState, transitions) <- runActionsTraced opts 10 initialState
+    (finalState, transitions) <- runActionsTraced opts initialState
 
     -- Generate an action that VIOLATES the precondition in that state
     result <- lift $ pick $ do
@@ -681,7 +681,7 @@ negativeTestFast opts = do
   (prefixResult, prefixState) <- runTestingMonadT params $ do
     initialState <- runInitialization @state opts
 
-    finalState <- runActions opts 10 initialState
+    finalState <- runActions opts initialState
 
     -- Generate an action that VIOLATES the precondition in that state
     result <- lift $ pick $ do
@@ -764,7 +764,7 @@ positiveTestTraced opts groupName mGetTmResultsRef tms evs recorder iterIdx = do
     initTxs <- getTxs
     state0 <- get
 
-    (finalState, transitions) <- runActionsTraced opts 10 initialState
+    (finalState, transitions) <- runActionsTraced opts initialState
 
     allTxs <- getTxs
     let envs = threatModelEnvs params (drop (length initTxs) $ reverse allTxs) state0
@@ -861,7 +861,7 @@ positiveTestFast opts mGetTmResultsRef tms evs = do
     initTxs <- getTxs
     state0 <- get
 
-    finalState <- runActions opts 10 initialState
+    finalState <- runActions opts initialState
 
     allTxs <- getTxs
     let envs = threatModelEnvs params (drop (length initTxs) $ reverse allTxs) state0
@@ -1275,19 +1275,22 @@ distinctValidationErrors :: [(ThreatModelOutcome, [String])] -> [String]
 distinctValidationErrors outcomeEntries =
   nubOrd [msg | (_, msgs) <- outcomeEntries, msg <- msgs]
 
--- | Generate a number of actions (with a given maximum) and run them.
+{- | Generate up to 'maxActions' actions and run them. Stops early when no
+action satisfying the precondition can be generated.
+-}
 runActions
   :: (TestingInterface state, MonadIO m)
   => RunOptions
-  -> Int
   -> state
   -> TestingMonadT (PropertyM m) state
-runActions _ 0 s = pure s
-runActions opts i s = do
-  mAction <- lift $ genAction s
-  case mAction of
-    Just action -> runAction opts s action >>= runActions opts (i - 1)
-    Nothing -> pure s
+runActions opts = go (maxActions opts)
+ where
+  go 0 s = pure s
+  go i s = do
+    mAction <- lift $ genAction s
+    case mAction of
+      Just action -> runAction opts s action >>= go (i - 1)
+      Nothing -> pure s
 
 -- | Execute a single action and update the model state
 runAction
@@ -1330,15 +1333,14 @@ runActionsTraced
   :: forall state m
    . (TestingInterface state, MonadIO m)
   => RunOptions
-  -> Int
   -> state
   -> TestingMonadT (PropertyM m) (state, [Transition])
-runActionsTraced opts maxSteps initialState = go 0 initialState []
+runActionsTraced opts initialState = go 0 initialState []
  where
   tagger = redeemerTagger @state
   labeler = addressLabeler @state
   go stepIdx state acc
-    | stepIdx >= maxSteps = pure (state, reverse acc)
+    | stepIdx >= maxActions opts = pure (state, reverse acc)
     | otherwise = do
         mAction <- lift $ genAction state
         case mAction of
