@@ -41,6 +41,13 @@ on:
       - "**/*.cabal"
       - ".github/workflows/pbt-cli.yaml"
 
+# This workflow only checks out the repository and builds it -- it creates no
+# release, posts no comment, touches no branch -- so the token it is handed
+# needs nothing beyond read access to the contents. Declaring that explicitly
+# stops the job inheriting whatever the repository default happens to be.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.ref }}-pbt-cli
   cancel-in-progress: true
