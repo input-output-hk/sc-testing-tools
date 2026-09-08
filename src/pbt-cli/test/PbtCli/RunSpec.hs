@@ -4,6 +4,7 @@ module PbtCli.RunSpec (runTests) where
 
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.List (isPrefixOf)
 import Data.Text (Text)
 import PbtCli.Cabal (
   Invocation (..),
@@ -12,6 +13,7 @@ import PbtCli.Cabal (
   renderCommand,
   testInvocation,
   testOptionArgs,
+  wantsStructuredOutput,
  )
 import PbtCli.Discover (EntryPoint (..), SuiteRef (..), TestSuite (..), isCompatible)
 import PbtCli.Render (renderSuiteBanner, tagEventWithSuite)
@@ -98,9 +100,39 @@ invocationTests =
               ["t"]
               noTestOptions{toListTestsJson = True}
           )
-          @?= ["test", "t", "--project-file=cabal.project.tools", "--test-option=--list-tests-json"]
+          @?= [ "test"
+              , "t"
+              , "--project-file=cabal.project.tools"
+              , "--test-show-details=direct"
+              , "--test-option=--list-tests-json"
+              ]
     , testCase "the working directory is the repository root" $
         invWorkingDir (testInvocation "cabal" "/repo" Nothing ["t"] noTestOptions) @?= Just "/repo"
+    , -- Cabal's default streams the suite's stdout to us, but a target repo may
+      -- set `test-show-details: failures` or `never`, and then cabal captures
+      -- it into a log and our pipe gets nothing -- so `run --json` would exit 0
+      -- having emitted no events. pbt-cli owns the pipe, so it overrides.
+      testCase "the structured modes force --test-show-details=direct" $
+        map
+          (\to -> "--test-show-details=direct" `elem` invArgs (testInvocation "cabal" "/repo" Nothing ["t"] to))
+          [ noTestOptions{toListTestsJson = True}
+          , noTestOptions{toStreamingJson = True}
+          , noTestOptions{toListThreatModels = True}
+          ]
+          @?= [True, True, True]
+    , -- Plain `run` is a pass-through of cabal's console output, so the
+      -- project's own preference is the right one there.
+      testCase "a plain run leaves test-show-details alone" $
+        filter ("--test-show-details" `isPrefixOf`) (invArgs (testInvocation "cabal" "/repo" Nothing ["t"] noTestOptions))
+          @?= []
+    , testCase "wantsStructuredOutput agrees with the flag" $
+        map
+          wantsStructuredOutput
+          [ noTestOptions
+          , noTestOptions{toStreamingJson = True}
+          , noTestOptions{toPattern = Just "x"}
+          ]
+          @?= [False, True, False]
     ]
 
 renderTests :: TestTree

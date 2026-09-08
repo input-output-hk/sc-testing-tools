@@ -27,6 +27,8 @@ import PbtCli.Discover (
  )
 import PbtCli.Render (renderSuiteNames)
 import PbtCli.TestUtils (withTempTree, writeFileIn)
+import System.Directory (createDirectoryLink, createFileLink)
+import System.FilePath ((</>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
@@ -45,6 +47,8 @@ discoverTests =
     , compatibilityTests
     , jsonShapeTests
     , listingTests
+    , commentTests
+    , symlinkTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -388,6 +392,28 @@ globPackagesTests =
           suitePkg root "nested/pkg" "nested" "nested-test"
           d <- discover root
           map (tsName . srSuite) (flattenSuites d) @?= ["nested-test"]
+    , -- `packages: pkgs/*` is a common idiom and the glob matches
+      -- \*directories*, not .cabal files. Keeping only the file matches made
+      -- every such package vanish into `orphans`.
+      testCase "a glob that matches directories resolves their .cabal files" $
+        withTempTree "discover-dirglob" $ \root -> do
+          writeFileIn root "cabal.project" "packages:\n  pkgs/*\n"
+          suitePkg root "pkgs/alpha" "alpha" "alpha-test"
+          suitePkg root "pkgs/beta" "beta" "beta-test"
+          d <- discover root
+          sort (map (tsName . srSuite) (flattenSuites d)) @?= ["alpha-test", "beta-test"]
+          discOrphans d @?= []
+    , testCase "an explicit .cabal path resolves" $
+        withTempTree "discover-explicit" $ \root -> do
+          writeFileIn root "cabal.project" "packages:\n  pkg/thing.cabal\n"
+          suitePkg root "pkg" "thing" "thing-test"
+          d <- discover root
+          map (tsName . srSuite) (flattenSuites d) @?= ["thing-test"]
+    , testCase "a token naming nothing resolves to nothing" $
+        withTempTree "discover-missing-token" $ \root -> do
+          writeFileIn root "cabal.project" "packages:\n  nope/*\n  also-nope\n"
+          d <- discover root
+          flattenSuites d @?= []
     ]
 
 compatibilityTests :: TestTree
@@ -480,6 +506,112 @@ listingTests =
           writeFileIn root "libonly.cabal" "name: libonly\nlibrary\n  hs-source-dirs: lib\n"
           d <- discover root
           renderSuiteNames d @?= ""
+    ]
+
+commentTests :: TestTree
+commentTests =
+  testGroup
+    "comments and blank lines inside a stanza"
+    [ -- cabal ignores `--` comments at any indentation, column 0 included.
+      -- Treating one as the start of the next declaration dropped every field
+      -- after it -- and losing main-is reports the suite as MISSING, which
+      -- `tests`, `threat-models` and the run event modes then refuse outright.
+      testCase "a column-0 comment does not truncate the stanza" $
+        withTempTree "discover-col0-comment" $ \root -> do
+          writeFileIn root "cabal.project" "packages:\n  .\n"
+          writeFileIn root "c.cabal" $
+            unlines
+              [ "name: c"
+              , "test-suite c-test"
+              , "  hs-source-dirs: test"
+              , "-- a column-0 comment, which cabal ignores"
+              , "  main-is: Spec.hs"
+              ]
+          writeFileIn root "test/Spec.hs" "main = defaultMainStreaming tests"
+          d <- discover root
+          case flattenSuites d of
+            [sr] -> do
+              tsMainIs (srSuite sr) @?= "test/Spec.hs"
+              tsEntryPoint (srSuite sr) @?= Streaming
+            other -> assertFailure ("expected one suite, got " <> show (length other))
+    , testCase "a blank line does not truncate the stanza" $
+        withTempTree "discover-blank-line" $ \root -> do
+          writeFileIn root "cabal.project" "packages:\n  .\n"
+          writeFileIn root "b.cabal" $
+            unlines
+              [ "name: b"
+              , "test-suite b-test"
+              , "  hs-source-dirs: test"
+              , ""
+              , "  main-is: Spec.hs"
+              ]
+          writeFileIn root "test/Spec.hs" "main = defaultMainStreaming tests"
+          d <- discover root
+          map (tsMainIs . srSuite) (flattenSuites d) @?= ["test/Spec.hs"]
+    , testCase "the next declaration still ends the stanza" $
+        withTempTree "discover-next-decl" $ \root -> do
+          writeFileIn root "cabal.project" "packages:\n  .\n"
+          writeFileIn root "two.cabal" $
+            unlines
+              [ "name: two"
+              , "test-suite first-test"
+              , "  hs-source-dirs: one"
+              , "  main-is: Spec.hs"
+              , "test-suite second-test"
+              , "  hs-source-dirs: two"
+              , "  main-is: Spec.hs"
+              ]
+          writeFileIn root "one/Spec.hs" "main = defaultMainStreaming tests"
+          writeFileIn root "two/Spec.hs" "main = defaultMain tests"
+          d <- discover root
+          map (\sr -> (tsName (srSuite sr), tsMainIs (srSuite sr))) (flattenSuites d)
+            @?= [("first-test", "one/Spec.hs"), ("second-test", "two/Spec.hs")]
+    ]
+
+symlinkTests :: TestTree
+symlinkTests =
+  testGroup
+    "symlinks in the tree"
+    [ -- doesDirectoryExist resolves symlinks, so without an explicit check a
+      -- link back to an ancestor made the walk descend into itself until the
+      -- kernel's symlink limit stopped it -- dozens of bogus orphan warnings,
+      -- and multiplicative fan-out on a wider tree.
+      testCase "a directory link to an ancestor does not make the walk recurse" $
+        withTempTree "discover-symlink-loop" $ \root -> do
+          writeFileIn root "cabal.project" "packages:\n  pkg\n"
+          suitePkg root "pkg" "a" "a-test"
+          createDirectoryLink ".." (root </> "pkg" </> "loop")
+          d <- discover root
+          map (tsName . srSuite) (flattenSuites d) @?= ["a-test"]
+          discOrphans d @?= []
+    , -- The walk does not follow links, but `packages:` is an instruction
+      -- rather than a search: a package it names is honoured wherever the link
+      -- points. Dropping these was a regression introduced by the loop fix.
+      testCase "a symlinked package directory named in packages: is reported" $
+        withTempTree "discover-symlink-named" $ \root -> do
+          writeFileIn root "cabal.project" "packages:\n  linked\n"
+          suitePkg root "real" "a" "a-test"
+          createDirectoryLink "real" (root </> "linked")
+          d <- discover root
+          map (tsName . srSuite) (flattenSuites d) @?= ["a-test"]
+          map srPackageDir (flattenSuites d) @?= ["linked"]
+    , -- A path outside the root has no root-relative spelling, so it cannot
+      -- appear in the output at all.
+      testCase "a packages: entry outside the root is not reported" $
+        withTempTree "discover-outside-root" $ \root -> do
+          writeFileIn root "inner/cabal.project" "packages:\n  ../outerpkg\n"
+          suitePkg root "outerpkg" "outer" "outer-test"
+          d <- discover (root </> "inner")
+          flattenSuites d @?= []
+    , -- The reference's `find ... -type f` does not match a symlinked .cabal
+      -- either, so neither do we.
+      testCase "a symlinked .cabal is not picked up" $
+        withTempTree "discover-symlink-cabal" $ \root -> do
+          writeFileIn root "cabal.project" "packages:\n  pkg\n"
+          suitePkg root "pkg" "a" "a-test"
+          createFileLink (root </> "pkg" </> "a.cabal") (root </> "linked.cabal")
+          d <- discover root
+          discOrphans d @?= []
     ]
 
 -- ---------------------------------------------------------------------------

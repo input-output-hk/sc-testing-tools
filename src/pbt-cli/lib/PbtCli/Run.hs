@@ -10,6 +10,11 @@ the exit-code contract lives in one place and is testable:
 * @2@ — usage error: unknown suite, or a suite that cannot do what was asked
 * @3@ — discovery failed (the root is not a readable directory)
 * @4@ — @cabal@ could not be found or could not be started
+* @5@ — some other I\/O failure
+
+@5@ exists so that @1@ keeps meaning what it says. An unrelated I\/O error — a
+write failure part-way through @suites --json@, an @EMFILE@ while forking
+cabal — must not reach a CI consumer looking like a failing test run.
 -}
 module PbtCli.Run (
   execute,
@@ -24,6 +29,8 @@ module PbtCli.Run (
   exitUsage,
   exitDiscovery,
   exitCabal,
+  exitIoError,
+  classifyIoError,
 ) where
 
 import Control.Exception (IOException, catch)
@@ -89,14 +96,37 @@ import PbtCli.Render (
 import System.Directory (doesDirectoryExist, makeAbsolute)
 import System.Exit (ExitCode (..))
 import System.IO (hPutStrLn, stderr)
-import System.IO.Error (isResourceVanishedError)
+import System.IO.Error (isDoesNotExistError, isPermissionError, isResourceVanishedError)
 
-exitOk, exitFailed, exitUsage, exitDiscovery, exitCabal :: ExitCode
+exitOk, exitFailed, exitUsage, exitDiscovery, exitCabal, exitIoError :: ExitCode
 exitOk = ExitSuccess
 exitFailed = ExitFailure 1
 exitUsage = ExitFailure 2
 exitDiscovery = ExitFailure 3
 exitCabal = ExitFailure 4
+exitIoError = ExitFailure 5
+
+{- | Which exit code an 'IOException' deserves.
+
+Shared with @main@, which classifies a failure of its own final
+@hFlush stdout@ the same way -- otherwise a write error would be reported with
+one code inside 'execute' and another at shutdown.
+
+* A vanished resource means stdout closed under us: the consumer of a pipe
+  stopped reading, which is what @pbt-cli suites | head@ does. It got what it
+  asked for, so exit quietly.
+* A missing or unreadable file is the one class that can mean cabal itself
+  could not be started, so it keeps cabal's code.
+* Everything else gets its own code. Blaming cabal was actively misleading --
+  an encoding error while rendering a table used to be reported as "could not
+  run cabal" -- but so is exit 1, which the contract reserves for a failing
+  test run.
+-}
+classifyIoError :: IOException -> ExitCode
+classifyIoError e
+  | isResourceVanishedError e = exitOk
+  | isDoesNotExistError e || isPermissionError e = exitCabal
+  | otherwise = exitIoError
 
 {- | Dispatch a parsed command.
 
@@ -118,16 +148,16 @@ execute cmd = run `catch` onCabalMissing `catch` onIOError
     hPutStrLn stderr ("pbt-cli: " <> msg)
     pure exitCabal
 
-  onIOError (e :: IOException)
-    -- stdout closed under us: the consumer of a pipe stopped reading, which is
-    -- exactly what `pbt-cli suites | head` does. It got what it asked for, so
-    -- exit quietly instead of reporting a failure that did not happen.
-    | isResourceVanishedError e = pure exitOk
-    -- Failing to *start* cabal (as opposed to a failing test run) is the same
-    -- class of problem as cabal being absent, so it gets the same exit code.
-    | otherwise = do
-        hPutStrLn stderr ("pbt-cli: could not run cabal: " <> show e)
-        pure exitCabal
+  onIOError (e :: IOException) = do
+    let code = classifyIoError e
+    if code == exitOk
+      then pure ()
+      else
+        hPutStrLn stderr $
+          if code == exitCabal
+            then "pbt-cli: could not run cabal: " <> show e
+            else "pbt-cli: " <> show e
+    pure code
 
 -- ---------------------------------------------------------------------------
 -- suites

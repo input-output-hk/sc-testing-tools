@@ -52,7 +52,7 @@ module PbtCli.Discover (
 import Control.Exception (evaluate)
 import Control.Monad (filterM)
 import Data.Aeson (ToJSON (..), object, (.=))
-import Data.Char (isSpace, toLower)
+import Data.Char (isAlpha, isSpace, toLower)
 import Data.List (dropWhileEnd, foldl', isInfixOf, isPrefixOf, isSuffixOf, sort)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -62,8 +62,8 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import PbtCli.Glob (expandGlob, isGlob)
-import System.Directory (doesDirectoryExist, doesFileExist, listDirectory, makeAbsolute)
-import System.FilePath (takeDirectory, takeExtension, (</>))
+import System.Directory (doesDirectoryExist, doesFileExist, listDirectory, makeAbsolute, pathIsSymbolicLink)
+import System.FilePath (isAbsolute, splitDirectories, takeDirectory, takeExtension, (</>))
 import System.IO (
   IOMode (ReadMode),
   hGetContents,
@@ -296,21 +296,32 @@ parseable JSON document.
 discover :: FilePath -> IO Discovery
 discover root0 = do
   root <- makeAbsolute root0
-  cabalRels <- findCabalFiles root
+  walked <- findCabalFiles root
   projectRels <- projectFilesIn root
 
   owners <-
     if null projectRels
       then -- No cabal.project anywhere: one synthetic project owns everything.
-        pure (Map.fromList [(c, [implicitProject]) | c <- cabalRels])
+        pure (Map.fromList [(c, [implicitProject]) | c <- walked])
       else
         foldl' (\acc m -> Map.unionWith laterOwnersLast m acc) Map.empty
           <$> mapM (ownersOfProject root) projectRels
 
+  -- The walk is a heuristic search and does not follow symlinks (see
+  -- 'findCabalFiles'); a `packages:` entry is an explicit instruction, so a
+  -- package it names is honoured even where the walk could not reach it -- a
+  -- symlinked package directory being the case that matters. Only paths under
+  -- the root are taken: this tool's whole contract is paths relative to the
+  -- scanned root, and a `packages: ../elsewhere` entry has none.
   let projectOrder = if null projectRels then [implicitProject] else projectRels
+      named = filter underRoot (Map.keys owners)
+      cabalRels = Set.toAscList (Set.fromList (walked ++ named))
       orphanRels = [c | c <- cabalRels, not (Map.member c owners)]
+      found = Set.fromList cabalRels
+      unreachable = [(c, os) | (c, os) <- Map.toList owners, not (Set.member c found)]
 
   mapM_ warnOrphan orphanRels
+  mapM_ warnUnreachable unreachable
 
   primaries <- Map.fromList <$> mapM (resolvePrimary owners) (Map.keys owners)
   projects <- mapM (buildProject root cabalRels primaries) projectOrder
@@ -329,6 +340,24 @@ discover root0 = do
 
   warnOrphan c =
     hPutStrLn stderr ("warning: orphan .cabal not referenced by any project: " ++ c)
+
+  -- A package a project's @packages:@ field names that lies outside the
+  -- scanned root, as `packages: ../elsewhere` does. Such a package cannot be
+  -- reported: every path in the output is relative to the root, and this one
+  -- has none. No cause is asserted beyond the one established -- the path is
+  -- not under the root -- because that is all this check knows.
+  warnUnreachable (c, os) =
+    hPutStrLn stderr $
+      "warning: "
+        ++ c
+        ++ " is referenced by "
+        ++ maybe "a project file" describeOwner (listToMaybe os)
+        ++ " but lies outside the scanned root, so it is not reported"
+
+  describeOwner o = if isImplicit o then "a project file" else o
+
+  -- A path the output can express: relative to the root, and not escaping it.
+  underRoot p = not (isAbsolute p) && ".." `notElem` splitDirectories p
 
   resolvePrimary owners c =
     (c,) <$> primaryOwner c (fromMaybe [] (Map.lookup c owners))
@@ -464,7 +493,12 @@ parseTestSuites root pkgDir contents =
   collect :: Maybe (Text, Maybe String, [String]) -> [String] -> [(Text, Maybe String, [String])]
   collect acc [] = flush acc
   collect acc (l : ls)
-    | isColumnZero l = case testSuiteName l of
+    -- cabal ignores `--` comments and blank lines at any indentation, column 0
+    -- included, so neither may be mistaken for the start of the next
+    -- declaration. Ending the stanza on one would drop the fields after it,
+    -- and losing `main-is` reports a perfectly good suite as MISSING.
+    | isIgnorable l = collect acc ls
+    | startsDeclaration l = case testSuiteName l of
         Just nm -> flush acc ++ collect (Just (nm, Nothing, ["."])) ls
         Nothing -> flush acc ++ collect Nothing ls
     | otherwise = case acc of
@@ -476,8 +510,12 @@ parseTestSuites root pkgDir contents =
 
   flush = maybe [] (: [])
 
-  isColumnZero = \case
-    (c : _) -> not (isSpace c)
+  isIgnorable l = let t = trim l in null t || "--" `isPrefixOf` t
+
+  -- A new declaration starts with a letter at column 0 -- the same rule the
+  -- reference awk (/^[a-zA-Z]/) applies.
+  startsDeclaration = \case
+    (c : _) -> isAlpha c
     [] -> False
 
   testSuiteName l = case words l of
@@ -646,28 +684,40 @@ data PkgState = NotInPackages | InPackages | InSourceRepo
 
 {- | Resolve one @packages:@ token to concrete @.cabal@ paths, relative to root.
 
-A token is an explicit @.cabal@ file, a glob, or a bare directory — in which
-case the @.cabal@ files directly inside it are taken, non-recursively, exactly
-as @cabal@ does.
+A token is an explicit @.cabal@ file, a glob, or a bare directory. Whatever a
+glob expands to is then classified the same way, which is the part that matters:
+@packages: pkgs\/*@ matches *directories*, and each of those contributes the
+@.cabal@ files directly inside it, non-recursively, exactly as @cabal@ does.
+
+The shell reference gets this for free because the shell expands the token
+before its resolver ever sees it, so that resolver only meets concrete paths.
+Expanding the glob ourselves means we have to classify the matches ourselves
+too -- an earlier version kept only glob matches that were files, so every
+directory-matching glob resolved to nothing and its packages went undiscovered.
 -}
 resolvePackageEntry :: FilePath -> FilePath -> String -> IO [FilePath]
 resolvePackageEntry root pdir entry = do
-  direct <-
-    if isGlob entry || takeExtension entry == ".cabal"
-      then filterM doesFileExist =<< expandGlob pdir entry
-      else pure []
-  matches <-
-    if not (null direct)
-      then pure direct
+  candidates <-
+    if isGlob entry
+      then expandGlob pdir entry
+      else pure [pdir </> entry]
+  matches <- concat <$> mapM classify candidates
+  pure (map (dropPrefixPath (root ++ "/") . normalisePath) matches)
+ where
+  -- A candidate is either a .cabal file, taken as-is, or a directory, whose
+  -- own .cabal files are taken non-recursively. Anything else contributes
+  -- nothing, which also covers a token naming a path that does not exist.
+  classify p = do
+    isFile <- doesFileExist p
+    if isFile
+      then pure [p | takeExtension p == ".cabal"]
       else do
-        let target = pdir </> entry
-        isDir <- doesDirectoryExist target
+        isDir <- doesDirectoryExist p
         if not isDir
           then pure []
           else do
-            entries <- listDirectory target
-            filterM doesFileExist [target </> e | e <- sort entries, takeExtension e == ".cabal"]
-  pure (map (dropPrefixPath (root ++ "/") . normalisePath) matches)
+            entries <- listDirectory p
+            filterM doesFileExist [p </> e | e <- sort entries, takeExtension e == ".cabal"]
 
 -- ---------------------------------------------------------------------------
 -- Filesystem walk
@@ -677,7 +727,9 @@ resolvePackageEntry root pdir entry = do
 
 @dist-newstyle@, @tasty-investigate@, @.git@ and @node_modules@ are pruned:
 they hold build artefacts and vendored code whose @.cabal@ files are not part
-of the repository's own structure.
+of the repository's own structure. Symlinks are not followed at all -- neither
+descended into nor reported as @.cabal@ files -- which is what the reference's
+@find@ does and what keeps a link back to an ancestor from looping.
 -}
 findCabalFiles :: FilePath -> IO [FilePath]
 findCabalFiles root = sort <$> walk ""
@@ -691,10 +743,17 @@ findCabalFiles root = sort <$> walk ""
     | e `elem` prunedDirs = pure []
     | otherwise = do
         let childRel = if null rel then e else rel </> e
-        isDir <- doesDirectoryExist (root </> childRel)
-        if isDir
+            absPath = root </> childRel
+        -- Symlinks are not followed, matching the reference's `find` (which
+        -- needs -L to follow, and whose `-type f` does not match a symlinked
+        -- .cabal either). doesDirectoryExist resolves links, so without this a
+        -- directory link pointing at an ancestor would make the walk descend
+        -- into itself until the kernel's symlink limit stopped it.
+        link <- pathIsSymbolicLink absPath
+        isDir <- doesDirectoryExist absPath
+        if isDir && not link
           then walk childRel
-          else pure [childRel | takeExtension e == ".cabal"]
+          else pure [childRel | not link, takeExtension e == ".cabal"]
 
   prunedDirs = ["dist-newstyle", "tasty-investigate", ".git", "node_modules"]
 

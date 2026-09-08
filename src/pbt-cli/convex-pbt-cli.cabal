@@ -108,4 +108,5 @@ test-suite convex-pbt-cli-test
     , process
     , tasty
     , tasty-hunit
+    , temporary
     , text

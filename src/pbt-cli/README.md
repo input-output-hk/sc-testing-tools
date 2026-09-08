@@ -261,12 +261,21 @@ attribution.
 
 ### `tests` — what is in a suite
 
-Authoritative (it builds the suite) and structured:
+Authoritative — it builds the suite. By default, one `id<TAB>path` line per
+test:
+
+```
+$ pbt-cli tests convex-pbt-cli-test
+0	pbt-cli / Glob / isGlob / plain path is not a glob
+1	pbt-cli / Glob / isGlob / star is a glob
+2	pbt-cli / Glob / isGlob / question mark is a glob
+3	pbt-cli / Glob / matchSegment / literal matches itself
+```
 
 ```sh
+pbt-cli tests convex-vesting-test            # id<TAB>path, one per line
 pbt-cli tests convex-vesting-test --tree     # nested groups with ids
-pbt-cli tests convex-vesting-test --list     # id<TAB>full/path, for shell loops
-pbt-cli tests convex-vesting-test            # the suite's own JSON payload
+pbt-cli tests convex-vesting-test --json     # the suite's own suite_started payload
 ```
 
 ```
@@ -338,6 +347,16 @@ Nothing goes through a shell — arguments are handed to the process as a list,
 so patterns need no quoting. `--dry-run` output is quoted only so it can be
 pasted into one.
 
+The structured commands (`tests`, `threat-models`, `run --stream`,
+`run --json`) also pass `--test-show-details=direct`, overriding whatever the
+target repository configures. Cabal's default streams a suite's stdout through,
+but a project that sets `test-show-details: failures` or `never` makes cabal
+capture it into a log under `dist-newstyle` instead — and then pbt-cli's pipe
+receives nothing and `run --json` exits 0 having emitted no events. pbt-cli
+owns that pipe, so it owns the setting. Plain `pbt-cli run` is left alone: it
+is a pass-through of cabal's console output, so your project's preference is
+the right one there.
+
 ## Exit codes
 
 | code | meaning |
@@ -347,9 +366,12 @@ pasted into one.
 | `2` | usage error: unknown suite, or a suite that cannot do what was asked |
 | `3` | discovery failed — the root is not a readable directory |
 | `4` | `cabal` was not found on `PATH`, or could not be started |
+| `5` | some other I/O failure |
 
 `1` versus `3` is the contract `list-test-suites.sh` had: a readable root with
-nothing to report is not the same as a bad root.
+nothing to report is not the same as a bad root. `5` keeps `1` honest: a write
+failure part-way through `suites --json`, or an `EMFILE` while forking cabal,
+must not reach a CI consumer looking like a failing test run.
 
 ## Relationship to `scripts/`
 
@@ -369,6 +391,22 @@ Two intentional differences:
 - `--tsv` paths are relative to the root, matching the JSON mode. The shell
   tool's `--tsv` did not relativise, so it emitted `./src/pkg` or an absolute
   path depending on how `ROOT` was spelled.
+
+And two limitations shared with the reference:
+
+- The `.cabal` reader is a line-oriented scanner, not cabal's own parser, so it
+  does not evaluate conditional blocks (`if flag(…)`) or `common` stanza
+  `import`s. A `main-is` that only appears inside one of those reads as
+  `MISSING`. A suite affected by it can still be run with plain `pbt-cli run`,
+  which does not need the entry point classified.
+And one deliberate difference in the other direction: a package directory named
+in `packages:` that is itself a **symlink** *is* reported by pbt-cli, and is not
+by the reference. The scan does not follow symlinks — that is what stops a link
+back to an ancestor looping — but `packages:` is an explicit instruction rather
+than a search, so a package it names is honoured wherever it points. A
+`packages:` entry that resolves *outside* the scanned root still cannot be
+reported, since every path in the output is relative to that root; pbt-cli warns
+on stderr rather than dropping it silently.
 
 The Node/tree-sitter tool, [`scripts/list-tests/`](../../scripts/list-tests/),
 has **no** counterpart here. It was the fast, approximate "Tier 1" tree for

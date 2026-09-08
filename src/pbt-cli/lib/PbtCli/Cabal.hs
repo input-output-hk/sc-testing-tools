@@ -27,6 +27,7 @@ module PbtCli.Cabal (
   TestOptions (..),
   noTestOptions,
   testOptionArgs,
+  wantsStructuredOutput,
 
   -- * Running
   runInherit,
@@ -134,11 +135,35 @@ testOptionArgs to =
   one v = "--test-option=" <> v
   pair flag = maybe [] (\v -> [one flag, one v])
 
+{- | Does this invocation need the suite's stdout on our pipe?
+
+True for every mode that parses NDJSON off it. Used to decide whether to
+override the project's @test-show-details@.
+-}
+wantsStructuredOutput :: TestOptions -> Bool
+wantsStructuredOutput to =
+  toStreamingJson to || toListTestsJson to || toListThreatModels to
+
 {- | Build a @cabal test@ invocation.
 
 @targets@ are suite names; passing several is what lets @pbt-cli run@ launch a
 whole project's suites in one cabal call. An empty target list means @all@,
 cabal's own everything-target.
+
+For the structured modes this forces @--test-show-details=direct@. Cabal's
+default streams the suite's stdout through, but a target repository is free to
+set @test-show-details: failures@ or @never@ in its @cabal.project@ (or
+@cabal.project.local@, or @~\/.cabal\/config@), and then cabal captures that
+stdout into a log under @dist-newstyle@ and our pipe receives nothing at all --
+so @run --json@ would exit 0 having emitted no events. pbt-cli owns the pipe,
+so it owns the setting; a later flag on the command line wins over the project
+file, which makes this a safe unconditional override.
+
+@direct@ rather than @streaming@: both forward the suite's stdout, but
+@streaming@ adds cabal's own per-test decoration, and the NDJSON modes want the
+suite's bytes and nothing else. Plain @run@ is left alone -- it is a
+pass-through of cabal's console output, so the project's own preference is the
+right one there.
 -}
 testInvocation
   :: FilePath
@@ -158,6 +183,7 @@ testInvocation cabal root projectFile targets to =
         ["test"]
           <> (if null targets then ["all"] else targets)
           <> catMaybes [("--project-file=" <>) <$> projectFile]
+          <> ["--test-show-details=direct" | wantsStructuredOutput to]
           <> testOptionArgs to
     , invWorkingDir = Just root
     }
