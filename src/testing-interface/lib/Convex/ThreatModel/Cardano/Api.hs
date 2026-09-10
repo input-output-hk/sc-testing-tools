@@ -3,6 +3,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeApplications #-}
 
 module Convex.ThreatModel.Cardano.Api (
@@ -118,7 +119,7 @@ import Cardano.Ledger.State (accountsL, accountsMapL, certDStateL, certPStateL, 
 import Cardano.Ledger.TxIn qualified as Ledger (TxIn)
 import Cardano.Slotting.Slot ()
 import Cardano.Slotting.Time (SlotLength, mkSlotLength)
-import Control.Lens ((&), (.~), (^.), _1)
+import Control.Lens (Prism', over, preview, prism', (&), (.~), (^.), _1)
 import Data.List (isPrefixOf)
 
 import Cardano.Ledger.Shelley.Rules (LedgerEnv (ledgerPp))
@@ -259,32 +260,57 @@ keyAddressAny = paymentCredentialToAddressAny . PaymentCredentialByKey
 isKeyAddressAny :: AddressAny -> Bool
 isKeyAddressAny = isKeyAddress . anyAddressInShelleyBasedEra (shelleyBasedEra @Era)
 
+{- | Re-key the Spending redeemers after the set of spend inputs changed:
+optionally drop the redeemer of a removed input, then apply the index shift
+to the remaining ones. Redeemers of every other purpose are indexed against
+their own item sets, which this change does not touch, so they pass through
+unchanged - shifting them would leave e.g. a withdrawal's redeemer pointing
+at the wrong (or a missing) reward account, and the ledger would reject the
+transaction in phase 1 with MissingRedeemer/ExtraRedeemers.
+-}
 recomputeScriptData
   :: Maybe Word32 -- Index to remove
   -> (Word32 -> Word32)
   -> TxBodyScriptData Era
   -> TxBodyScriptData Era
-recomputeScriptData _ _ TxBodyNoScriptData = TxBodyNoScriptData
-recomputeScriptData i f (TxBodyScriptData era dats (Ledger.Redeemers rdmrs)) =
+recomputeScriptData = recomputeRedeemerIndices spendingPurpose
+
+-- | Re-key the Minting redeemers after the set of minted policies changed.
+recomputeScriptDataForMint
+  :: Maybe Word32 -- Index to remove
+  -> (Word32 -> Word32)
+  -> TxBodyScriptData Era
+  -> TxBodyScriptData Era
+recomputeScriptDataForMint = recomputeRedeemerIndices mintingPurpose
+
+{- | Shared core of 'recomputeScriptData' and 'recomputeScriptDataForMint':
+re-key the redeemers of the purpose selected by the prism and leave all
+other purposes untouched.
+-}
+recomputeRedeemerIndices
+  :: Prism' (Ledger.PlutusPurpose Ledger.AsIx LedgerEra) (Ledger.AsIx Word32 it)
+  -> Maybe Word32 -- Index to remove
+  -> (Word32 -> Word32)
+  -> TxBodyScriptData Era
+  -> TxBodyScriptData Era
+recomputeRedeemerIndices _ _ _ TxBodyNoScriptData = TxBodyNoScriptData
+recomputeRedeemerIndices purpose i f (TxBodyScriptData era dats (Ledger.Redeemers rdmrs)) =
   TxBodyScriptData
     era
     dats
     (Ledger.Redeemers $ Map.mapKeys updatePtr $ Map.filterWithKey idxFilter rdmrs)
  where
-  -- updatePtr = Ledger.hoistPlutusPurpose (\(Ledger.AsIx ix) -> Ledger.AsIx (f ix)) -- TODO: replace when hoistPlutusPurpose is available
-  updatePtr = \case
-    Conway.ConwayMinting (Ledger.AsIx ix) -> Conway.ConwayMinting (Ledger.AsIx (f ix))
-    Conway.ConwaySpending (Ledger.AsIx ix) -> Conway.ConwaySpending (Ledger.AsIx (f ix))
-    Conway.ConwayRewarding (Ledger.AsIx ix) -> Conway.ConwayRewarding (Ledger.AsIx (f ix))
-    Conway.ConwayCertifying (Ledger.AsIx ix) -> Conway.ConwayCertifying (Ledger.AsIx (f ix))
-    Conway.ConwayVoting (Ledger.AsIx ix) -> Conway.ConwayVoting (Ledger.AsIx (f ix))
-    Conway.ConwayProposing (Ledger.AsIx ix) -> Conway.ConwayProposing (Ledger.AsIx (f ix))
-  idxFilter (Conway.ConwaySpending (Ledger.AsIx idx)) _ = Just idx /= i
-  idxFilter (Conway.ConwayMinting (Ledger.AsIx idx)) _ = Just idx /= i
-  idxFilter (Conway.ConwayCertifying (Ledger.AsIx idx)) _ = Just idx /= i
-  idxFilter (Conway.ConwayRewarding (Ledger.AsIx idx)) _ = Just idx /= i
-  idxFilter (Conway.ConwayVoting (Ledger.AsIx idx)) _ = Just idx /= i
-  idxFilter (Conway.ConwayProposing (Ledger.AsIx idx)) _ = Just idx /= i
+  updatePtr = over purpose (\(Ledger.AsIx ix) -> Ledger.AsIx (f ix))
+  idxFilter k _ = case preview purpose k of
+    Just (Ledger.AsIx ix) -> Just ix /= i
+    Nothing -> True
+
+-- | The ledger offers only constructor/projection pairs for script purposes; these are their prisms.
+spendingPurpose :: Prism' (Ledger.PlutusPurpose Ledger.AsIx LedgerEra) (Ledger.AsIx Word32 Ledger.TxIn)
+spendingPurpose = prism' Ledger.mkSpendingPurpose Ledger.toSpendingPurpose
+
+mintingPurpose :: Prism' (Ledger.PlutusPurpose Ledger.AsIx LedgerEra) (Ledger.AsIx Word32 Mary.PolicyID)
+mintingPurpose = prism' Ledger.mkMintingPurpose Ledger.toMintingPurpose
 
 emptyTxBodyScriptData :: TxBodyScriptData Era
 emptyTxBodyScriptData = TxBodyScriptData AlonzoEraOnwardsConway (Ledger.TxDats mempty) (Ledger.Redeemers mempty)
@@ -329,25 +355,6 @@ addMintingRedeemer ix rdmr (TxBodyScriptData era dats (Ledger.Redeemers rdmrs)) 
     era
     dats
     (Ledger.Redeemers $ Map.insert (Conway.ConwayMinting (Ledger.AsIx ix)) rdmr rdmrs)
-
--- | Like recomputeScriptData but only updates minting redeemer indices
-recomputeScriptDataForMint
-  :: Maybe Word32 -- Index to remove
-  -> (Word32 -> Word32)
-  -> TxBodyScriptData Era
-  -> TxBodyScriptData Era
-recomputeScriptDataForMint _ _ TxBodyNoScriptData = TxBodyNoScriptData
-recomputeScriptDataForMint i f (TxBodyScriptData era dats (Ledger.Redeemers rdmrs)) =
-  TxBodyScriptData
-    era
-    dats
-    (Ledger.Redeemers $ Map.mapKeys updatePtr $ Map.filterWithKey idxFilter rdmrs)
- where
-  updatePtr = \case
-    Conway.ConwayMinting (Ledger.AsIx ix) -> Conway.ConwayMinting (Ledger.AsIx (f ix))
-    other -> other -- Don't modify non-minting redeemers
-  idxFilter (Conway.ConwayMinting (Ledger.AsIx idx)) _ = Just idx /= i
-  idxFilter _ _ = True -- Keep all non-minting redeemers
 
 -- | Convert cardano-api AssetName to ledger Mary.AssetName
 toMaryAssetName :: AssetName -> Mary.AssetName

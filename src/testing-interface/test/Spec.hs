@@ -39,6 +39,7 @@ import PingPongCoverageSpec (pingPongCoverageTests)
 import PingPongSpec (pingPongTests)
 import RebalanceSpec (rebalanceTests)
 import SampleSpec (sampleScriptTest)
+import ScriptDataSpec (scriptDataTests)
 import Scripts (pingPongCovIdx)
 import Scripts qualified
 
@@ -76,6 +77,7 @@ tests opts runOpts =
         , pingPongCoverageTests opts
         ]
     , rebalanceTests
+    , scriptDataTests
     , aikenTests opts
     , aikenBankTests runOpts
     , aikenHelloWorldTests runOpts

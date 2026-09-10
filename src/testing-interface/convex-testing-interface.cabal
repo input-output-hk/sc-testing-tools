@@ -148,6 +148,7 @@ test-suite convex-testing-interface-test
     PingPongSpec
     RebalanceSpec
     SampleSpec
+    ScriptDataSpec
     Scripts
     Scripts.Bounty
     Scripts.Bounty.Vulnerable.DoubleSatisfaction

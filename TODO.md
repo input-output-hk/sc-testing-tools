@@ -27,15 +27,6 @@ code as of `feat/improvements`.
   `Trace/TxSummary.hs`), keeping an input-based check only for attacks that
   genuinely need a spendable script UTxO.
 
-- [ ] **`recomputeScriptData` shifts redeemer indices of every purpose**
-  (`ThreatModel/Cardano/Api.hs`, `updatePtr`/`idxFilter`). Adding or removing
-  a spend input re-keys or deletes `ConwayRewarding`/`ConwayMinting`/...
-  redeemers along with the Spending ones, corrupting e.g. a withdrawal's
-  redeemer (phase-1 `MissingRedeemer`/`ExtraRedeemers`, silently skipped).
-  Pre-existing, newly reachable now that withdrawals exist. The sibling
-  `recomputeScriptDataForMint` shows the fix: `other -> other` for
-  non-matching purposes.
-
 ## Design
 
 - [ ] **Replace the `usesDefaultTms` name-comparison heuristic with an
