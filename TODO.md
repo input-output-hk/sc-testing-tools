@@ -7,17 +7,27 @@ code as of `feat/improvements`.
 
 ## Correctness / robustness
 
-- [ ] **`findAdaOnlyKeyInput` picks a poor collateral candidate**
-  (`ThreatModel/Cardano/Api.hs`). It takes the first spend input in `TxIn`
-  hash order regardless of its lovelace, and rejects every token-carrying key
-  input even though `recalculateTotalCollateral` now supports token-carrying
-  collateral (the return output hands the tokens back). A 1-ADA input that
-  happens to sort first causes `Left "Insufficient collateral"` while a
-  100-ADA input sits unused in the same transaction. Fix: pick the candidate
-  with the most lovelace, and only *prefer* ADA-only inputs instead of
-  requiring them.
+- [ ] **`recalculateTotalCollateral` reports only the first candidate's
+  error** (`ThreatModel/Cardano/Api.hs`, `firstRight`). When every collateral
+  candidate fails, the message surfaced via the QuickCheck table,
+  `tmceRebalanceError` and the report is the richest candidate's, hiding a
+  later candidate's more specific failure (e.g. "Insufficient collateral:
+  inputs=1000000" while a 2-ADA token-carrying input actually failed on the
+  return output's minimum ADA). Fix: join the errors of all candidates, or
+  report the one that got furthest.
 
 ## Design
+
+- [ ] **`requireScriptExecution` accepts any redeemer, not just the target
+  output's guardian** (`ThreatModel.hs`). The output-mutation attacks it
+  gates only need *some* Plutus script to run, so on a transaction whose sole
+  script is, say, a thread-token minting policy that never looks at outputs,
+  while a key input is paid into spending validator V for the first time,
+  mutating the V output "still validates" vacuously and is reported as a
+  vulnerability of V. No scenario in the repo triggers this today (the
+  RewardWithdrawal validator does inspect its outputs). Options: require some
+  redeemer's script hash to equal the target output's payment credential, or
+  document that such setup transactions belong in `acceptedFindings`.
 
 - [ ] **Replace the `usesDefaultTms` name-comparison heuristic with an
   explicit signal** (`TestingInterface.hs`). Recognizing "did the user
