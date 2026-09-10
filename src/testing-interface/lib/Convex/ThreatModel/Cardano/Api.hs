@@ -51,6 +51,7 @@ module Convex.ThreatModel.Cardano.Api (
   txInputs,
   txReferenceInputs,
   txOutputs,
+  txRunsPlutusScript,
 
   -- * Value utilities
   leqValue,
@@ -1138,6 +1139,10 @@ needsCollateral :: TxBodyScriptData Era -> Bool
 needsCollateral = \case
   TxBodyNoScriptData -> False
   TxBodyScriptData _ _ (Ledger.Redeemers rdmrs) -> not (Map.null rdmrs)
+
+-- | Does this transaction run at least one Plutus script? See 'needsCollateral'.
+txRunsPlutusScript :: Tx Era -> Bool
+txRunsPlutusScript (Tx (ShelleyTxBody _ _ _ scriptData _ _) _) = needsCollateral scriptData
 
 {- | The collateral inputs to use: the existing ones if there are any,
 otherwise a single reused ADA-only key-address input (see

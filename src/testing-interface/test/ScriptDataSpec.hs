@@ -13,14 +13,15 @@ and the attack is silently skipped instead of judged.
 module ScriptDataSpec (scriptDataTests) where
 
 import Cardano.Api qualified as C
+import Cardano.Ledger.Api.Tx.Body qualified as Ledger (mkBasicTxBody)
 import Cardano.Ledger.Api.Tx.Wits qualified as Ledger (AsIx (AsIx), Redeemers (Redeemers), TxDats (TxDats))
 import Cardano.Ledger.Conway.Scripts qualified as Conway (ConwayPlutusPurpose (..))
 import Cardano.Ledger.Plutus (ExUnits (..))
-import Convex.ThreatModel.Cardano.Api (recomputeScriptData, recomputeScriptDataForMint)
+import Convex.ThreatModel.Cardano.Api (recomputeScriptData, recomputeScriptDataForMint, txRunsPlutusScript)
 import Data.Map qualified as Map
 import Data.Word (Word32)
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
+import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
 type Purpose = Conway.ConwayPlutusPurpose Ledger.AsIx (C.ShelleyLedgerEra C.ConwayEra)
 
@@ -40,11 +41,15 @@ allPurposes =
   ]
 
 scriptData :: C.TxBodyScriptData C.ConwayEra
-scriptData =
+scriptData = redeemersOnly allPurposes
+
+-- | Script data holding only the given redeemers.
+redeemersOnly :: [Purpose] -> C.TxBodyScriptData C.ConwayEra
+redeemersOnly ps =
   C.TxBodyScriptData
     C.AlonzoEraOnwardsConway
     (Ledger.TxDats mempty)
-    (Ledger.Redeemers $ Map.fromList [(p, (C.toAlonzoData (payload p), ExUnits 0 0)) | p <- allPurposes])
+    (Ledger.Redeemers $ Map.fromList [(p, (C.toAlonzoData (payload p), ExUnits 0 0)) | p <- ps])
 
 -- | A payload that identifies the redeemer's original purpose and index.
 payload :: Purpose -> C.HashableScriptData
@@ -89,6 +94,11 @@ removeAt i ix
   | ix > i = ix - 1
   | otherwise = ix
 
+-- | A minimal transaction carrying the given script data and nothing else.
+txWithScriptData :: C.TxBodyScriptData C.ConwayEra -> C.Tx C.ConwayEra
+txWithScriptData sd =
+  C.Tx (C.ShelleyTxBody C.ShelleyBasedEraConway Ledger.mkBasicTxBody [] sd Nothing C.TxScriptValidityNone) []
+
 spend, mint, reward, cert :: Word32 -> Purpose
 spend = Conway.ConwaySpending . Ledger.AsIx
 mint = Conway.ConwayMinting . Ledger.AsIx
@@ -100,6 +110,21 @@ scriptDataTests =
   testGroup
     "redeemer re-indexing"
     [ testGroup
+        "txRunsPlutusScript"
+        [ testCase "no script data means no script runs" $
+            assertBool "expected False" $
+              not (txRunsPlutusScript (txWithScriptData C.TxBodyNoScriptData))
+        , testCase "script data without redeemers means no script runs" $
+            assertBool "expected False" $
+              not (txRunsPlutusScript (txWithScriptData (redeemersOnly [])))
+        , testCase "a Rewarding redeemer alone counts as a script run" $
+            assertBool "expected True" $
+              txRunsPlutusScript (txWithScriptData (redeemersOnly [reward 0]))
+        , testCase "a Minting redeemer alone counts as a script run" $
+            assertBool "expected True" $
+              txRunsPlutusScript (txWithScriptData (redeemersOnly [mint 0]))
+        ]
+    , testGroup
         "recomputeScriptData (spend inputs)"
         [ testCase "inserting a spend input shifts only Spending redeemers" $ do
             moves <- redeemerMoves (recomputeScriptData Nothing (insertAt 0) scriptData)

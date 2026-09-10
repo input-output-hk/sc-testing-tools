@@ -83,7 +83,7 @@ valueUnderpaymentAttackWithGen reductionFactorGen =
     -- Skip iterations where the draw is too small to be a meaningful attack.
     ensure (reductionFactor > 0)
 
-    requireScriptInput
+    requireScriptExecution
 
     {- The floor for the reduced ADA amount has to be each output's own
     protocol-mandated minimum, not a hardcoded guess: 'rebalanceAndSign' runs

@@ -104,7 +104,7 @@ datumListBloatAttackWithGen gen =
     -- Skip iterations where the draw is too small to be a meaningful attack.
     ensure (numItems >= 1 && itemSize >= 1)
 
-    requireScriptInput
+    requireScriptExecution
 
     -- Get all outputs from the transaction
     outputs <- getTxOutputs
@@ -267,7 +267,7 @@ datumByteBloatAttackWithGen gen =
     -- Skip iterations where the draw is too small to be a meaningful attack.
     ensure (inflatedSize >= 1)
 
-    requireScriptInput
+    requireScriptExecution
 
     outputs <- getTxOutputs
     let scriptOutputsWithDatum = filter isScriptOutputWithInlineDatum outputs

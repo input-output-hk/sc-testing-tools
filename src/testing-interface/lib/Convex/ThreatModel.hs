@@ -79,7 +79,7 @@ module Convex.ThreatModel (
   inPrecondition,
   ensure,
   ensureHasInputAt,
-  requireScriptInput,
+  requireScriptExecution,
   failPrecondition,
 
   -- ** Validation
@@ -713,23 +713,29 @@ ensureHasInputAt addr = do
   inputs <- getTxInputs
   ensure $ any ((addr ==) . addressOf) inputs
 
-{- | Precondition that requires the original transaction to spend at least one
-script input. Attacks that mutate a script output and then check whether
-spending it still validates need this: on a transaction that runs no script
-at all (e.g. a setup transaction that just pays a key input into a script for
-the first time), no validator ever gets a chance to reject the mutation, so
-"the mutated transaction still validates" is vacuous and proves nothing about
-the validator under test.
+{- | Precondition that requires the original transaction to run at least one
+Plutus script, of any purpose: a spending validator, a minting policy, a
+withdraw-zero staking validator, ... Attacks that mutate a script output and
+then check whether the transaction still validates need this: on a
+transaction that runs no script at all (e.g. a setup transaction that just
+pays a key input into a script for the first time), no validator ever gets a
+chance to reject the mutation, so "the mutated transaction still validates" is
+vacuous and proves nothing about the contract under test.
+
+The check is based on the transaction's redeemer set, not on its input
+addresses, because the script that guards a contract's outputs is not always
+a spending validator - the withdraw-zero pattern, for instance, validates the
+whole transaction from a Rewarding script while every input is key-owned.
+Conversely, an input at a native-script address runs no Plutus code and does
+not count.
 
 Not every attack needs this - one that tests a minting policy in isolation
 (e.g. "Convex.ThreatModel.TokenForgery") is still meaningful on a transaction
 that spends no script - so this is opt-in per attack rather than applied
 globally to every 'ThreatModelEnv'.
 -}
-requireScriptInput :: ThreatModel ()
-requireScriptInput = do
-  inputs <- getTxInputs
-  ensure $ any (not . isKeyAddressAny . addressOf) inputs
+requireScriptExecution :: ThreatModel ()
+requireScriptExecution = originalTx >>= ensure . txRunsPlutusScript
 
 -- | Returns @True@ if evaluated under a `threatPrecondition` and @False@ otherwise.
 inPrecondition :: ThreatModel Bool

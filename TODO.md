@@ -17,16 +17,6 @@ code as of `feat/improvements`.
   with the most lovelace, and only *prefer* ADA-only inputs instead of
   requiring them.
 
-- [ ] **`requireScriptInput` narrows models to Spending scripts**
-  (`ThreatModel.hs`). It equates "a validator runs" with "a script-address
-  input is spent", so models guarded by it skip transactions where only a
-  minting policy or a rewarding (withdraw-zero) script validates — the very
-  pattern the withdrawals work introduces. Fix: base the guard on the
-  transaction's redeemer set (the rule already exists as `needsCollateral` in
-  `ThreatModel/Cardano/Api.hs` and `bodyRedeemersOfPurpose` in
-  `Trace/TxSummary.hs`), keeping an input-based check only for attacks that
-  genuinely need a spendable script UTxO.
-
 ## Design
 
 - [ ] **Replace the `usesDefaultTms` name-comparison heuristic with an
@@ -93,9 +83,6 @@ code as of `feat/improvements`.
 
 - [ ] **`mkWithdrawalSummary` duplicates `mkInputSummary`'s four-field
   redeemer projection** (`Trace/TxSummary.hs`).
-
-- [ ] **Missing HLS cradle**: `src/use-cases/hie.yaml` has no entry for
-  `test/RewardWithdrawal`, so HLS has no cradle for the four new files.
 
 - [ ] **Deduplicate the outcome-status schema blocks**
   (`src/schema-gen/lib/Convex/SchemaGen.hs`). The `skippedPhase1` block is a

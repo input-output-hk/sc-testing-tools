@@ -87,7 +87,7 @@ largeValueAttackWithGen numTokensGen =
     -- Skip iterations where the draw is too small to be a meaningful attack.
     ensure (numTokens >= 1)
 
-    requireScriptInput
+    requireScriptExecution
 
     -- Get all outputs from the transaction
     outputs <- getTxOutputs

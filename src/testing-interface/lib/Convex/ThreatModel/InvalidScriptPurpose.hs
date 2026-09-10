@@ -70,8 +70,8 @@ invalidScriptPurposeAttackWith
   -> C.PlutusScript lang
   -> ThreatModel ()
 invalidScriptPurposeAttackWith redeemer assetName quantity spendingValidator = Named "Invalid Script Purpose Attack" $ do
-  -- Precondition: at least one script input must be spent so a script validator runs.
-  requireScriptInput
+  -- Precondition: at least one Plutus script must run so a validator can reject the mint.
+  requireScriptExecution
 
   -- Prefer a key-address output to receive minted test tokens.
   output <- anyOutputSuchThat (isKeyAddressAny . addressOf)

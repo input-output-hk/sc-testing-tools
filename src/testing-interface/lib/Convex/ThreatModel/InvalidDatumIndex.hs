@@ -88,7 +88,7 @@ invalidDatumIndexAttackWithGen invalidIdxGen =
     -- Negative indices belong to the negative-integer attack, not this model.
     ensure (invalidIdx >= 0)
 
-    requireScriptInput
+    requireScriptExecution
 
     -- Get all outputs from the transaction
     outputs <- getTxOutputs
