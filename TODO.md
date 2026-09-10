@@ -7,15 +7,6 @@ code as of `feat/improvements`.
 
 ## Correctness / robustness
 
-- [ ] **`recalculateTotalCollateral` reports only the first candidate's
-  error** (`ThreatModel/Cardano/Api.hs`, `firstRight`). When every collateral
-  candidate fails, the message surfaced via the QuickCheck table,
-  `tmceRebalanceError` and the report is the richest candidate's, hiding a
-  later candidate's more specific failure (e.g. "Insufficient collateral:
-  inputs=1000000" while a 2-ADA token-carrying input actually failed on the
-  return output's minimum ADA). Fix: join the errors of all candidates, or
-  report the one that got furthest.
-
 ## Design
 
 - [ ] **`requireScriptExecution` accepts any redeemer, not just the target

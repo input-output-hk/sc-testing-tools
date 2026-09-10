@@ -193,6 +193,14 @@ collateralCandidateTests =
         let utxo = C.UTxO (Map.fromList [(txInAt 0, mkOutAt scriptAddr (ada 100_000_000)), (txInAt 1, mkOut (ada 10_000_000))])
          in expectCollateral utxo (testTxSpending [txInAt 0, txInAt 1] feeOneAda) $ \body ->
               Conway.ctbCollateralInputs body @?= Set.singleton (C.toShelleyTxIn (txInAt 1))
+    , testCase "when every candidate fails, each one's own reason is reported" $
+        -- 1 ADA cannot cover 1.5 ADA of collateral; 2 ADA + tokens can, but
+        -- its 0.5 ADA leftover cannot fund the token-returning return output.
+        case recalculateTotalCollateral pparams (utxoOf [(0, ada 1_000_000), (1, ada 2_000_000 <> tokens)]) (testTxSpending [txInAt 0, txInAt 1] feeOneAda) of
+          Left err -> do
+            assertBool ("error should report the ADA-only input's shortfall, got: " <> err) ("Insufficient collateral" `isInfixOf` err)
+            assertBool ("error should report the token-carrying input's problem, got: " <> err) ("native tokens" `isInfixOf` err)
+          Right _ -> assertFailure "expected recalculation to fail: neither input can serve as collateral"
     , testCase "no key-address input at all is reported as such" $
         let utxo = C.UTxO (Map.singleton (txInAt 0) (mkOutAt scriptAddr (ada 100_000_000)))
          in case recalculateTotalCollateral pparams utxo (testTxSpending [txInAt 0] feeOneAda) of

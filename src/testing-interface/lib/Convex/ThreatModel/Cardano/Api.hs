@@ -121,7 +121,7 @@ import Cardano.Ledger.TxIn qualified as Ledger (TxIn)
 import Cardano.Slotting.Slot ()
 import Cardano.Slotting.Time (SlotLength, mkSlotLength)
 import Control.Lens (Prism', over, preview, prism', (&), (.~), (^.), _1)
-import Data.List (find, isPrefixOf, sortOn)
+import Data.List (isPrefixOf, sortOn)
 
 import Cardano.Ledger.Shelley.Rules (LedgerEnv (ledgerPp))
 import Convex.CardanoApi.Lenses qualified as L
@@ -147,7 +147,7 @@ import Data.ByteString.Short qualified as SBS
 import Data.Either (isRight)
 import Data.Foldable (foldrM)
 import Data.Map qualified as Map
-import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
+import Data.Maybe (isJust, listToMaybe, mapMaybe)
 import Data.Maybe.Strict
 import Data.Ord (Down (..))
 import Data.SOP.NonEmpty (NonEmpty (NonEmptyOne))
@@ -1058,8 +1058,25 @@ recalculateTotalCollateral pparams utxo tx@(Tx (ShelleyTxBody era body scripts s
   | otherwise =
       case collateralInputCandidates utxo body of
         [] -> Left "Transaction runs a Plutus script but no key-address input is available to use as collateral"
-        (c : cs) -> firstRight (recalculateWith c) (map recalculateWith cs)
+        candidates ->
+          let attempts = [(collInputs, recalculateWith candidate) | candidate@(collInputs, _) <- candidates]
+           in case [tx' | (_, Right tx') <- attempts] of
+                tx' : _ -> Right tx'
+                [] -> Left (allCandidatesFailed [(collInputs, err) | (collInputs, Left err) <- attempts])
  where
+  -- Every candidate failed: report each one's own reason, so that e.g. an
+  -- "insufficient collateral" from the richest input does not hide that a
+  -- poorer, token-carrying one failed for a different reason.
+  allCandidatesFailed [(_, err)] = err
+  allCandidatesFailed errs =
+    "None of the "
+      <> show (length errs)
+      <> " collateral input candidates could be used:"
+      <> concat
+        [ "\n  " <> Text.unpack (Text.intercalate (Text.pack ", ") (map (renderTxIn . fromShelleyTxIn) (Set.toList collInputs))) <> ": " <> err
+        | (collInputs, err) <- errs
+        ]
+
   pp = unLedgerProtocolParameters pparams
   collPerc = pp ^. ppCollateralPercentageL
   Coin fee = Conway.ctbTxfee body
@@ -1178,10 +1195,6 @@ collateralInputCandidates utxo body
     , isKeyAddressAny (addressOfTxOut txOut)
     , let value = txOutValueToValue val
     ]
-
--- | The first 'Right' among the given results, or the first result if none succeeded.
-firstRight :: Either e a -> [Either e a] -> Either e a
-firstRight r rs = fromMaybe r (find isRight (r : rs))
 
 {- | Ensure every output in a transaction carries at least the protocol's
 minimum required ADA for its current size (its value's assets, its datum,
