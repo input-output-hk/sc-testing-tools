@@ -107,7 +107,7 @@ import Convex.MockChain.Defaults qualified as Defaults
 import Convex.MonadLog (MonadLog)
 import Convex.NodeParams (NodeParams (..))
 import Convex.Tasty.Streaming.SrcLoc (SrcLocRange (..), withSrcLoc)
-import Convex.Tasty.Streaming.TMSummary (CoverageIndexStorage (..), TMRecorder, ThreatModelSummary (..), TraceRecorder (..), tmRecord)
+import Convex.Tasty.Streaming.TMSummary (CoverageIndexStorage (..), TMRecorder, ThreatModelCategory (..), ThreatModelSummary (..), TraceRecorder (..), tmRecord)
 import Convex.TestingInterface.Options (defaultMainTestingInterface)
 import Convex.TestingInterface.Trace (
   AddressLabeler (..),
@@ -948,35 +948,11 @@ threatModelTestCase usesDefaultTms getTmResultsRef groupName tm =
           allResults <- readIORef tmRef
           let outcomeEntries = fromMaybe [] (Map.lookup name allResults)
               outcomes = map fst outcomeEntries
-              total = length outcomes
-              numPassed = length [() | TMPassed <- outcomes]
-              numFailed = length [() | TMFailed _ <- outcomes]
-              numSkipped = length [() | TMSkipped <- outcomes]
-              numSkippedPhase1 = length [() | TMSkippedPhase1 <- outcomes]
-              numErrors = length [() | TMError _ <- outcomes]
-              errors = [msg | TMError msg <- outcomes]
-              tested = numPassed + numFailed
-              summary =
-                ThreatModelSummary
-                  { tmsName = T.pack name
-                  , tmsTested = tested
-                  , tmsTotal = total
-                  , tmsPassed = numPassed
-                  , tmsFailed = numFailed
-                  , tmsSkipped = numSkipped
-                  , tmsSkippedPhase1 = numSkippedPhase1
-                  , tmsErrors = numErrors
-                  }
+              summary = tallyOutcomes Claimed name outcomes
+              ThreatModelSummary{tmsTotal = total, tmsPassed = numPassed, tmsSkipped = numSkipped, tmsSkippedPhase1 = numSkippedPhase1, tmsErrors = numErrors} = summary
 
           -- Report errors as warnings (don't fail the test)
-          case errors of
-            [] -> pure ()
-            _ -> do
-              step $ "WARNING: " <> show numErrors <> " error(s) during threat model execution"
-              mapM_ (step . ("  " <>)) (take 3 errors)
-              case drop 3 errors of
-                [] -> pure ()
-                remaining -> step $ "  ... and " <> show (length remaining) <> " more"
+          reportErrors step outcomes
 
           if total == 0
             then do
@@ -1003,18 +979,7 @@ threatModelTestCase usesDefaultTms getTmResultsRef groupName tm =
                     else
                       step (skippedMessage summary)
                 else do
-                  step $
-                    "Tested "
-                      <> show numPassed
-                      <> "/"
-                      <> show total
-                      <> " tests ("
-                      <> show numSkipped
-                      <> " precondition skipped, "
-                      <> show numSkippedPhase1
-                      <> " phase 1/rebalance skipped, "
-                      <> show numErrors
-                      <> " errors)"
+                  step $ "Tested " <> show numPassed <> "/" <> show total <> " tests (" <> skipCounts summary <> ")"
                   tmRecord recorder key summary
                   case [msg | TMFailed msg <- outcomes] of
                     [] -> pure ()
@@ -1051,40 +1016,16 @@ expectedVulnTestCase getTmResultsRef groupName tm =
           allResults <- readIORef tmRef
           let outcomeEntries = fromMaybe [] (Map.lookup name allResults)
               outcomes = map fst outcomeEntries
-              total = length outcomes
+              summary = tallyOutcomes Expected name outcomes
               -- In expected vulnerability context:
               -- TMFailed = vulnerability detected = GOOD
               -- TMPassed = no vulnerability found = BAD
               -- TMError = crashed, doesn't count either way
-              numFound = length [() | TMFailed _ <- outcomes] -- Good: vulnerability detected
-              numNotFound = length [() | TMPassed <- outcomes] -- Bad: expected vuln not found
-              numSkipped = length [() | TMSkipped <- outcomes]
-              numSkippedPhase1 = length [() | TMSkippedPhase1 <- outcomes]
-              numErrors = length [() | TMError _ <- outcomes]
-              errors = [msg | TMError msg <- outcomes]
+              ThreatModelSummary{tmsTotal = total, tmsFailed = numFound, tmsTested = tested, tmsSkipped = numSkipped, tmsSkippedPhase1 = numSkippedPhase1, tmsErrors = numErrors} = summary
               validationErrors = distinctValidationErrors outcomeEntries
-              tested = numFound + numNotFound
-              summary =
-                ThreatModelSummary
-                  { tmsName = T.pack name
-                  , tmsTested = tested
-                  , tmsTotal = total
-                  , tmsPassed = numNotFound -- TMPassed count
-                  , tmsFailed = numFound -- TMFailed count
-                  , tmsSkipped = numSkipped
-                  , tmsSkippedPhase1 = numSkippedPhase1
-                  , tmsErrors = numErrors
-                  }
 
           -- Report errors as warnings (don't fail the test for errors alone)
-          case errors of
-            [] -> pure ()
-            _ -> do
-              step $ "WARNING: " <> show numErrors <> " error(s) during threat model execution"
-              mapM_ (step . ("  " <>)) (take 3 errors)
-              case drop 3 errors of
-                [] -> pure ()
-                remaining -> step $ "  ... and " <> show (length remaining) <> " more"
+          reportErrors step outcomes
 
           if total == 0
             then do
@@ -1111,18 +1052,7 @@ expectedVulnTestCase getTmResultsRef groupName tm =
                   if numFound > 0
                     then do
                       -- Good: at least one vulnerability was found
-                      step $
-                        "Vulnerability detected ("
-                          <> show numFound
-                          <> "/"
-                          <> show total
-                          <> " tests, "
-                          <> show numSkipped
-                          <> " precondition skipped, "
-                          <> show numSkippedPhase1
-                          <> " phase 1/rebalance skipped, "
-                          <> show numErrors
-                          <> " errors)"
+                      step $ "Vulnerability detected (" <> show numFound <> "/" <> show total <> " tests, " <> skipCounts summary <> ")"
                       tmRecord recorder key summary
                     else
                       if tested > 0
@@ -1170,70 +1100,73 @@ acceptedFindingTestCase getTmResultsRef groupName tm =
           allResults <- readIORef tmRef
           let outcomeEntries = fromMaybe [] (Map.lookup name allResults)
               outcomes = map fst outcomeEntries
-              total = length outcomes
-              numFound = length [() | TMFailed _ <- outcomes]
-              numNotFound = length [() | TMPassed <- outcomes]
-              numSkipped = length [() | TMSkipped <- outcomes]
-              numSkippedPhase1 = length [() | TMSkippedPhase1 <- outcomes]
-              numErrors = length [() | TMError _ <- outcomes]
-              errors = [msg | TMError msg <- outcomes]
-              tested = numFound + numNotFound
-              summary =
-                ThreatModelSummary
-                  { tmsName = T.pack name
-                  , tmsTested = tested
-                  , tmsTotal = total
-                  , tmsPassed = numNotFound
-                  , tmsFailed = numFound
-                  , tmsSkipped = numSkipped
-                  , tmsSkippedPhase1 = numSkippedPhase1
-                  , tmsErrors = numErrors
-                  }
+              summary = tallyOutcomes Accepted name outcomes
+              ThreatModelSummary{tmsTotal = total, tmsFailed = numFound, tmsTested = tested} = summary
           tmRecord recorder key summary
 
           -- Report errors as warnings (an accepted finding never fails, but
           -- errors should not be silently folded into a skip message)
-          case errors of
-            [] -> pure ()
-            _ -> do
-              step $ "WARNING: " <> show numErrors <> " error(s) during threat model execution"
-              mapM_ (step . ("  " <>)) (take 3 errors)
-              case drop 3 errors of
-                [] -> pure ()
-                remaining -> step $ "  ... and " <> show (length remaining) <> " more"
+          reportErrors step outcomes
 
           if total == 0
             then step "No tests were generated by positive tests"
             else
               if numFound > 0
                 then
-                  step $
-                    "Finding detected ("
-                      <> show numFound
-                      <> "/"
-                      <> show tested
-                      <> " tests, "
-                      <> show numSkipped
-                      <> " precondition skipped, "
-                      <> show numSkippedPhase1
-                      <> " phase 1/rebalance skipped, "
-                      <> show numErrors
-                      <> " errors) - accepted by design, not counted as a vulnerability"
+                  step $ "Finding detected (" <> show numFound <> "/" <> show tested <> " tests, " <> skipCounts summary <> ") - accepted by design, not counted as a vulnerability"
                 else
                   if tested > 0
                     then
-                      step $
-                        "Finding not detected (0/"
-                          <> show tested
-                          <> " tests, "
-                          <> show numSkipped
-                          <> " precondition skipped, "
-                          <> show numSkippedPhase1
-                          <> " phase 1/rebalance skipped, "
-                          <> show numErrors
-                          <> " errors) - if this stays undetected, consider removing it from 'acceptedFindings'"
+                      step $ "Finding not detected (0/" <> show tested <> " tests, " <> skipCounts summary <> ") - if this stays undetected, consider removing it from 'acceptedFindings'"
                     else
                       step (skippedMessage summary)
+
+{- | Tally one threat model's per-iteration outcomes into its summary. The
+category records which 'ThreatModelsFor' list the model came from, so that a
+consumer of the summary can tell a 'tmsFailed' count that means
+"vulnerability" ('Claimed') from one that means "detected as expected"
+('Expected') or "accepted by design" ('Accepted'). Shared by all three
+per-model test cases.
+-}
+tallyOutcomes :: ThreatModelCategory -> String -> [ThreatModelOutcome] -> ThreatModelSummary
+tallyOutcomes category name outcomes =
+  ThreatModelSummary
+    { tmsName = T.pack name
+    , tmsCategory = category
+    , tmsTested = numPassed + numFailed
+    , tmsTotal = length outcomes
+    , tmsPassed = numPassed
+    , tmsFailed = numFailed
+    , tmsSkipped = length [() | TMSkipped <- outcomes]
+    , tmsSkippedPhase1 = length [() | TMSkippedPhase1 <- outcomes]
+    , tmsErrors = length [() | TMError _ <- outcomes]
+    }
+ where
+  numPassed = length [() | TMPassed <- outcomes]
+  numFailed = length [() | TMFailed _ <- outcomes]
+
+{- | Report the errors among the outcomes as warning steps, never failing the
+test: the count, the first three messages, and how many more there were.
+-}
+reportErrors :: (String -> IO ()) -> [ThreatModelOutcome] -> IO ()
+reportErrors step outcomes = case [msg | TMError msg <- outcomes] of
+  [] -> pure ()
+  errors -> do
+    step $ "WARNING: " <> show (length errors) <> " error(s) during threat model execution"
+    mapM_ (step . ("  " <>)) (take 3 errors)
+    case drop 3 errors of
+      [] -> pure ()
+      remaining -> step $ "  ... and " <> show (length remaining) <> " more"
+
+-- | The skip and error counts as they appear inside every status line's parentheses.
+skipCounts :: ThreatModelSummary -> String
+skipCounts summary =
+  show (tmsSkipped summary)
+    <> " precondition skipped, "
+    <> show (tmsSkippedPhase1 summary)
+    <> " phase 1/rebalance skipped, "
+    <> show (tmsErrors summary)
+    <> " errors"
 
 {- | The status line for a run where the model applied to no transaction:
 every outcome was a precondition miss, an environmental skip (phase 1

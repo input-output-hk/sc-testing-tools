@@ -1,8 +1,10 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Convex.Tasty.Streaming.TMSummary (
   ThreatModelSummary (..),
+  ThreatModelCategory (..),
   TMStore,
   TMRecorder (..),
   TMStoreOption (..),
@@ -14,7 +16,7 @@ module Convex.Tasty.Streaming.TMSummary (
 ) where
 
 import Convex.Tasty.Streaming.SrcLoc (SrcLocRange)
-import Data.Aeson (FromJSON (..), ToJSON (..), Value, object, withObject, (.:), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), Value, object, withObject, withText, (.!=), (.:), (.:?), (.=))
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -23,9 +25,39 @@ import Data.Text (Text)
 import GHC.Generics (Generic)
 import Test.Tasty.Options (IsOption (..))
 
+{- | Which list of a suite's @ThreatModelsFor@ instance a threat model was run
+from. It decides how the counts in a 'ThreatModelSummary' are to be read: the
+same 'tmsFailed' (the attack's mutated transaction still validated) is a
+vulnerability for a 'Claimed' model, the required outcome for an 'Expected'
+one, and a known, tolerated artifact for an 'Accepted' one. A consumer that
+alerts on @failed > 0@ must therefore filter on the category first.
+-}
+data ThreatModelCategory
+  = -- | From @threatModels@: the contract is claimed secure against it; a detection fails the test.
+    Claimed
+  | -- | From @expectedVulnerabilities@: the contract is known vulnerable; no detection fails the test.
+    Expected
+  | -- | From @acceptedFindings@: detections are reported for visibility and never fail the test.
+    Accepted
+  deriving (Show, Eq, Ord, Enum, Bounded, Generic)
+
+instance ToJSON ThreatModelCategory where
+  toJSON = \case
+    Claimed -> "claimed"
+    Expected -> "expected"
+    Accepted -> "accepted"
+
+instance FromJSON ThreatModelCategory where
+  parseJSON = withText "ThreatModelCategory" $ \case
+    "claimed" -> pure Claimed
+    "expected" -> pure Expected
+    "accepted" -> pure Accepted
+    other -> fail ("Unknown threat model category: " <> show other)
+
 -- | Structured summary of a threat-model test case.
 data ThreatModelSummary = ThreatModelSummary
   { tmsName :: !Text
+  , tmsCategory :: !ThreatModelCategory
   , tmsTested :: !Int
   , tmsTotal :: !Int
   , tmsPassed :: !Int
@@ -40,6 +72,7 @@ instance ToJSON ThreatModelSummary where
   toJSON s =
     object
       [ "name" .= tmsName s
+      , "category" .= tmsCategory s
       , "tested" .= tmsTested s
       , "total" .= tmsTotal s
       , "passed" .= tmsPassed s
@@ -53,6 +86,9 @@ instance FromJSON ThreatModelSummary where
   parseJSON = withObject "ThreatModelSummary" $ \o ->
     ThreatModelSummary
       <$> o .: "name"
+      -- Events recorded before the category existed carry none; every
+      -- consumer read them as "failed means vulnerability", i.e. as claimed.
+      <*> o .:? "category" .!= Claimed
       <*> o .: "tested"
       <*> o .: "total"
       <*> o .: "passed"

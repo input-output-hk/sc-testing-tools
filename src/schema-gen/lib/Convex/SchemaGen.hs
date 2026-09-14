@@ -162,6 +162,9 @@ instance ToSchema ThreatModelSummary where
           & properties
             .~ InsOrdHashMap.fromList
               [ ("name", Inline $ mempty & type_ ?~ OpenApiString)
+              , -- How to read "failed": a vulnerability (claimed), the required
+                -- outcome (expected), or a tolerated artifact (accepted).
+                ("category", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["claimed", "expected", "accepted"])
               , ("tested", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("total", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("passed", Inline $ mempty & type_ ?~ OpenApiInteger)
@@ -170,7 +173,7 @@ instance ToSchema ThreatModelSummary where
               , ("skipped_phase1", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("errors", Inline $ mempty & type_ ?~ OpenApiInteger)
               ]
-          & required .~ ["name", "tested", "total", "passed", "failed", "skipped", "skipped_phase1", "errors"]
+          & required .~ ["name", "category", "tested", "total", "passed", "failed", "skipped", "skipped_phase1", "errors"]
 
 instance ToSchema MonitoringLabelStat where
   declareNamedSchema _ =

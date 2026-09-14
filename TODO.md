@@ -49,22 +49,6 @@ code as of `feat/improvements`.
   a defaulted `threatModelsAreExplicit :: Bool` or a `ThreatModelSelection`
   type.
 
-- [ ] **Mark the category of a threat model in `ThreatModelSummary` and the
-  streaming schema** (`TestingInterface.hs`, `Convex.Tasty.Streaming`,
-  `streaming-events.schema.json`). `acceptedFindings` detections are recorded
-  as `tmsFailed`, so an NDJSON consumer alerting on `failed > 0` reports
-  Value Underpayment as a vulnerability for the Vesting and AikenBank suites
-  while both are green. Add an explicit field (e.g. `"category":
-  "claimed" | "expected" | "accepted"`).
-
-- [ ] **Deduplicate the outcome-tally blocks** (`TestingInterface.hs`).
-  `threatModelTestCase`, `expectedVulnTestCase` and `acceptedFindingTestCase`
-  carry three near-verbatim copies of the tally/`ThreatModelSummary`
-  construction and the error-warning block; one copy has already drifted
-  once. Extract a `tallyOutcomes` helper next to
-  `summarizeThreatModelIteration` (the skip message is already shared via
-  `skippedMessage`).
-
 - [ ] **Decide a coverage policy for environmental skips** (`ThreatModel.hs`
   `runThreatModelM'`, and `TestingInterface.hs` `threatModelTestCase`/
   `expectedVulnTestCase`). Two faces of the same question:

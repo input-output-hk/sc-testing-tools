@@ -515,6 +515,14 @@
         },
         "ThreatModelSummary": {
             "properties": {
+                "category": {
+                    "enum": [
+                        "claimed",
+                        "expected",
+                        "accepted"
+                    ],
+                    "type": "string"
+                },
                 "errors": {
                     "type": "integer"
                 },
@@ -542,6 +550,7 @@
             },
             "required": [
                 "name",
+                "category",
                 "tested",
                 "total",
                 "passed",

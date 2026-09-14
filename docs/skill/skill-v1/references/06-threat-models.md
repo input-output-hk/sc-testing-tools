@@ -365,6 +365,8 @@ Each threat-model run produces one of five outcomes:
 
   The breakdown between precondition skips (`TMSkipped`) and Phase 1 skips (`TMSkippedPhase1`) is visible in both the CLI summary output and the streaming events (`ThreatModelSummary.skipped` vs `ThreatModelSummary.skipped_phase1`; `ThreatModelTraceOutcome` status `"skipped"` vs `"skipped_phase1"`).
 
+  In the streaming events, `ThreatModelSummary.failed` counts `TMFailed` outcomes regardless of what they mean for the suite; `ThreatModelSummary.category` (`"claimed"`, `"expected"` or `"accepted"`, after the `ThreatModelsFor` list the model came from) says how to read it. Only a `"claimed"` model's `failed > 0` is a vulnerability; for `"expected"` it is the required outcome and for `"accepted"` a tolerated artifact.
+
 ### When to use which tier
 
 - **`model`** (randomised): the right default for `threatModels` lists. Zero configuration; QuickCheck finds the interesting region.
