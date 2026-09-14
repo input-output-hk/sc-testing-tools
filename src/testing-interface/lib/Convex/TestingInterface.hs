@@ -117,13 +117,14 @@ import Convex.TestingInterface.Trace (
   RedeemerTagger (..),
   ThreatModelTrace (..),
   ThreatModelTraceOutcome (..),
+  ThreatModelValidation (..),
   Transition (..),
   TransitionResult (..),
   TxSummary (..),
  )
 import Convex.TestingInterface.Trace.RedeemerTag (autoRedeemerTag, labelRedeemer)
 import Convex.TestingInterface.Trace.TxSummary (summarizeTx)
-import Convex.ThreatModel (SigningWallet (AutoSign), ThreatModel (..), ThreatModelCheckEntry (..), ThreatModelOutcome (..), ValidityReport (..), getThreatModelName, runThreatModelCheckTraced, threatModelEnvs)
+import Convex.ThreatModel (SigningWallet (AutoSign), ThreatModel (..), ThreatModelCheckEntry (..), ThreatModelOutcome (..), TxValidity (..), ValidityReport (..), getThreatModelName, runThreatModelCheckTraced, threatModelEnvs)
 import Convex.ThreatModel.All (allThreatModels)
 import Convex.ThreatModel.TxModifier (TxModifier (..), renderTxMod)
 import Convex.Wallet (verificationKeyHash)
@@ -1348,6 +1349,7 @@ toThreatModelTraces findTestId tagger labeler results = concat <$> traverse go r
           , tmtModifications = []
           , tmtOriginalTx = emptyTxSummary
           , tmtModifiedTx = Nothing
+          , tmtValidation = Nothing
           , tmtOutcome = outcomeToTrace outcome
           , tmtCovered = covDataToSrcLocRanges covData
           }
@@ -1366,12 +1368,22 @@ toThreatModelTraces findTestId tagger labeler results = concat <$> traverse go r
           , tmtModifiedTx = case tmceModifiedTx entry of
               Just tx -> Just (summarizeTx tagger labeler tx (tmceModifiedUtxo entry))
               Nothing -> Nothing
+          , tmtValidation = Just (entryValidation entry)
           , tmtOutcome = outcomeToTrace outcome
           , tmtCovered = covDataToSrcLocRanges covData
           }
       | entry <- entries
       , Just testId <- [mtestId] -- when no test id is found, the test is filtered out and we also don't want to output a trace.
       ]
+
+  entryValidation entry = case (tmceValidation entry, tmceRebalanceError entry) of
+    (Just report, _) -> case validity report of
+      Valid -> TMVValid
+      Phase1Invalid -> TMVPhase1Invalid (map T.pack (errors report))
+      Phase2Invalid -> TMVPhase2Invalid (map T.pack (errors report))
+    (Nothing, Just err) -> TMVRebalanceFailed (T.pack err)
+    -- Cannot happen: 'runThreatModelCheckTraced' always sets exactly one of the two.
+    (Nothing, Nothing) -> TMVRebalanceFailed "unknown rebalancing failure"
 
   outcomeToTrace TMPassed = TMTOPassed
   outcomeToTrace (TMFailed msg) = TMTOFailed (T.pack msg)

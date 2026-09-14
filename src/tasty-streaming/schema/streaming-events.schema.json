@@ -601,6 +601,18 @@
                 },
                 "testId": {
                     "type": "integer"
+                },
+                "validation": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/$defs/ThreatModelValidation"
+                        },
+                        {
+                            "enum": [
+                                null
+                            ]
+                        }
+                    ]
                 }
             },
             "required": [
@@ -610,6 +622,7 @@
                 "modifications",
                 "originalTx",
                 "modifiedTx",
+                "validation",
                 "outcome",
                 "covered"
             ],
@@ -704,6 +717,88 @@
                     "required": [
                         "status",
                         "message"
+                    ],
+                    "type": "object"
+                }
+            ]
+        },
+        "ThreatModelValidation": {
+            "discriminator": {
+                "mapping": {},
+                "propertyName": "status"
+            },
+            "oneOf": [
+                {
+                    "properties": {
+                        "status": {
+                            "enum": [
+                                "valid"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "status"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "errors": {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        "status": {
+                            "enum": [
+                                "phase1_invalid"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "status",
+                        "errors"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "errors": {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        "status": {
+                            "enum": [
+                                "phase2_invalid"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "status",
+                        "errors"
+                    ],
+                    "type": "object"
+                },
+                {
+                    "properties": {
+                        "reason": {
+                            "type": "string"
+                        },
+                        "status": {
+                            "enum": [
+                                "rebalance_failed"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "status",
+                        "reason"
                     ],
                     "type": "object"
                 }

@@ -45,6 +45,7 @@ import Convex.TestingInterface.Trace (
   TestRunTrace (..),
   ThreatModelTrace (..),
   ThreatModelTraceOutcome (..),
+  ThreatModelValidation (..),
   Transition (..),
   TransitionResult (..),
   TxInputSummary (..),
@@ -614,6 +615,34 @@ instance ToSchema ThreatModelTraceOutcome where
           & oneOf ?~ [Inline passed, Inline failed, Inline skipped, Inline skippedPhase1, Inline err]
           & discriminator ?~ Discriminator "status" mempty
 
+instance ToSchema ThreatModelValidation where
+  declareNamedSchema _ = do
+    let stringArray :: Referenced Schema
+        stringArray = Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject (Inline $ mempty & type_ ?~ OpenApiString)
+        statusOnly :: Text -> Schema
+        statusOnly st =
+          mempty
+            & type_ ?~ OpenApiObject
+            & properties
+              .~ InsOrdHashMap.fromList
+                [("status", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ [Aeson.String st])]
+            & required .~ ["status"]
+        withErrors :: Text -> Schema
+        withErrors st =
+          statusOnly st
+            & properties %~ InsOrdHashMap.insert "errors" stringArray
+            & required .~ ["status", "errors"]
+        rebalanceFailed :: Schema
+        rebalanceFailed =
+          statusOnly "rebalance_failed"
+            & properties %~ InsOrdHashMap.insert "reason" (Inline $ mempty & type_ ?~ OpenApiString)
+            & required .~ ["status", "reason"]
+    pure $
+      NamedSchema (Just "ThreatModelValidation") $
+        mempty
+          & oneOf ?~ [Inline (statusOnly "valid"), Inline (withErrors "phase1_invalid"), Inline (withErrors "phase2_invalid"), Inline rebalanceFailed]
+          & discriminator ?~ Discriminator "status" mempty
+
 instance ToSchema TxMod where
   declareNamedSchema _ = do
     valueRef <- declareSchemaRef (Proxy @ValueSummary)
@@ -838,6 +867,7 @@ instance ToSchema ThreatModelTrace where
   declareNamedSchema _ = do
     txRef <- declareSchemaRef (Proxy @TxSummary)
     outcomeRef <- declareSchemaRef (Proxy @ThreatModelTraceOutcome)
+    validationRef <- declareSchemaRef (Proxy @ThreatModelValidation)
     txModRef <- declareSchemaRef (Proxy @TxMod)
     srcLocRanges <- declareSchemaRef (Proxy @SrcLocRanges)
     pure $
@@ -852,10 +882,11 @@ instance ToSchema ThreatModelTrace where
               , ("modifications", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject txModRef)
               , ("originalTx", txRef)
               , ("modifiedTx", Inline $ mempty & anyOf ?~ [txRef, null])
+              , ("validation", Inline $ mempty & anyOf ?~ [validationRef, null])
               , ("outcome", outcomeRef)
               , ("covered", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject srcLocRanges)
               ]
-          & required .~ ["name", "testId", "targetTxIndex", "modifications", "originalTx", "modifiedTx", "outcome", "covered"]
+          & required .~ ["name", "testId", "targetTxIndex", "modifications", "originalTx", "modifiedTx", "validation", "outcome", "covered"]
 
 instance ToSchema IterationTrace where
   declareNamedSchema _ = do

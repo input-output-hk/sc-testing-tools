@@ -365,6 +365,8 @@ Each threat-model run produces one of five outcomes:
 
   The breakdown between precondition skips (`TMSkipped`) and Phase 1 skips (`TMSkippedPhase1`) is visible in both the CLI summary output and the streaming events (`ThreatModelSummary.skipped` vs `ThreatModelSummary.skipped_phase1`; `ThreatModelTraceOutcome` status `"skipped"` vs `"skipped_phase1"`).
 
+  Each `ThreatModelTrace` in a `test_trace` event is one `Validate` call, and its `outcome` is the verdict of the *whole* threat model run repeated on every entry. To see how the ledger judged that particular mutated transaction, read the entry's `validation` field instead: `"valid"` (accepted), `"phase2_invalid"` (a script rejected it, with `errors`), `"phase1_invalid"` (ledger rules rejected it, with `errors`) or `"rebalance_failed"` (never validated, with `reason`). It is `null` only on the lightweight entry emitted when the model made no `Validate` call.
+
   In the streaming events, `ThreatModelSummary.failed` counts `TMFailed` outcomes regardless of what they mean for the suite; `ThreatModelSummary.category` (`"claimed"`, `"expected"` or `"accepted"`, after the `ThreatModelsFor` list the model came from) says how to read it. Only a `"claimed"` model's `failed > 0` is a vulnerability; for `"expected"` it is the required outcome and for `"accepted"` a tolerated artifact.
 
 ### When to use which tier

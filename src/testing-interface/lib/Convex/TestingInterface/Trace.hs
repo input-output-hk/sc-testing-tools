@@ -28,6 +28,7 @@ module Convex.TestingInterface.Trace (
   -- * Threat model trace
   ThreatModelTrace (..),
   ThreatModelTraceOutcome (..),
+  ThreatModelValidation (..),
 
   -- * Redeemer tagging (Tier 2)
   RedeemerTag (..),
@@ -329,6 +330,12 @@ data ThreatModelTrace = ThreatModelTrace
   -- ^ The original transaction before modification
   , tmtModifiedTx :: !(Maybe TxSummary)
   -- ^ The modified transaction, @Nothing@ if the modification couldn't produce a valid tx body
+  , tmtValidation :: !(Maybe ThreatModelValidation)
+  {- ^ How the ledger judged /this/ modified transaction. @Nothing@ only for the
+  lightweight trace emitted when the threat model made no 'Validate' call at all.
+  Unlike 'tmtOutcome', which is the verdict of the whole threat model run and is
+  repeated on every entry of that run, this is specific to the entry.
+  -}
   , tmtOutcome :: !ThreatModelTraceOutcome
   -- ^ The outcome of running the threat model
   , tmtCovered :: ![SrcLocRange]
@@ -348,6 +355,18 @@ data ThreatModelTraceOutcome
     TMTOSkippedPhase1 !Text
   | -- | Unexpected error during threat model execution
     TMTOError !Text
+  deriving (Eq, Show, Generic)
+
+-- | The ledger's verdict on a single modified transaction produced by a 'Validate' call.
+data ThreatModelValidation
+  = -- | Phase 1 and Phase 2 both passed: the ledger accepted the modified tx
+    TMVValid
+  | -- | Rejected by Phase 1 ledger rules; scripts never ran. Carries the error messages.
+    TMVPhase1Invalid ![Text]
+  | -- | Phase 1 passed but a script rejected the tx. Carries the script error messages.
+    TMVPhase2Invalid ![Text]
+  | -- | The modified tx could not be rebalanced and signed, so it was never validated
+    TMVRebalanceFailed !Text
   deriving (Eq, Show, Generic)
 
 -- ---------------------------------------------------------------------
@@ -458,6 +477,7 @@ instance ToJSON ThreatModelTrace where
       , "modifications" .= tmtModifications t
       , "originalTx" .= tmtOriginalTx t
       , "modifiedTx" .= tmtModifiedTx t
+      , "validation" .= tmtValidation t
       , "outcome" .= tmtOutcome t
       , "covered" .= groupRanges (tmtCovered t)
       ]
@@ -473,3 +493,13 @@ instance ToJSON ThreatModelTraceOutcome where
     object ["status" .= ("skipped_phase1" :: Text), "reason" .= reason]
   toJSON (TMTOError msg) =
     object ["status" .= ("error" :: Text), "message" .= msg]
+
+instance ToJSON ThreatModelValidation where
+  toJSON TMVValid =
+    object ["status" .= ("valid" :: Text)]
+  toJSON (TMVPhase1Invalid errs) =
+    object ["status" .= ("phase1_invalid" :: Text), "errors" .= errs]
+  toJSON (TMVPhase2Invalid errs) =
+    object ["status" .= ("phase2_invalid" :: Text), "errors" .= errs]
+  toJSON (TMVRebalanceFailed reason) =
+    object ["status" .= ("rebalance_failed" :: Text), "reason" .= reason]
