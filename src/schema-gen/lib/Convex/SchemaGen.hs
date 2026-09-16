@@ -107,6 +107,13 @@ nullableType t =
 null :: Referenced Schema
 null = Inline $ mempty & enum_ ?~ [Aeson.Null]
 
+{- | Schema of a 'Convex.Tasty.Streaming.TMSummary.ThreatModelCategory'. Inlined
+in both the run-level summary and the per-entry trace, which each say how their
+own @failed@\/@outcome@ is to be read.
+-}
+threatModelCategory :: Referenced Schema
+threatModelCategory = Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["claimed", "expected", "accepted"]
+
 -- ============================================================
 -- ToSchema instances for convex-tasty-streaming types
 -- ============================================================
@@ -165,7 +172,7 @@ instance ToSchema ThreatModelSummary where
               [ ("name", Inline $ mempty & type_ ?~ OpenApiString)
               , -- How to read "failed": a vulnerability (claimed), the required
                 -- outcome (expected), or a tolerated artifact (accepted).
-                ("category", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["claimed", "expected", "accepted"])
+                ("category", threatModelCategory)
               , ("tested", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("total", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("passed", Inline $ mempty & type_ ?~ OpenApiInteger)
@@ -877,6 +884,9 @@ instance ToSchema ThreatModelTrace where
           & properties
             .~ InsOrdHashMap.fromList
               [ ("name", Inline $ mempty & type_ ?~ OpenApiString)
+              , -- How to read a "failed" outcome, repeated on every entry so a
+                -- reader of the trace stream needs no later test_done event.
+                ("category", threatModelCategory)
               , ("testId", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("targetTxIndex", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("modifications", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject txModRef)
@@ -886,7 +896,7 @@ instance ToSchema ThreatModelTrace where
               , ("outcome", outcomeRef)
               , ("covered", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject srcLocRanges)
               ]
-          & required .~ ["name", "testId", "targetTxIndex", "modifications", "originalTx", "modifiedTx", "validation", "outcome", "covered"]
+          & required .~ ["name", "category", "testId", "targetTxIndex", "modifications", "originalTx", "modifiedTx", "validation", "outcome", "covered"]
 
 instance ToSchema IterationTrace where
   declareNamedSchema _ = do

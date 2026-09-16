@@ -41,6 +41,7 @@ module Convex.TestingInterface.Trace (
 
 import Control.Applicative ((<|>))
 import Convex.Tasty.Streaming.SrcLoc (SrcLocRange, groupRanges)
+import Convex.Tasty.Streaming.TMSummary (ThreatModelCategory)
 import Data.Aeson (ToJSON (..), Value, object, (.=))
 import Data.Text (Text)
 import GHC.Generics (Generic)
@@ -320,6 +321,13 @@ in this iteration.
 data ThreatModelTrace = ThreatModelTrace
   { tmtName :: !Text
   -- ^ Name of the threat model (e.g. "unprotectedScriptOutput")
+  , tmtCategory :: !ThreatModelCategory
+  {- ^ Which @ThreatModelsFor@ list the model came from, i.e. how a 'TMTOFailed'
+  outcome is to be read. Repeated on every entry so that a consumer of the
+  @test_trace@ stream can tell a vulnerability from an expected or accepted
+  finding without waiting for the @test_done@ event that carries the
+  run-level 'Convex.Tasty.Streaming.TMSummary.ThreatModelSummary'.
+  -}
   , tmtTestId :: !Int
   -- ^ Test id of the threat model
   , tmtTargetTxIndex :: !Int
@@ -331,8 +339,10 @@ data ThreatModelTrace = ThreatModelTrace
   , tmtModifiedTx :: !(Maybe TxSummary)
   -- ^ The modified transaction, @Nothing@ if the modification couldn't produce a valid tx body
   , tmtValidation :: !(Maybe ThreatModelValidation)
-  {- ^ How the ledger judged /this/ modified transaction. @Nothing@ only for the
-  lightweight trace emitted when the threat model made no 'Validate' call at all.
+  {- ^ How the ledger judged /this/ modified transaction. @Nothing@ when there is
+  no verdict to report: the lightweight trace emitted when the threat model made
+  no 'Validate' call at all, or a 'Validate' call that recorded neither a
+  validity report nor a rebalancing error (not expected).
   Unlike 'tmtOutcome', which is the verdict of the whole threat model run and is
   repeated on every entry of that run, this is specific to the entry.
   -}
@@ -472,6 +482,7 @@ instance ToJSON ThreatModelTrace where
   toJSON t =
     object
       [ "name" .= tmtName t
+      , "category" .= tmtCategory t
       , "testId" .= tmtTestId t
       , "targetTxIndex" .= tmtTargetTxIndex t
       , "modifications" .= tmtModifications t

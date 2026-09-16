@@ -563,6 +563,14 @@
         },
         "ThreatModelTrace": {
             "properties": {
+                "category": {
+                    "enum": [
+                        "claimed",
+                        "expected",
+                        "accepted"
+                    ],
+                    "type": "string"
+                },
                 "covered": {
                     "items": {
                         "$ref": "#/$defs/SrcLocRanges"
@@ -617,6 +625,7 @@
             },
             "required": [
                 "name",
+                "category",
                 "testId",
                 "targetTxIndex",
                 "modifications",

@@ -5,6 +5,7 @@
 module Convex.Tasty.Streaming.TMSummary (
   ThreatModelSummary (..),
   ThreatModelCategory (..),
+  threatModelGroupName,
   TMStore,
   TMRecorder (..),
   TMStoreOption (..),
@@ -16,7 +17,7 @@ module Convex.Tasty.Streaming.TMSummary (
 ) where
 
 import Convex.Tasty.Streaming.SrcLoc (SrcLocRange)
-import Data.Aeson (FromJSON (..), ToJSON (..), Value, object, withObject, withText, (.!=), (.:), (.:?), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), Value, object, withObject, withText, (.:), (.=))
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -54,6 +55,18 @@ instance FromJSON ThreatModelCategory where
     "accepted" -> pure Accepted
     other -> fail ("Unknown threat model category: " <> show other)
 
+{- | The Tasty group that a category's per-model test cases live under. The
+single source of both the group the test tree is built with and the names the
+streaming reporter matches on, so that a category cannot end up in a group the
+reporter does not recognise (@--test-id@ resolves a per-model test's
+@Positive tests@ prerequisite from these names).
+-}
+threatModelGroupName :: ThreatModelCategory -> String
+threatModelGroupName = \case
+  Claimed -> "Threat models"
+  Expected -> "Expected vulnerabilities"
+  Accepted -> "Accepted findings"
+
 -- | Structured summary of a threat-model test case.
 data ThreatModelSummary = ThreatModelSummary
   { tmsName :: !Text
@@ -86,9 +99,9 @@ instance FromJSON ThreatModelSummary where
   parseJSON = withObject "ThreatModelSummary" $ \o ->
     ThreatModelSummary
       <$> o .: "name"
-      -- Events recorded before the category existed carry none; every
-      -- consumer read them as "failed means vulnerability", i.e. as claimed.
-      <*> o .:? "category" .!= Claimed
+      -- Required, as in the schema: defaulting a missing category to 'Claimed'
+      -- would decode an accepted finding with @failed > 0@ as a vulnerability.
+      <*> o .: "category"
       <*> o .: "tested"
       <*> o .: "total"
       <*> o .: "passed"
