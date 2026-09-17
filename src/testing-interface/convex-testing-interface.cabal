@@ -155,6 +155,7 @@ test-suite convex-testing-interface-test
     Scripts.PingPong
     Scripts.PingPong.Vulnerable
     Scripts.Sample
+    ZeroCoverageSpec
 
   autogen-modules: Paths_convex_testing_interface
   build-depends:

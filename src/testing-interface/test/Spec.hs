@@ -42,6 +42,7 @@ import SampleSpec (sampleScriptTest)
 import ScriptDataSpec (scriptDataTests)
 import Scripts (pingPongCovIdx)
 import Scripts qualified
+import ZeroCoverageSpec (zeroCoverageTests)
 
 main :: IO ()
 main =
@@ -77,6 +78,7 @@ tests opts runOpts =
         , pingPongCoverageTests opts
         ]
     , rebalanceTests
+    , zeroCoverageTests
     , scriptDataTests
     , aikenTests opts
     , aikenBankTests runOpts

@@ -31,27 +31,6 @@ code as of `feat/improvements`.
   a defaulted `threatModelsAreExplicit :: Bool` or a `ThreatModelSelection`
   type.
 
-- [ ] **Decide a coverage policy for environmental skips** (`ThreatModel.hs`
-  `runThreatModelM'`, and `TestingInterface.hs` `threatModelTestCase`/
-  `expectedVulnTestCase`). Two faces of the same question:
-
-  1. Direct M-runners: rebalance failures skip the env with only a
-     QuickCheck table entry (visible on completed runs only), so a "secure
-     against X" property (e.g. `BountySpec`, `AikenKingOfCardanoSpec`) can
-     pass while some envs were never attacked; if *every* env fails, the run
-     at least fails as an unexplained "Gave up!".
-  2. Tasty test cases: the vacuity check is guarded by
-     `numSkippedPhase1 + numErrors == 0`, so a claimed model that is 100%
-     *environmentally* skipped (e.g. its attack never rebalances) stays
-     green forever with the soft SKIPPED step — permanent systematic zero
-     coverage is indistinguishable from transient flakiness, and a single
-     environmental skip disables the coverage-claim failure entirely.
-
-  Consider counting environmental skips and failing (or warning loudly) when
-  attack coverage stays at zero — mind the trade-off recorded at the skip
-  sites: hard-failing per-iteration would regress the skip-not-fail
-  semantics for harness limitations.
-
 - [ ] **Key the shared threat-model outcome map by group, not just name**
   (`TestingInterface.hs`, `positiveTest*`/`tmRecord`). Outcomes are collected
   in one map keyed by the model's `Named` name, so a parameterized variant in

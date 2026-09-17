@@ -42,6 +42,14 @@ module Convex.TestingInterface (
   -- * Trace recording
   TraceRecorder (..),
 
+  -- * Threat model coverage policy
+  zeroCoverageVerdict,
+  CoverageClaim (..),
+  claimCategory,
+  ZeroCoverageKind (..),
+  zeroCoverageKind,
+  skippedMessage,
+
   -- * The Testing Monad
   TestingMonadT (..),
   runTestingMonadT,
@@ -496,17 +504,17 @@ propRunActionsWithOptions groupName opts =
             usesDefaultTms =
               map getThreatModelName tms
                 == map getThreatModelName (defaultThreatModelsExcluding (evs <> afs))
-            {- The one place a model is tagged with its category: it decides
-            how the model's outcomes are tallied and reported, which Tasty
-            group its test case lands in (via 'threatModelGroupName', shared
-            with the streaming reporter), and the category that travels into
-            the model's trace entries. -}
+            {- The one place a model is tagged with what the suite claims
+            about it: the claim decides how the model's outcomes are tallied
+            and reported (via 'claimCategory'), which Tasty group its test
+            case lands in, the category that travels into the model's trace
+            entries, and whether zero attack coverage fails the case. -}
             categorized =
-              [ (Claimed, filteredTms, threatModelTestCase usesDefaultTms)
-              , (Expected, evs, expectedVulnTestCase)
-              , (Accepted, afs, acceptedFindingTestCase)
+              [ (if usesDefaultTms then ClaimedByDefault else ClaimedExplicitly, filteredTms, threatModelTestCase)
+              , (ExpectedToBeFound, evs, expectedVulnTestCase)
+              , (AcceptedByDesign, afs, acceptedFindingTestCase)
               ]
-            modelsToRun = concat [map ((,) category) models | (category, models, _) <- categorized]
+            modelsToRun = concat [map ((,) (claimCategory claim)) models | (claim, models, _) <- categorized]
          in if null tms && null evs && null afs
               then
                 -- No threat models: simple structure (backward compatible)
@@ -542,10 +550,10 @@ propRunActionsWithOptions groupName opts =
   -- One per-model group per non-empty category, each reporting its own
   -- models' outcomes once the positive tests have recorded them.
   perCategoryGroups categorized getTmResultsRef =
-    [ testGroup group $ map (testCaseFor category getTmResultsRef group) models
-    | (category, models, testCaseFor) <- categorized
+    [ testGroup group $ map (testCaseFor claim getTmResultsRef group) models
+    | (claim, models, testCaseFor) <- categorized
     , not (null models)
-    , let group = threatModelGroupName category
+    , let group = threatModelGroupName (claimCategory claim)
     ]
 
 -- | Negative test: check that invalid actions fail
@@ -938,20 +946,15 @@ positiveTestFast opts mGetTmResultsRef tms = do
 
 -- | Create a test case for displaying threat model results
 threatModelTestCase
-  :: Bool
-  {- ^ Whether the model comes from the default 'threatModels' list; a model
-  from an explicitly overridden list fails its test case when its
-  precondition never holds, the default list tolerates that
-  -}
-  -> ThreatModelCategory
-  -- ^ The category the model was tagged with (see 'propRunActionsWithOptions')
+  :: CoverageClaim
+  -- ^ What the suite claims about the model (see 'propRunActionsWithOptions')
   -> IO (IORef ThreatModelResults)
   -> String
   -- ^ Tasty group name (for keying summaries)
   -> ThreatModel ()
   -- ^ The threat model
   -> TestTree
-threatModelTestCase usesDefaultTms category getTmResultsRef groupName tm =
+threatModelTestCase claim getTmResultsRef groupName tm =
   let name = modelName tm
       key = groupName <> "/" <> name
    in askOption $ \(recorder :: TMRecorder) ->
@@ -960,21 +963,8 @@ threatModelTestCase usesDefaultTms category getTmResultsRef groupName tm =
           allResults <- readIORef tmRef
           let outcomeEntries = fromMaybe [] (Map.lookup name allResults)
               outcomes = map fst outcomeEntries
-              summary = tallyOutcomes category name outcomes
+              summary = tallyOutcomes (claimCategory claim) name outcomes
               ThreatModelSummary{tmsTotal = total, tmsTested = tested, tmsPassed = numPassed} = summary
-              -- A model whose precondition holds on NO generated transaction
-              -- provides zero coverage while the suite advertises it - that's
-              -- a fault in the test setup, not an environmental hiccup. Only
-              -- an explicitly claimed model is worth failing on: the default
-              -- list means "run whatever applies", so vacuity is expected
-              -- there.
-              vacuityFailure
-                | usesDefaultTms = Nothing
-                | otherwise =
-                    Just $
-                      "Threat model never applied: precondition not met on any of the "
-                        <> show total
-                        <> " generated transactions. It provides no coverage for this contract - remove it from 'threatModels' or make the positive tests generate transactions it applies to."
 
           -- Report errors as warnings (don't fail the test)
           reportErrors step outcomes
@@ -984,7 +974,7 @@ threatModelTestCase usesDefaultTms category getTmResultsRef groupName tm =
             then step "No tests were generated by positive tests"
             else
               if tested == 0
-                then reportVacuity step vacuityFailure summary
+                then reportZeroCoverage step claim summary outcomeEntries
                 else do
                   step $ "Tested " <> show numPassed <> "/" <> show total <> " tests (" <> skipCounts summary <> ")"
                   case [msg | TMFailed msg <- outcomes] of
@@ -1007,15 +997,15 @@ TMError = WARNING (threat model crashed, doesn't count as found or not found)
 Output is quiet — no verbose transaction dump details, just stats.
 -}
 expectedVulnTestCase
-  :: ThreatModelCategory
-  -- ^ The category the model was tagged with (see 'propRunActionsWithOptions')
+  :: CoverageClaim
+  -- ^ What the suite claims about the model (see 'propRunActionsWithOptions')
   -> IO (IORef ThreatModelResults)
   -> String
   -- ^ Tasty group name (for keying summaries)
   -> ThreatModel ()
   -- ^ The threat model expected to find vulnerabilities
   -> TestTree
-expectedVulnTestCase category getTmResultsRef groupName tm =
+expectedVulnTestCase claim getTmResultsRef groupName tm =
   let name = modelName tm
       key = groupName <> "/" <> name
    in askOption $ \(recorder :: TMRecorder) ->
@@ -1024,21 +1014,13 @@ expectedVulnTestCase category getTmResultsRef groupName tm =
           allResults <- readIORef tmRef
           let outcomeEntries = fromMaybe [] (Map.lookup name allResults)
               outcomes = map fst outcomeEntries
-              summary = tallyOutcomes category name outcomes
+              summary = tallyOutcomes (claimCategory claim) name outcomes
               -- In expected vulnerability context:
               -- TMFailed = vulnerability detected = GOOD
               -- TMPassed = no vulnerability found = BAD
               -- TMError = crashed, doesn't count either way
               ThreatModelSummary{tmsTotal = total, tmsFailed = numFound, tmsTested = tested} = summary
               validationErrors = distinctValidationErrors outcomeEntries
-              -- An expected vulnerability that is never even exercised is a
-              -- stronger lie than a skipped threat model: the suite claims the
-              -- contract HAS this vulnerability yet nothing checks it.
-              vacuityFailure =
-                Just $
-                  "Expected vulnerability never exercised: precondition not met on any of the "
-                    <> show total
-                    <> " generated transactions. Remove it from 'expectedVulnerabilities' or make the positive tests generate transactions it applies to."
 
           -- Report errors as warnings (don't fail the test for errors alone)
           reportErrors step outcomes
@@ -1048,7 +1030,9 @@ expectedVulnTestCase category getTmResultsRef groupName tm =
             then step "No tests were generated by positive tests"
             else
               if tested == 0
-                then reportVacuity step vacuityFailure summary
+                then -- A vulnerability the suite claims to exist, never even
+                -- exercised, is a stronger lie than a skipped threat model.
+                  reportZeroCoverage step claim summary outcomeEntries
                 else
                   if numFound > 0
                     then
@@ -1078,15 +1062,15 @@ detection is labeled as accepted by design; no detection at all suggests the
 entry has become stale and can be dropped.
 -}
 acceptedFindingTestCase
-  :: ThreatModelCategory
-  -- ^ The category the model was tagged with (see 'propRunActionsWithOptions')
+  :: CoverageClaim
+  -- ^ What the suite claims about the model (see 'propRunActionsWithOptions')
   -> IO (IORef ThreatModelResults)
   -> String
   -- ^ Tasty group name (for keying summaries)
   -> ThreatModel ()
   -- ^ The threat model whose finding is accepted
   -> TestTree
-acceptedFindingTestCase category getTmResultsRef groupName tm =
+acceptedFindingTestCase claim getTmResultsRef groupName tm =
   let name = modelName tm
       key = groupName <> "/" <> name
    in askOption $ \(recorder :: TMRecorder) ->
@@ -1095,7 +1079,7 @@ acceptedFindingTestCase category getTmResultsRef groupName tm =
           allResults <- readIORef tmRef
           let outcomeEntries = fromMaybe [] (Map.lookup name allResults)
               outcomes = map fst outcomeEntries
-              summary = tallyOutcomes category name outcomes
+              summary = tallyOutcomes (claimCategory claim) name outcomes
               ThreatModelSummary{tmsTotal = total, tmsFailed = numFound, tmsTested = tested} = summary
           tmRecord recorder key summary
 
@@ -1107,8 +1091,9 @@ acceptedFindingTestCase category getTmResultsRef groupName tm =
             then step "No tests were generated by positive tests"
             else
               if tested == 0
-                then -- Nothing: an accepted finding never fails its case.
-                  reportVacuity step Nothing summary
+                then -- Never fails, but still says why nothing was tested: a
+                -- stale entry is exactly what the reasons explain.
+                  reportZeroCoverage step claim summary outcomeEntries
                 else
                   if numFound > 0
                     then
@@ -1147,11 +1132,23 @@ reportErrors :: (String -> IO ()) -> [ThreatModelOutcome] -> IO ()
 reportErrors step outcomes = case [msg | TMError msg <- outcomes] of
   [] -> pure ()
   errors -> do
+    -- Count the erroring iterations, not the distinct messages: 100
+    -- iterations failing the same way is a systematic fault, and the status
+    -- line below reports the same 100 via 'skipCounts'. Only what is
+    -- printed is deduplicated.
     step $ "WARNING: " <> show (length errors) <> " error(s) during threat model execution"
-    mapM_ (step . ("  " <>)) (take 3 errors)
-    case drop 3 errors of
+    let distinct = modelErrors outcomes
+    mapM_ (step . ("  " <>)) (take 3 distinct)
+    case drop 3 distinct of
       [] -> pure ()
       remaining -> step $ "  ... and " <> show (length remaining) <> " more"
+
+{- | The distinct messages of the errors the model itself raised, as opposed
+to the ledger's verdicts on the modified transactions: these come from
+'TMError', which is reached before any precondition is evaluated.
+-}
+modelErrors :: [ThreatModelOutcome] -> [String]
+modelErrors outcomes = nubOrd [msg | TMError msg <- outcomes]
 
 -- | The skip and error counts as they appear inside every status line's parentheses.
 skipCounts :: ThreatModelSummary -> String
@@ -1163,42 +1160,174 @@ skipCounts summary =
     <> show (tmsErrors summary)
     <> " errors"
 
-{- | Report a run in which the model applied to no transaction at all
-('tmsTested' is zero, so every outcome was a precondition miss, an
-environmental skip or an error). Pure precondition vacuity is a fault in the
-test setup and fails the case with the given message, if the suite made a
-claim worth failing on ('Nothing' never fails). Phase-1 skips and rebalancing
-failures are environmental, and errors are already reported by 'reportErrors',
-so a run containing any of those stays a warning step. Shared by all three
-per-model test cases.
--}
-reportVacuity :: (String -> IO ()) -> Maybe String -> ThreatModelSummary -> IO ()
-reportVacuity step vacuityFailure summary = case vacuityFailure of
-  Just message
-    | tmsSkippedPhase1 summary + tmsErrors summary == 0 -> assertFailure message
-  _ -> step (skippedMessage summary)
-
-{- | The status line for a run where the model applied to no transaction:
-every outcome was a precondition miss, an environmental skip (phase 1
+{- | The status line for a run where the model was never tested: every
+outcome was a precondition miss, an environmental skip (phase 1
 invalidation / rebalancing failure), or an error. Shared by all three
-per-model test cases.
+per-model test cases; the wording says which of the three it was.
 -}
 skippedMessage :: ThreatModelSummary -> String
-skippedMessage summary =
-  "SKIPPED: Precondition never met ("
-    <> show (tmsSkipped summary)
-    <> " precondition"
-    <> ( if tmsSkippedPhase1 summary > 0
-           then ", " <> show (tmsSkippedPhase1 summary) <> " phase 1 invalidation / rebalancing failure"
-           else ""
-       )
-    <> ( if tmsErrors summary > 0
-           then ", " <> show (tmsErrors summary) <> " errors"
-           else ""
-       )
-    <> ", 0/"
-    <> show (tmsTotal summary)
-    <> " tests applicable)"
+skippedMessage summary = case zeroCoverageKind summary of
+  PreconditionNeverMet -> line "Precondition never met" "applicable"
+  AttackNeverCarriedOut -> line "Attack never carried out" "carried out"
+  ModelErrored -> line "Threat model errored" "completed"
+ where
+  -- The verb carries the distinction: only in the first case was nothing
+  -- "applicable". In the other two the model DID apply to some transaction,
+  -- so saying nothing was applicable would name the wrong fault.
+  line headline verb =
+    "SKIPPED: "
+      <> headline
+      <> " ("
+      <> skipCounts summary
+      <> ", 0/"
+      <> show (tmsTotal summary)
+      <> " tests "
+      <> verb
+      <> ")"
+
+-- | The three ways a model ends up with zero attack coverage.
+data ZeroCoverageKind
+  = -- | The model applied to no generated transaction at all
+    PreconditionNeverMet
+  | {- | The model applied to some transaction, but every attempt ended in a
+    Phase 1 invalidation or a rebalancing failure
+    -}
+    AttackNeverCarriedOut
+  | {- | The model itself errored (e.g. no signing wallet could be detected),
+    which happens before any precondition is evaluated
+    -}
+    ModelErrored
+
+{- | Which of the three it was. An environmental skip proves the precondition
+held at least once, so it outranks an error, which says nothing either way.
+-}
+zeroCoverageKind :: ThreatModelSummary -> ZeroCoverageKind
+zeroCoverageKind summary
+  | tmsSkippedPhase1 summary > 0 = AttackNeverCarriedOut
+  | tmsErrors summary > 0 = ModelErrored
+  | otherwise = PreconditionNeverMet
+
+{- | What the suite claims about a model, and so what its test case owes the
+user when the model turns out never to have been tested. This is the one
+classification of a model's provenance: the streaming-facing
+'ThreatModelCategory' is derived from it by 'claimCategory'.
+-}
+data CoverageClaim
+  = -- | Claimed secure, from the default 'threatModels' list
+    ClaimedByDefault
+  | -- | Claimed secure, from an explicitly overridden 'threatModels' list
+    ClaimedExplicitly
+  | -- | Claimed vulnerable, from 'expectedVulnerabilities'
+    ExpectedToBeFound
+  | -- | Nothing is claimed, from 'acceptedFindings'
+    AcceptedByDesign
+  deriving (Show, Eq)
+
+{- | The category a claim reports as. Several claims share a category: the
+category says how to read the model's outcomes, the claim additionally says
+whether zero coverage is a failure.
+-}
+claimCategory :: CoverageClaim -> ThreatModelCategory
+claimCategory = \case
+  ClaimedByDefault -> Claimed
+  ClaimedExplicitly -> Claimed
+  ExpectedToBeFound -> Expected
+  AcceptedByDesign -> Accepted
+
+{- | The coverage policy for a model that was never tested (no outcome was
+'TMPassed' or 'TMFailed'): 'Left' a failure message, or 'Right' the status
+lines to report instead.
+
+A claimed model promises that the contract resists the attack, an expected
+vulnerability that it does not; either promise is unchecked when the attack
+was never carried out, whatever the reason:
+
+* 'PreconditionNeverMet': the model does not apply to any generated
+  transaction. For an explicitly listed model that is a fault in the test
+  setup (the suite advertises coverage it cannot have), so it fails. The
+  default list means "run whatever applies", so there it is only reported.
+
+* 'AttackNeverCarriedOut': the precondition held somewhere, but every
+  attempt hit a Phase 1 invalidation or a rebalancing failure. Per
+  iteration these are environmental skips and never fail anything (a
+  harness limit is not a contract bug), but a model skipped this way on
+  EVERY iteration provides exactly as much coverage as one never run.
+
+* 'ModelErrored': the model never got as far as a precondition, so the
+  suite learned nothing at all.
+
+In the latter two an explicitly listed model and an expected vulnerability
+fail, naming the distinct reasons so the setup can be fixed; a default-list
+model gets a loud warning instead, since the user did not opt into it and
+failing would block them on a limitation they may not be able to lift. An
+'AcceptedByDesign' finding claims nothing and so never fails, but it is
+reported with the same reasons: they are what tells a stale entry apart from
+an attack that was blocked every time.
+
+Before this policy, the failure was guarded by "every skip was a
+precondition miss", so a single environmental skip silenced it and a model
+that never rebalanced stayed green forever.
+-}
+zeroCoverageVerdict :: CoverageClaim -> ThreatModelSummary -> [String] -> Either String [String]
+zeroCoverageVerdict claim summary reasons = case claim of
+  -- The default list means "run whatever applies", so a model that simply
+  -- does not apply to this contract is reported, not failed; the other kinds
+  -- still warn, since the user did not opt in and may not be able to lift a
+  -- harness limitation.
+  ClaimedByDefault
+    | PreconditionNeverMet <- kind -> Right [skippedMessage summary]
+    | otherwise ->
+        Right $
+          ("WARNING: zero attack coverage - " <> headline <> ".")
+            : withReasons "  The model provides no evidence about this contract"
+  -- Nothing was claimed, so nothing can be unchecked; the reasons still say
+  -- why the finding was never reproduced.
+  AcceptedByDesign -> Right $ skippedMessage summary : withReasons "  Nothing was tested"
+  ClaimedExplicitly ->
+    failure
+      (lead "Threat model never applied" "Threat model never tested")
+      ("Zero attack coverage means the claim in 'threatModels' is unchecked. " <> remedy <> ", or remove the model")
+  ExpectedToBeFound ->
+    failure
+      (lead "Expected vulnerability never exercised" "Expected vulnerability never tested")
+      ("Nothing confirms the vulnerability listed in 'expectedVulnerabilities'. " <> remedy <> ", or remove it")
+ where
+  kind = zeroCoverageKind summary
+  failure opening advice = Left $ unlines $ (opening <> ": " <> headline <> ".") : withReasons advice
+  -- A model that never applied is a different fault from one that applied and
+  -- could not be attacked, and the opening line is what a reader sees first.
+  lead neverApplied neverTested = case kind of
+    PreconditionNeverMet -> neverApplied
+    _ -> neverTested
+  counts = " on any of the " <> show (tmsTotal summary) <> " generated transactions (" <> skipCounts summary <> ")"
+  headline = case kind of
+    PreconditionNeverMet -> "the precondition was not met" <> counts
+    AttackNeverCarriedOut -> "the precondition held, but the attack could not be carried out" <> counts
+    ModelErrored -> "the model errored before it could attack anything" <> counts
+  remedy = case kind of
+    PreconditionNeverMet -> "Make the positive tests generate transactions it applies to"
+    AttackNeverCarriedOut -> "Make the positive tests produce transactions the attack can be built on"
+    ModelErrored -> "Fix the error so the model can run"
+  -- Never leave the sentence hanging on a colon: a Phase 1 rejection can
+  -- carry no error message at all.
+  withReasons line
+    | null reasons = [line <> "."]
+    | otherwise =
+        (line <> ":")
+          : let (shown, remaining) = splitAt 5 reasons
+             in map ("  - " <>) shown
+                  <> ["  ... and " <> show (length remaining) <> " more" | not (null remaining)]
+
+{- | Apply the zero-coverage policy and report it: a failure fails the test
+case, status lines are reported as steps. The single place that says what
+counts as a reason - the model's own errors, plus the ledger's verdicts on
+whatever it did manage to submit.
+-}
+reportZeroCoverage :: (String -> IO ()) -> CoverageClaim -> ThreatModelSummary -> [(ThreatModelOutcome, [String])] -> IO ()
+reportZeroCoverage step claim summary outcomeEntries =
+  either assertFailure (mapM_ step) $
+    zeroCoverageVerdict claim summary $
+      modelErrors (map fst outcomeEntries) <> distinctValidationErrors outcomeEntries
 
 summarizeThreatModelIteration :: ThreatModelOutcome -> [ThreatModelCheckEntry] -> (ThreatModelOutcome, [String])
 summarizeThreatModelIteration outcome entries =

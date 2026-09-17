@@ -287,7 +287,9 @@ Notes:
 - After populating, re-run `cabal test`. Each model becomes its own
   test case in the tasty tree (`Threat model: <name>`). Expect each
   to PASS (= attack was correctly rejected). A FAIL is a real
-  vulnerability finding.
+  vulnerability finding - unless its message says the model was
+  "never applied" or "never tested": that is zero attack coverage, a
+  test-setup problem (see §G, zero-coverage policy), not a contract bug.
 
 ## §E. `expectedVulnerabilities`
 
@@ -366,6 +368,8 @@ Each threat-model run produces one of five outcomes:
   The breakdown between precondition skips (`TMSkipped`) and Phase 1 skips (`TMSkippedPhase1`) is visible in both the CLI summary output and the streaming events (`ThreatModelSummary.skipped` vs `ThreatModelSummary.skipped_phase1`; `ThreatModelTraceOutcome` status `"skipped"` vs `"skipped_phase1"`).
 
   Each `ThreatModelTrace` in a `test_trace` event is one `Validate` call, and its `outcome` is the verdict of the *whole* threat model run repeated on every entry. To see how the ledger judged that particular mutated transaction, read the entry's `validation` field instead: `"valid"` (accepted), `"phase2_invalid"` (a script rejected it, with `errors`), `"phase1_invalid"` (ledger rules rejected it, with `errors`) or `"rebalance_failed"` (never validated, with `reason`). It is `null` when there is no verdict to report, normally the lightweight entry emitted when the model made no `Validate` call.
+
+  **Zero-coverage policy.** A model with no `TMPassed`/`TMFailed` outcome at all was never tested, and its test case says so. If the precondition never held, an explicitly listed `threatModels` entry or an `expectedVulnerabilities` entry FAILS ("never applied" / "never exercised"); the default list only reports SKIPPED. If the precondition held but every attempt was a Phase 1 invalidation or a rebalancing failure ("attack never carried out"), or if the model errored without ever attacking anything ("errored before it could attack anything"), an explicit entry and an expected vulnerability FAIL too, listing the distinct reasons, and a default-list model prints a loud WARNING. An `acceptedFindings` entry claims nothing, so it only reports - but with the same reasons, which is what distinguishes a stale entry from an attack that was blocked every time. A single tested transaction lifts the verdict; environmental skips never fail an individual iteration. With the direct runners (`runThreatModelM`), the equivalent situation ends in a bare QuickCheck "Gave up!": QuickCheck keeps nothing from discarded iterations, so run the model through the testing interface (or `runThreatModelCheckTraced`) to see the reasons.
 
   In the streaming events, `ThreatModelSummary.failed` counts `TMFailed` outcomes regardless of what they mean for the suite; `ThreatModelSummary.category` (`"claimed"`, `"expected"` or `"accepted"`, after the `ThreatModelsFor` list the model came from) says how to read it. Only a `"claimed"` model's `failed > 0` is a vulnerability; for `"expected"` it is the required outcome and for `"accepted"` a tolerated artifact. Each `ThreatModelTrace` carries the same value in its own `category` field, so a consumer of the `test_trace` stream can tell a vulnerability from an expected or accepted finding without waiting for the `test_done` event that carries the summary.
 

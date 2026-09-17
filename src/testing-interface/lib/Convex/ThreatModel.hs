@@ -71,6 +71,7 @@ module Convex.ThreatModel (
   runThreatModelCheck,
   runThreatModelCheckTraced,
   ThreatModelCheckEntry (..),
+  finalOutcome,
   assertThreatModel,
   getThreatModelName,
 
@@ -148,6 +149,7 @@ module Convex.ThreatModel (
 
 import Cardano.Api as X
 
+import Control.Applicative ((<|>))
 import Control.Lens ((%~), (&))
 import Control.Monad
 import Data.Containers.ListUtils (nubOrd)
@@ -483,10 +485,16 @@ runThreatModelM' quiet signingWallet = go False
             -- Surface the reason as a QuickCheck table (even in quiet mode),
             -- so partial coverage loss is visible: when some envs rebalance
             -- and others don't, the passing property's tables name the
-            -- failures. Note QuickCheck only prints tables from completed
-            -- tests, so a run where EVERY iteration is discarded still ends
-            -- in a bare "Gave up!" - use the check runners (which record
-            -- 'tmceRebalanceError') to diagnose that case.
+            -- failures. QuickCheck keeps nothing from a discarded test
+            -- though - no tables, no labels, no callbacks' output - and
+            -- offers no state that survives an iteration, so a run where
+            -- EVERY iteration is discarded ends in a bare "*** Gave up!".
+            -- Read that as "the attack could never be built on this
+            -- contract's transactions" and diagnose it with the check
+            -- runners, which record the reason per entry in
+            -- 'tmceRebalanceError', or through the testing interface, whose
+            -- per-model test case fails with the distinct reasons (see
+            -- 'Convex.TestingInterface.zeroCoverageVerdict').
             QC.tabulate "Rebalancing failed with reason" [err] <$> go b model envs
           Right rebalancedTx -> do
             -- Validate with full Phase 1 + Phase 2
@@ -530,17 +538,17 @@ runThreatModelCheck
   -> ThreatModel a
   -> [ThreatModelEnv]
   -> m (ThreatModelOutcome, Property -> Property)
-runThreatModelCheck signingWallet = go False False []
+runThreatModelCheck signingWallet = go False False Nothing []
  where
   composeMonitors = foldr (.) id
-  go b hadPhase1Error mons _model [] = pure (if b then TMPassed else if hadPhase1Error then TMSkippedPhase1 else TMSkipped, composeMonitors mons)
-  go b hadPhase1Error mons model (env : envs) = do
+  go b hadPhase1Error firstErr mons _model [] = pure (finalOutcome b hadPhase1Error firstErr, composeMonitors mons)
+  go b hadPhase1Error firstErr mons model (env : envs) = do
     -- Resolve wallet: use provided or detect from transaction
     let resolvedWallet = case signingWallet of
           SignWith w -> Right w
           AutoSign -> TM.detectSigningWallet (currentTx env)
     case resolvedWallet of
-      Left err -> pure (TMError err, composeMonitors mons) -- Continue to next env would lose the error, so return it
+      Left err -> go b hadPhase1Error (firstErr <|> Just err) (walletMonitor err : mons) model envs
       Right wallet -> checkInterp wallet mons model
    where
     checkInterp wallet mons' = \case
@@ -555,24 +563,24 @@ runThreatModelCheck signingWallet = go False False []
             -- environmental skip (like a Phase 1 invalidation), NOT a
             -- precondition miss: the model applied, the attack transaction
             -- just couldn't be built.
-            go b True mons' model envs
+            go b True firstErr mons' model envs
           Right rebalancedTx -> do
             (report, covData) <- validateTxM params (currentChainState env) rebalancedTx modifiedUtxo
             modifyMockChainState $ \s -> ((), s & coverageData %~ (<> covData))
             case validity report of
-              Phase1Invalid -> go b True mons' model envs
+              Phase1Invalid -> go b True firstErr mons' model envs
               _ -> checkInterp wallet mons' (k report)
       Generate gen _shr k -> do
         a <- liftIO $ QC.generate gen
         checkInterp wallet mons' (k a)
       GetCtx k ->
         checkInterp wallet mons' (k env)
-      Skip -> go b hadPhase1Error mons' model envs
+      Skip -> go b hadPhase1Error firstErr mons' model envs
       InPrecondition k -> checkInterp wallet mons' (k False)
       Fail err -> pure (TMFailed err, composeMonitors mons')
       Monitor m k -> checkInterp wallet (m : mons') k
       MonitorLocal m k -> checkInterp wallet (m : mons') k
-      Done{} -> go True hadPhase1Error mons' model envs
+      Done{} -> go True hadPhase1Error firstErr mons' model envs
       Named _n k -> checkInterp wallet mons' k
 
 -- | A single trace entry from a threat model check against one ThreatModelEnv.
@@ -607,17 +615,17 @@ runThreatModelCheckTraced
   -> ThreatModel a
   -> [ThreatModelEnv]
   -> m (ThreatModelOutcome, [ThreatModelCheckEntry], Property -> Property)
-runThreatModelCheckTraced signingWallet = go False False [] [] 0
+runThreatModelCheckTraced signingWallet = go False False Nothing [] [] 0
  where
   composeMonitors = foldr (.) id
-  go b hadPhase1Error acc mons _envIdx _model [] = pure (if b then TMPassed else if hadPhase1Error then TMSkippedPhase1 else TMSkipped, reverse acc, composeMonitors mons)
-  go b hadPhase1Error acc mons envIdx model (env : envs) = do
+  go b hadPhase1Error firstErr acc mons _envIdx _model [] = pure (finalOutcome b hadPhase1Error firstErr, reverse acc, composeMonitors mons)
+  go b hadPhase1Error firstErr acc mons envIdx model (env : envs) = do
     -- Resolve wallet: use provided or detect from transaction
     let resolvedWallet = case signingWallet of
           SignWith w -> Right w
           AutoSign -> TM.detectSigningWallet (currentTx env)
     case resolvedWallet of
-      Left err -> pure (TMError err, reverse acc, composeMonitors mons)
+      Left err -> go b hadPhase1Error (firstErr <|> Just err) acc (walletMonitor err : mons) (envIdx + 1) model envs
       Right wallet -> checkInterp wallet acc mons model
    where
     checkInterp wallet acc' mons' = \case
@@ -643,7 +651,7 @@ runThreatModelCheckTraced signingWallet = go False False [] [] 0
             -- environmental skip (like a Phase 1 invalidation), NOT a
             -- precondition miss: the model applied, the attack transaction
             -- just couldn't be built.
-            go b True (entry : acc') mons' (envIdx + 1) model envs
+            go b True firstErr (entry : acc') mons' (envIdx + 1) model envs
           Right rebalancedTx -> do
             (report, covData) <- validateTxM params (currentChainState env) rebalancedTx modifiedUtxo
             modifyMockChainState $ \s -> ((), s & coverageData %~ (<> covData))
@@ -659,20 +667,42 @@ runThreatModelCheckTraced signingWallet = go False False [] [] 0
                     , tmceRebalanceError = Nothing
                     }
             case validity report of
-              Phase1Invalid -> go b True (entry : acc') mons' (envIdx + 1) model envs
+              Phase1Invalid -> go b True firstErr (entry : acc') mons' (envIdx + 1) model envs
               _ -> checkInterp wallet (entry : acc') mons' (k report)
       Generate gen _shr k -> do
         a <- liftIO $ QC.generate gen
         checkInterp wallet acc' mons' (k a)
       GetCtx k ->
         checkInterp wallet acc' mons' (k env)
-      Skip -> go b hadPhase1Error acc' mons' (envIdx + 1) model envs
+      Skip -> go b hadPhase1Error firstErr acc' mons' (envIdx + 1) model envs
       InPrecondition k -> checkInterp wallet acc' mons' (k False)
       Fail err -> pure (TMFailed err, reverse acc', composeMonitors mons')
       Monitor m k -> checkInterp wallet acc' (m : mons') k
       MonitorLocal m k -> checkInterp wallet acc' (m : mons') k
-      Done{} -> go True hadPhase1Error acc' mons' (envIdx + 1) model envs
+      Done{} -> go True hadPhase1Error firstErr acc' mons' (envIdx + 1) model envs
       Named _n k -> checkInterp wallet acc' mons' k
+
+{- | The outcome of a whole model run, most informative first: a pass beats
+everything else, an environmental skip at least proves the precondition
+held, and an error only speaks when nothing else happened. Mirrors
+'Convex.TestingInterface.zeroCoverageKind', which ranks the same three when
+deciding whether zero coverage should fail a test case - so 'TMError' there
+can be trusted to mean "no attack was ever carried out".
+-}
+finalOutcome :: Bool -> Bool -> Maybe String -> ThreatModelOutcome
+finalOutcome b hadPhase1Error firstErr
+  | b = TMPassed
+  | hadPhase1Error = TMSkippedPhase1
+  | Just err <- firstErr = TMError err
+  | otherwise = TMSkipped
+
+{- | Surface a transaction the model could not sign. Skipping the env keeps
+the envs after it attackable and keeps an earlier pass intact, but the
+reason would then be invisible on a run that otherwise succeeds, so record
+it the way rebalancing failures are recorded.
+-}
+walletMonitor :: String -> (Property -> Property)
+walletMonitor err = QC.tabulate "Threat model could not detect a signing wallet" [err]
 
 {- | Check a precondition. If the argument threat model fails, the evaluation of the current
   transaction is skipped. If all transactions in an evaluation of `runThreatModel` are skipped
