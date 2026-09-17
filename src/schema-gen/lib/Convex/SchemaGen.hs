@@ -45,6 +45,7 @@ import Convex.TestingInterface.Trace (
   TestRunTrace (..),
   ThreatModelTrace (..),
   ThreatModelTraceOutcome (..),
+  ThreatModelValidation (..),
   Transition (..),
   TransitionResult (..),
   TxInputSummary (..),
@@ -106,6 +107,13 @@ nullableType t =
 null :: Referenced Schema
 null = Inline $ mempty & enum_ ?~ [Aeson.Null]
 
+{- | Schema of a 'Convex.Tasty.Streaming.TMSummary.ThreatModelCategory'. Inlined
+in both the run-level summary and the per-entry trace, which each say how their
+own @failed@\/@outcome@ is to be read.
+-}
+threatModelCategory :: Referenced Schema
+threatModelCategory = Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["claimed", "expected", "accepted"]
+
 -- ============================================================
 -- ToSchema instances for convex-tasty-streaming types
 -- ============================================================
@@ -162,6 +170,9 @@ instance ToSchema ThreatModelSummary where
           & properties
             .~ InsOrdHashMap.fromList
               [ ("name", Inline $ mempty & type_ ?~ OpenApiString)
+              , -- How to read "failed": a vulnerability (claimed), the required
+                -- outcome (expected), or a tolerated artifact (accepted).
+                ("category", threatModelCategory)
               , ("tested", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("total", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("passed", Inline $ mempty & type_ ?~ OpenApiInteger)
@@ -170,7 +181,7 @@ instance ToSchema ThreatModelSummary where
               , ("skipped_phase1", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("errors", Inline $ mempty & type_ ?~ OpenApiInteger)
               ]
-          & required .~ ["name", "tested", "total", "passed", "failed", "skipped", "skipped_phase1", "errors"]
+          & required .~ ["name", "category", "tested", "total", "passed", "failed", "skipped", "skipped_phase1", "errors"]
 
 instance ToSchema MonitoringLabelStat where
   declareNamedSchema _ =
@@ -611,6 +622,34 @@ instance ToSchema ThreatModelTraceOutcome where
           & oneOf ?~ [Inline passed, Inline failed, Inline skipped, Inline skippedPhase1, Inline err]
           & discriminator ?~ Discriminator "status" mempty
 
+instance ToSchema ThreatModelValidation where
+  declareNamedSchema _ = do
+    let stringArray :: Referenced Schema
+        stringArray = Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject (Inline $ mempty & type_ ?~ OpenApiString)
+        statusOnly :: Text -> Schema
+        statusOnly st =
+          mempty
+            & type_ ?~ OpenApiObject
+            & properties
+              .~ InsOrdHashMap.fromList
+                [("status", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ [Aeson.String st])]
+            & required .~ ["status"]
+        withErrors :: Text -> Schema
+        withErrors st =
+          statusOnly st
+            & properties %~ InsOrdHashMap.insert "errors" stringArray
+            & required .~ ["status", "errors"]
+        rebalanceFailed :: Schema
+        rebalanceFailed =
+          statusOnly "rebalance_failed"
+            & properties %~ InsOrdHashMap.insert "reason" (Inline $ mempty & type_ ?~ OpenApiString)
+            & required .~ ["status", "reason"]
+    pure $
+      NamedSchema (Just "ThreatModelValidation") $
+        mempty
+          & oneOf ?~ [Inline (statusOnly "valid"), Inline (withErrors "phase1_invalid"), Inline (withErrors "phase2_invalid"), Inline rebalanceFailed]
+          & discriminator ?~ Discriminator "status" mempty
+
 instance ToSchema TxMod where
   declareNamedSchema _ = do
     valueRef <- declareSchemaRef (Proxy @ValueSummary)
@@ -835,6 +874,7 @@ instance ToSchema ThreatModelTrace where
   declareNamedSchema _ = do
     txRef <- declareSchemaRef (Proxy @TxSummary)
     outcomeRef <- declareSchemaRef (Proxy @ThreatModelTraceOutcome)
+    validationRef <- declareSchemaRef (Proxy @ThreatModelValidation)
     txModRef <- declareSchemaRef (Proxy @TxMod)
     srcLocRanges <- declareSchemaRef (Proxy @SrcLocRanges)
     pure $
@@ -844,15 +884,19 @@ instance ToSchema ThreatModelTrace where
           & properties
             .~ InsOrdHashMap.fromList
               [ ("name", Inline $ mempty & type_ ?~ OpenApiString)
+              , -- How to read a "failed" outcome, repeated on every entry so a
+                -- reader of the trace stream needs no later test_done event.
+                ("category", threatModelCategory)
               , ("testId", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("targetTxIndex", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("modifications", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject txModRef)
               , ("originalTx", txRef)
               , ("modifiedTx", Inline $ mempty & anyOf ?~ [txRef, null])
+              , ("validation", Inline $ mempty & anyOf ?~ [validationRef, null])
               , ("outcome", outcomeRef)
               , ("covered", Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject srcLocRanges)
               ]
-          & required .~ ["name", "testId", "targetTxIndex", "modifications", "originalTx", "modifiedTx", "outcome", "covered"]
+          & required .~ ["name", "category", "testId", "targetTxIndex", "modifications", "originalTx", "modifiedTx", "validation", "outcome", "covered"]
 
 instance ToSchema IterationTrace where
   declareNamedSchema _ = do

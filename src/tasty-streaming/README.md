@@ -100,8 +100,9 @@ Recommended workflow:
 Behavior notes:
 
 - Unknown IDs fail fast with a helpful error.
-- For threat-model and expected-vulnerability tests, required prerequisites
-  (such as `Positive tests`) are included automatically.
+- For a per-model test (any test under `Threat models`, `Expected
+  vulnerabilities` or `Accepted findings`), required prerequisites (the
+  `Positive tests` that record its outcomes) are included automatically.
 - In JSON outputs (`--list-tests-json` and `--streaming-json`), `--test-id` runs preserve the 
   original test IDs (so they match the IDs discovered via `--list-tests-json`), which may be 
   sparse rather than reindexed.
@@ -132,9 +133,11 @@ Each line of output is a self-contained JSON object with an `event` field. Event
 
 | Event            | When                           | Fields                                                          |
 |------------------|--------------------------------|-----------------------------------------------------------------|
-| `suite_started`  | Before any test runs           | `tests[]` — array of `{id, name, path}`                        |
+| `suite_started`  | Before any test runs           | `tests[]` — array of `{id, name, path, srcLoc?}`; `coverageIndex`; optional `packageRoot` |
 | `test_started`   | A test begins executing        | `id`                                                            |
-| `test_done`      | A test completes               | `id`, `success`, `duration`, `description`, optional `failure`  |
+| `test_progress`  | A property test reports progress | `id`, `message`, `percent`                                    |
+| `test_trace`     | One iteration of a positive or negative test finished (unless `--no-trace`) | `id`, `category` (`"positive"`\|`"negative"`), `trace`, `covered` |
+| `test_done`      | A test completes               | `id`, `success`, `duration`, `description`; optional: `failure` (only when failed), `threat_model` (only per-model tests), `monitoring_stats` |
 | `suite_done`     | After all tests finish         | `passed`, `failed`, `duration`                                  |
 
 ### `suite_started`
@@ -185,11 +188,113 @@ Failure:
 }
 ```
 
+### Threat-model results on `test_done`
+
+Every per-model test case — the `Threat models`, `Expected vulnerabilities`
+and `Accepted findings` groups in the Tasty tree — adds a `threat_model`
+object to its `test_done` event:
+
+```json
+{
+  "event": "test_done",
+  "id": 32,
+  "success": true,
+  "duration": 0.000033,
+  "description": "Finding detected (92/100 tests, 0 precondition skipped, 0 phase 1/rebalance skipped, 0 errors) - accepted by design, not counted as a vulnerability",
+  "threat_model": {
+    "name": "Value Underpayment Attack",
+    "category": "accepted",
+    "total": 100,
+    "tested": 100,
+    "passed": 8,
+    "failed": 92,
+    "skipped": 0,
+    "skipped_phase1": 0,
+    "errors": 0
+  }
+}
+```
+
+- `total` — iterations the model was offered; `tested` — those it actually
+  applied to (`passed + failed`). The remainder is `skipped` (precondition not
+  met), `skipped_phase1` (the mutated transaction was rejected by Phase 1
+  ledger rules, or could not be rebalanced) and `errors`.
+- `failed` — iterations in which the attack's mutated transaction still
+  validated, i.e. the attack **succeeded**.
+- `category` — which `ThreatModelsFor` list the model came from, and therefore
+  how `failed` is to be read:
+
+| `category`   | Comes from                | `failed > 0` means                                          | Test case                                        |
+|--------------|---------------------------|-------------------------------------------------------------|--------------------------------------------------|
+| `"claimed"`  | `threatModels`            | a **vulnerability**: the contract is claimed to resist this | fails                                            |
+| `"expected"` | `expectedVulnerabilities` | the required outcome: a known vulnerability was reproduced  | passes; fails when `failed == 0` with `tested > 0` |
+| `"accepted"` | `acceptedFindings`        | a tolerated artifact of the design, not exploitable         | always passes                                    |
+
+Don't derive pass/fail from `failed` alone. A model that applied to nothing
+(`tested == 0`) is reported as vacuous: it fails the case when every iteration
+was a precondition miss — the suite advertises coverage it does not provide —
+and passes with a `SKIPPED` line when some iterations were environmental skips
+(`skipped_phase1`) or `errors`. Vacuity never fails an accepted finding, nor a
+`threatModels` list left at its default (that list means "run whatever
+applies"). Read `success` on the `test_done` event for the verdict; the counts
+explain it.
+
+**Filter on `category` before alerting**: report a vulnerability only when
+`category == "claimed" && failed > 0`. Alerting on `failed > 0` alone flags
+every expected vulnerability and every accepted finding as a fresh
+vulnerability.
+
+```bash
+cabal test convex-testing-interface-test \
+  --test-options="--streaming-json" 2>/dev/null \
+  | jq -R 'fromjson? // empty
+           | select(.event == "test_done") | .threat_model
+           | select(.category == "claimed" and .failed > 0)'
+```
+
 ### `suite_done`
 
 ```json
 {"event": "suite_done", "passed": 55, "failed": 0, "duration": 79.6}
 ```
+
+## Threat-model entries in `test_trace`
+
+A `test_trace` event carries one iteration of a positive or negative test. Its
+`trace.threatModels` array holds one entry per `Validate` call the threat
+models made during that iteration, so these arrive **while the run is still
+going** — long before the `test_done` event that carries the model's summary.
+
+```json
+{
+  "name": "Value Underpayment Attack",
+  "category": "accepted",
+  "testId": 32,
+  "targetTxIndex": 1,
+  "modifications": [],
+  "originalTx": {},
+  "modifiedTx": {},
+  "validation": {"status": "valid"},
+  "outcome": {"status": "failed", "reason": "..."},
+  "covered": []
+}
+```
+
+- `category` — the same `"claimed"` / `"expected"` / `"accepted"` value as on
+  the summary, repeated on every entry, and read the same way: only a
+  `"claimed"` entry whose `outcome.status` is `"failed"` is a vulnerability. A
+  live consumer needs it here because the entries stream before the
+  `test_done` event that would otherwise disambiguate them.
+- `outcome` — the verdict of the **whole** model run (`passed`, `failed`,
+  `skipped`, `skipped_phase1`, `error`), repeated on every entry of that run.
+- `validation` — how the ledger judged **this** entry's mutated transaction:
+  `valid` (it was accepted, so the attack got through), `phase2_invalid` (a
+  script rejected it, with `errors`), `phase1_invalid` (ledger rules rejected
+  it, with `errors`) or `rebalance_failed` (never validated, with `reason`).
+  It is `null` when there is no verdict to report, normally the single
+  lightweight entry emitted when the model made no `Validate` call at all.
+- `testId` — the id of the model's own `test_done` event, to correlate entries
+  with the summary.
 
 ## Redeemer data in `test_trace`
 
