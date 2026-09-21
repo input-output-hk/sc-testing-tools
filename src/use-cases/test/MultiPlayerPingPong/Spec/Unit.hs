@@ -11,9 +11,10 @@ import Convex.Class (MonadMockchain)
 import Convex.CoinSelection (BalanceTxError, ChangeOutputPosition (TrailingChange))
 import Convex.MockChain.CoinSelection (tryBalanceAndSubmit)
 import Convex.MockChain.Defaults qualified as Defaults
-import Convex.MockChain.Utils (mockchainFails, mockchainSucceeds)
+import Convex.MockChain.Utils (mockchainFailsWith, mockchainSucceedsWith)
 import Convex.PlutusLedger.V1 (transPubKeyHash)
 import Convex.Tasty.HUnit (testCase)
+import Convex.TestingInterface (Options (params))
 import Convex.Utils (failOnError)
 import Convex.Wallet (verificationKeyHash)
 import Convex.Wallet qualified as Wallet
@@ -30,8 +31,8 @@ import Test.Tasty (TestTree, testGroup)
 -- Unit tests for the MultiPlayerPingPong script
 -------------------------------------------------------------------------------
 
-unitTests :: TestTree
-unitTests =
+unitTests :: Options C.ConwayEra -> TestTree
+unitTests opts =
   testGroup
     "unit tests"
     [ -- HIT: Happy path
@@ -135,6 +136,9 @@ unitTests =
         "5-player: 15 hits (3 full rotations) yields roundCount = 3"
         (mockchainSucceeds $ failOnError fivePlayerThreeRotationsRoundCountTest)
     ]
+ where
+  mockchainSucceeds action = mockchainSucceedsWith (params opts) action
+  mockchainFails action handleError = mockchainFailsWith (params opts) action handleError
 
 -------------------------------------------------------------------------------
 -- First hit test

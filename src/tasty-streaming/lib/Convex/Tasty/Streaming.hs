@@ -305,8 +305,8 @@ streamingJsonReporter = TestReporter
                 Failure reason ->
                   TestFailure $
                     FailureInfo
-                      { fiReason = Text.pack $ showFailureReason reason
-                      , fiMessage = Text.pack (resultDescription result)
+                      { fiReason = withMaxTxSizeHint $ Text.pack $ showFailureReason reason
+                      , fiMessage = withMaxTxSizeHint $ Text.pack (resultDescription result)
                       }
           emit $
             TestDone

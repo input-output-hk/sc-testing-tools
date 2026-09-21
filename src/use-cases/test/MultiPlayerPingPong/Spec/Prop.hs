@@ -20,7 +20,7 @@ import Convex.MockChain.CoinSelection (tryBalanceAndSubmit)
 import Convex.MockChain.Defaults qualified as Defaults
 import Convex.PlutusLedger.V1 (transPubKeyHash)
 import Convex.Tasty.QuickCheck qualified as QC
-import Convex.TestingInterface (AddressLabeler (..), TestingInterface (..), ThreatModelsFor (..), mockWalletAddressLabeler, propRunActions)
+import Convex.TestingInterface (AddressLabeler (..), RunOptions, TestingInterface (..), ThreatModelsFor (..), mockWalletAddressLabeler, propRunActionsWithOptions)
 import Convex.ThreatModel.DatumBloat (datumListBloatAttack)
 import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
 import Convex.ThreatModel.InvalidDatumIndex (invalidDatumIndexAttack)
@@ -49,11 +49,11 @@ import Test.Tasty (TestTree, testGroup)
 -- Property-based tests for MultiPlayerPingPong validator
 -------------------------------------------------------------------------------
 
-propBasedTests :: TestTree
-propBasedTests =
+propBasedTests :: RunOptions -> TestTree
+propBasedTests opts =
   testGroup
     "property-based tests"
-    [ propRunActions @MultiPlayerPingPongModel "Property-based test multi-player ping-pong validator"
+    [ propRunActionsWithOptions @MultiPlayerPingPongModel "Property-based test multi-player ping-pong validator" opts
     ]
 
 -------------------------------------------------------------------------------

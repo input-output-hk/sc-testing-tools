@@ -289,6 +289,62 @@ available through the `withCoverage` helper and `getCovIdx` from `PlutusTx`. See
 [PingPongCoverageSpec.hs](src/testing-interface/test/PingPongCoverageSpec.hs)
 for a complete coverage example.
 
+#### Turning coverage on and off
+
+Coverage annotations are added by the PlutusTx plugin at compile time, so they
+are switched from the build command, not from a test flag:
+
+```bash
+# with coverage
+cabal test --ghc-options="-g -fplugin-opt PlutusTx.Plugin:coverage-all"
+
+# without coverage
+cabal test
+```
+
+`-g` supplies the source locations, `coverage-all` emits the annotations.
+Switching between the two rebuilds the instrumented packages, because
+`--ghc-options` is part of the build plan.
+
+**Do not put `coverage-all` in a cabal file or an `OPTIONS_GHC` pragma.** Both
+of them beat the command line, which takes the switch away from whoever runs
+the build:
+
+- A `{-# OPTIONS_GHC -fplugin-opt PlutusTx.Plugin:coverage-all #-}` pragma
+  wins because GHC applies file pragmas after command-line flags.
+- A `ghc-options:` entry in the `.cabal` file wins too — passing
+  `--ghc-options="-fplugin-opt PlutusTx.Plugin:no-coverage-all"` alongside it
+  does *not* turn coverage off.
+
+The test suites in this repository therefore leave coverage out of their
+`ghc-options` entirely.
+
+One more thing that is easy to get wrong: **the option applies to the module
+that calls `PlutusTx.compile`**, not to the module that defines the validator.
+The plugin only reads its options where the splice runs, so `coverage-all` on
+the validator module alone does nothing. The resulting annotations still carry
+the validator's own source locations, because `-g` applies everywhere.
+
+#### Coverage and transaction size
+
+Coverage annotations make scripts substantially larger — the
+`MultiPlayerPingPong` validator goes from about 4.8 kB to 59 kB, which no
+longer fits the default 16384 byte max transaction size. Raise the limit with
+`modifyTransactionLimits` when coverage is on. Since the coverage index is
+empty unless the plugin instrumented the script, a suite can detect this
+itself rather than being told:
+
+```haskell
+mockchainOptions :: Options C.ConwayEra
+mockchainOptions
+  | getCovIdx myValidatorCompiled /= mempty = modifyTransactionLimits defaultOptions 80_000
+  | otherwise = defaultOptions
+```
+
+That keeps one binary correct under both build commands. See
+[MultiPlayerPingPong/Spec/Spec.hs](src/use-cases/test/MultiPlayerPingPong/Spec/Spec.hs)
+for the full version.
+
 ### Using Aiken Contracts
 
 Aiken contracts are loaded from their compiled blueprint JSON. Since Aiken and

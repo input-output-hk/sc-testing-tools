@@ -8,6 +8,7 @@ module Convex.Tasty.Streaming.Types (
   MonitoringClassStat (..),
   MonitoringTableStat (..),
   MonitoringTableEntry (..),
+  withMaxTxSizeHint,
 ) where
 
 import Convex.Tasty.Streaming.SrcLoc (SrcLocRange, groupRanges, ungroupRanges)
@@ -15,7 +16,29 @@ import Convex.Tasty.Streaming.TMSummary (ThreatModelSummary)
 import Data.Aeson (FromJSON (..), ToJSON (..), Value, object, withObject, (.:), (.:?), (.=))
 import Data.Aeson.Types (Pair)
 import Data.Text (Text)
+import Data.Text qualified as Text
 import GHC.Generics (Generic)
+
+{- | Append a hint to a rendered failure that is a max transaction size
+rejection.
+
+Coverage annotations (@-fplugin-opt PlutusTx.Plugin:coverage-all@) inflate a
+compiled script several-fold, which is enough to push transactions over the
+16384 byte default. The ledger error says nothing about coverage, so the
+failure is baffling unless you already know to suspect it. The hint is worded
+conditionally because the transaction is rejected before it runs, so there is
+no script log here to confirm that coverage is what did it.
+-}
+withMaxTxSizeHint :: Text -> Text
+withMaxTxSizeHint msg
+  | "MaxTxSizeUTxO" `Text.isInfixOf` msg = msg <> hint
+  | otherwise = msg
+ where
+  hint =
+    " | hint: scripts compiled with coverage annotations"
+      <> " (-fplugin-opt PlutusTx.Plugin:coverage-all) are several times larger"
+      <> " and can overflow the max tx size; raise it with"
+      <> " 'modifyTransactionLimits' when building with coverage"
 
 -- | Information about a single test in the tree
 data TestInfo = TestInfo
