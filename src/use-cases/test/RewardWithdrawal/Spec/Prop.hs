@@ -7,18 +7,6 @@ module RewardWithdrawal.Spec.Prop (
   propBasedTests,
 ) where
 
-import Cardano.Api qualified as C
-import Cardano.Api.Experimental.Certificate qualified as Ex
-import Cardano.Ledger.Core qualified as Ledger
-import Control.Lens ((^.))
-import Control.Monad.Except (MonadError)
-import Convex.BuildTx (execBuildTx, execBuildTxT)
-import Convex.BuildTx qualified as BuildTx
-import Convex.Class (MonadMockchain, queryProtocolParameters)
-import Convex.CoinSelection (BalanceTxError, ChangeOutputPosition (TrailingChange))
-import Convex.MockChain.CoinSelection (tryBalanceAndSubmit)
-import Convex.MockChain.Defaults qualified as Defaults
-import Convex.PlutusLedger.V1 (transPubKeyHash)
 import Convex.TestingInterface (RunOptions, TestingInterface (..), ThreatModelsFor (..), propRunActionsWithOptions)
 import Convex.TestingInterface.Trace.RedeemerTag (autoRedeemerTag)
 import Convex.ThreatModel.InvalidDatumIndex (invalidDatumIndexAttack)
@@ -27,13 +15,10 @@ import Convex.ThreatModel.LargeValue (largeValueAttack)
 import Convex.ThreatModel.NegativeInteger (negativeIntegerAttack)
 import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
 import Convex.ThreatModel.ValueUnderpayment (valueUnderpaymentAttack)
-import Convex.Wallet (Wallet, verificationKeyHash)
-import Convex.Wallet.MockWallet qualified as MockWallet
 import Data.Aeson (ToJSON (..))
 import Data.Proxy (Proxy (..))
 import GHC.Generics (Generic)
-import RewardWithdrawal.Scripts (rewardWithdrawalValidatorScript)
-import RewardWithdrawal.Validator (LockDatum (..), RewardWithdrawalParams (..))
+import RewardWithdrawal.Spec.Common (fixedOwner, registerCredential, withdrawZero)
 import Test.QuickCheck (choose, frequency)
 import Test.Tasty (TestTree, testGroup)
 
@@ -59,30 +44,17 @@ propBasedTests runOpts =
   - The stake credential's script is registered exactly once, then triggered
     any number of times by zero-lovelace withdrawals (the "withdraw zero
     trick"), either on their own or while locking ADA at the script's own
-    payment address under a 'LockDatum' the script vets.
+    payment address under a @LockDatum@ the script vets.
 -}
-data RewardWithdrawalModel = RewardWithdrawalModel
+newtype RewardWithdrawalModel = RewardWithdrawalModel
   { _registered :: Bool
-  -- ^ Whether the stake credential has been registered yet
-  , _owner :: Wallet
-  -- ^ The party authorised to trigger the script
-  , _params :: RewardWithdrawalParams
-  -- ^ Cached contract parameters
-  , _scriptHash :: C.ScriptHash
-  -- ^ Cached script hash
+  {- ^ Whether the stake credential has been registered yet. The owner,
+  parameters and script hash are fixed for the whole run and live in
+  'RewardWithdrawal.Spec.Common', so this is the only state the model
+  tracks.
+  -}
   }
   deriving (Show, Eq, Generic)
-
-fixedOwner :: Wallet
-fixedOwner = MockWallet.w1
-
-fixedParams :: RewardWithdrawalParams
-fixedParams = RewardWithdrawalParams{rwpOwner = transPubKeyHash (verificationKeyHash fixedOwner)}
-
-fixedScriptHash :: C.ScriptHash
-fixedScriptHash =
-  let validator = C.PlutusScript C.plutusScriptVersion (rewardWithdrawalValidatorScript fixedParams)
-   in C.hashScript validator
 
 instance ToJSON RewardWithdrawalModel where
   toJSON = toJSON . show
@@ -98,14 +70,7 @@ instance TestingInterface RewardWithdrawalModel where
       Lock Integer
     deriving (Show, Eq)
 
-  initialize =
-    pure
-      RewardWithdrawalModel
-        { _registered = False
-        , _owner = fixedOwner
-        , _params = fixedParams
-        , _scriptHash = fixedScriptHash
-        }
+  initialize = pure RewardWithdrawalModel{_registered = False}
 
   arbitraryAction _ =
     frequency
@@ -119,13 +84,16 @@ instance TestingInterface RewardWithdrawalModel where
   precondition vm (Lock amount) = _registered vm && amount > 0
 
   perform vm Register = do
-    registerRewardWithdrawalPBT vm
+    registerCredential
     pure vm{_registered = True}
   perform vm WithdrawZero = do
-    withdrawZeroPBT vm Nothing
+    withdrawZero fixedOwner Nothing
     pure vm
   perform vm (Lock amount) = do
-    withdrawZeroPBT vm (Just amount)
+    -- The datum claims exactly what the output holds, so the validator's
+    -- amount check passes and the threat models below have a valid
+    -- transaction to attack.
+    withdrawZero fixedOwner (Just (amount, amount))
     pure vm
 
   validate _vm = pure True
@@ -162,56 +130,3 @@ instance ThreatModelsFor RewardWithdrawalModel where
   -- ever consumes a lock output on-chain, and the only party paying for the
   -- bloated datum's min-UTxO is the locker themselves.
   acceptedFindings = [largeDataAttack]
-
--------------------------------------------------------------------------------
--- Mockchain transactions
--------------------------------------------------------------------------------
-
-{- | Register the model's script-guarded stake credential. On Conway, a
-script-credentialed registration certificate must itself carry a script
-witness, or the ledger rejects it with @MissingScriptWitnessesUTXOW@.
--}
-registerRewardWithdrawalPBT
-  :: (MonadMockchain C.ConwayEra m, MonadFail m, MonadError (BalanceTxError C.ConwayEra) m)
-  => RewardWithdrawalModel
-  -> m ()
-registerRewardWithdrawalPBT RewardWithdrawalModel{_owner = owner, _params = params, _scriptHash = scriptHash} = do
-  let ownerPkh = verificationKeyHash owner
-      script = rewardWithdrawalValidatorScript params
-      stakeCred = C.StakeCredentialByScript scriptHash
-  pp <- queryProtocolParameters
-  let cert = Ex.makeStakeAddressRegistrationCertificate stakeCred (C.unLedgerProtocolParameters pp ^. Ledger.ppKeyDepositL)
-      registerTx =
-        execBuildTx $ do
-          BuildTx.addRequiredSignature ownerPkh
-          BuildTx.addStakeScriptWitness cert stakeCred script ()
-  _ <- tryBalanceAndSubmit mempty owner registerTx TrailingChange []
-  pure ()
-
-{- | Trigger the model's registered stake credential script via a zero-lovelace
-withdrawal, optionally locking the given lovelace at the script's own payment
-address under a 'LockDatum' naming the owner.
--}
-withdrawZeroPBT
-  :: (MonadMockchain C.ConwayEra m, MonadFail m, MonadError (BalanceTxError C.ConwayEra) m)
-  => RewardWithdrawalModel
-  -> Maybe Integer
-  -> m ()
-withdrawZeroPBT RewardWithdrawalModel{_owner = owner, _params = params, _scriptHash = scriptHash} lockAmount = do
-  let ownerPkh = verificationKeyHash owner
-      script = rewardWithdrawalValidatorScript params
-  withdrawTxBody <-
-    execBuildTxT $ do
-      BuildTx.addRequiredSignature ownerPkh
-      BuildTx.addScriptWithdrawal scriptHash 0 (BuildTx.buildScriptWitness script C.NoScriptDatumForStake ())
-      case lockAmount of
-        Nothing -> pure ()
-        Just amount ->
-          BuildTx.payToScriptInlineDatum
-            Defaults.networkId
-            scriptHash
-            LockDatum{ldOwner = transPubKeyHash ownerPkh, ldAmount = amount}
-            C.NoStakeAddress
-            (C.lovelaceToValue (C.Coin amount))
-  _ <- tryBalanceAndSubmit mempty owner withdrawTxBody TrailingChange []
-  pure ()

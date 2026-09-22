@@ -42,36 +42,7 @@ code as of `feat/improvements`.
   (the default list excludes same-named models), but key by (group, name) or
   reject duplicate names at setup.
 
-- [ ] **Consider `-Werror=missing-fields`** (cabal `lang` stanza). Adding a
-  field to `ThreatModelEnv` compiled every record construction into a runtime
-  bottom with only a warning; this repo builds cleanly today, so promoting
-  the warning is cheap insurance.
-
 ## Cleanups
-
-- [ ] **RewardWithdrawal spec duplication** (`src/use-cases/test/
-  RewardWithdrawal/Spec/{Unit,Prop}.hs`). The register/withdraw-zero tx
-  builders exist in ~5 copies across the two files; the model recompiles the
-  validator via UPLC parameter application on every `perform`; three of the
-  four model fields are constants. Share the builders (a `Spec.Common`
-  module), add a top-level applied-script CAF, shrink the model to the one
-  real state bit (`_registered`).
-
-- [ ] **Dead exports**: `adjustChangeOutputM` and `getTxFeeCoin`
-  (`ThreatModel/Cardano/Api.hs`) have no callers — their twin
-  `rebalanceAndSignM` was already removed for the same reason.
-
-- [ ] **`mkWithdrawalSummary` duplicates `mkInputSummary`'s four-field
-  redeemer projection** (`Trace/TxSummary.hs`).
-
-- [ ] **Deduplicate the outcome-status schema blocks**
-  (`src/schema-gen/lib/Convex/SchemaGen.hs`). The `skippedPhase1` block is a
-  verbatim copy of the adjacent `skipped` block differing only in the enum
-  string, and `failed`/`err` follow the same status-plus-companion-field
-  template; each new `ThreatModelTraceOutcome` variant means another ~9-line
-  copy that can silently drift from the JSON encoder. Extract a local helper
-  (e.g. `statusVariant :: Text -> [Text] -> Schema`), which also serves the
-  identically patterned `IterationStatus` instance above it.
 
 ## Deferred by decision (revisit conditions, not bugs)
 

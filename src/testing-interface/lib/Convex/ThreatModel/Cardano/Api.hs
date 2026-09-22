@@ -74,11 +74,9 @@ module Convex.ThreatModel.Cardano.Api (
   recalculateScriptIntegrityHash,
   recalculateTotalCollateral,
   getScriptLanguage,
-  getTxFeeCoin,
   setTxFeeCoin,
   setTxOutputsList,
   mkSizedShelleyTxOut,
-  adjustChangeOutputM,
   adjustChangeOutput,
   replaceAt,
 
@@ -1299,10 +1297,6 @@ getScriptLanguage script = case script of
   Ledger.NativeScript{} -> Nothing
   Ledger.PlutusScript ps -> Just $ Ledger.plutusScriptLanguage ps
 
--- | Get the fee from a transaction
-getTxFeeCoin :: Tx Era -> Coin
-getTxFeeCoin (Tx (ShelleyTxBody _ body _ _ _ _) _) = Conway.ctbTxfee body
-
 -- | Set the fee in a transaction
 setTxFeeCoin :: Coin -> Tx Era -> Tx Era
 setTxFeeCoin fee (Tx (ShelleyTxBody era body scripts scriptData auxData validity) wits) =
@@ -1330,22 +1324,6 @@ further adjustment of the change output, so applying it to the change output
 itself would just cancel back out. So the minimum-UTxO requirement is checked
 right here, on the one output this function is the last thing to touch.
 -}
-adjustChangeOutputM
-  :: (MonadFail m)
-  => LedgerProtocolParameters Era
-  -> AddressInEra Era
-  -- ^ Wallet address to find change output
-  -> Value
-  -- ^ Value delta to apply to the change output
-  -> [TxOut CtxTx Era]
-  -- ^ Transaction outputs
-  -> m [TxOut CtxTx Era]
-adjustChangeOutputM pparams walletAddr delta outputs =
-  case adjustChangeOutput pparams walletAddr delta outputs of
-    Left err -> fail err
-    Right result -> pure result
-
--- | Like 'adjustChangeOutput' but returns Either instead of using MonadFail.
 adjustChangeOutput
   :: LedgerProtocolParameters Era
   -> AddressInEra Era

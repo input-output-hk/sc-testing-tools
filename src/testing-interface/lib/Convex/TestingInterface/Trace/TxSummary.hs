@@ -27,6 +27,7 @@ import Convex.TestingInterface.Trace (
   TxWithdrawalSummary (..),
   ValueSummary (..),
  )
+import Data.Aeson (Value)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.Map.Strict (Map)
@@ -118,6 +119,31 @@ summarizeTxBody tagger labeler body (C.UTxO utxoMap) =
         , txsWithdrawals = withdrawals
         }
 
+{- | The four redeemer fields that 'mkInputSummary' and 'mkWithdrawalSummary'
+project identically: Tier 1 hex CBOR and constructor index, plus the Tier 2
+kind/payload the 'RedeemerTagger' derives from the parsed Plutus 'Data'.
+All four are @Nothing@ when the entry carries no redeemer.
+-}
+data RedeemerFields = RedeemerFields
+  { rfRaw :: !(Maybe Text)
+  , rfConstr :: !(Maybe Integer)
+  , rfKind :: !(Maybe Text)
+  , rfPayload :: !(Maybe Value)
+  }
+
+redeemerFields :: RedeemerTagger -> Maybe C.ScriptData -> RedeemerFields
+redeemerFields tagger mRedeemer =
+  let mTag = do
+        sd <- mRedeemer
+        let d = C.toPlutusData sd
+        applyRedeemerTagger tagger d
+   in RedeemerFields
+        { rfRaw = redeemerToHex <$> mRedeemer
+        , rfConstr = mRedeemer >>= redeemerConstrIx
+        , rfKind = rtKind <$> mTag
+        , rfPayload = mTag >>= rtPayload
+        }
+
 {- | Build an input summary from its (0-based) position in the tx inputs, the
 resolved 'C.TxOut', and the optional spend redeemer's 'C.ScriptData'.
 The 'RedeemerTagger' is applied to the parsed Plutus 'Data' of the
@@ -126,20 +152,17 @@ applied to the address's credential hash to produce 'tisAddressLabel'.
 -}
 mkInputSummary :: RedeemerTagger -> AddressLabeler -> Word32 -> C.TxIn -> C.TxOut C.CtxUTxO C.ConwayEra -> Maybe C.ScriptData -> TxInputSummary
 mkInputSummary tagger labeler _ix txIn (C.TxOut addr val _datum _refScript) mRedeemer =
-  let mTag = do
-        sd <- mRedeemer
-        let d = C.toPlutusData sd
-        applyRedeemerTagger tagger d
+  let rf = redeemerFields tagger mRedeemer
    in TxInputSummary
         { tisUtxo = renderTxIn txIn
         , tisAddress = renderAddressInEra addr
         , tisAddressType = addressType addr
         , tisAddressLabel = addressCredentialHashHex addr >>= applyAddressLabeler labeler
         , tisValue = toValueSummary (C.txOutValueToValue val)
-        , tisRedeemerRaw = redeemerToHex <$> mRedeemer
-        , tisRedeemerConstr = mRedeemer >>= redeemerConstrIx
-        , tisRedeemerKind = rtKind <$> mTag
-        , tisRedeemerPayload = mTag >>= rtPayload
+        , tisRedeemerRaw = rfRaw rf
+        , tisRedeemerConstr = rfConstr rf
+        , tisRedeemerKind = rfKind rf
+        , tisRedeemerPayload = rfPayload rf
         }
 
 {- | Build a withdrawal summary from its (0-based) position in the sorted
@@ -156,20 +179,16 @@ mkWithdrawalSummary
   -> (C.StakeAddress, C.Coin, C.BuildTxWith C.ViewTx (C.Witness C.WitCtxStake C.ConwayEra))
   -> TxWithdrawalSummary
 mkWithdrawalSummary tagger labeler redeemers ix (stakeAddr, coin, _witness) =
-  let mRedeemer = Map.lookup ix redeemers
-      mTag = do
-        sd <- mRedeemer
-        let d = C.toPlutusData sd
-        applyRedeemerTagger tagger d
+  let rf = redeemerFields tagger (Map.lookup ix redeemers)
    in TxWithdrawalSummary
         { twsStakeAddress = C.serialiseAddress stakeAddr
         , twsAddressType = stakeAddressType stakeAddr
         , twsAddressLabel = applyAddressLabeler labeler (stakeCredentialHashHex stakeAddr)
         , twsAmount = C.unCoin coin
-        , twsRedeemerRaw = redeemerToHex <$> mRedeemer
-        , twsRedeemerConstr = mRedeemer >>= redeemerConstrIx
-        , twsRedeemerKind = rtKind <$> mTag
-        , twsRedeemerPayload = mTag >>= rtPayload
+        , twsRedeemerRaw = rfRaw rf
+        , twsRedeemerConstr = rfConstr rf
+        , twsRedeemerKind = rfKind rf
+        , twsRedeemerPayload = rfPayload rf
         }
 
 {- | Build an output summary from a TxId, an index, and a TxOut. The
