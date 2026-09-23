@@ -12,28 +12,28 @@
         "label": "testing-interface tests",
         "source": "parsed",
         "file": "src/testing-interface/test/Spec.hs",
-        "line": 65,
+        "line": 66,
         "children": [
           {
             "kind": "group",
             "label": "ha scripts",
             "source": "parsed",
             "file": "src/testing-interface/test/Spec.hs",
-            "line": 67,
+            "line": 68,
             "children": [
               {
                 "kind": "test",
                 "label": "spend an output succeeds",
                 "source": "parsed",
                 "file": "src/testing-interface/test/Spec.hs",
-                "line": 69
+                "line": 70
               },
               {
                 "kind": "test",
                 "label": "spend an output fails",
                 "source": "parsed",
                 "file": "src/testing-interface/test/Spec.hs",
-                "line": 70
+                "line": 71
               },
               {
                 "kind": "group",
@@ -959,6 +959,138 @@
                     "source": "parsed",
                     "file": "src/testing-interface/test/RunningScriptsSpec.hs",
                     "line": 125
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "kind": "group",
+            "label": "large data attack",
+            "source": "parsed",
+            "file": "src/testing-interface/test/LargeDataSpec.hs",
+            "line": 47,
+            "children": [
+              {
+                "kind": "group",
+                "label": "bloatData",
+                "source": "parsed",
+                "file": "src/testing-interface/test/LargeDataSpec.hs",
+                "line": 49,
+                "children": [
+                  {
+                    "kind": "test",
+                    "label": "appends fields to a Constr datum",
+                    "source": "parsed",
+                    "file": "src/testing-interface/test/LargeDataSpec.hs",
+                    "line": 54
+                  },
+                  {
+                    "kind": "test",
+                    "label": "appends elements to a List datum",
+                    "source": "parsed",
+                    "file": "src/testing-interface/test/LargeDataSpec.hs",
+                    "line": 61
+                  },
+                  {
+                    "kind": "test",
+                    "label": "mirrors the element type of a List datum",
+                    "source": "parsed",
+                    "file": "src/testing-interface/test/LargeDataSpec.hs",
+                    "line": 68
+                  },
+                  {
+                    "kind": "test",
+                    "label": "falls back to a number for an empty List datum",
+                    "source": "parsed",
+                    "file": "src/testing-interface/test/LargeDataSpec.hs",
+                    "line": 71
+                  },
+                  {
+                    "kind": "test",
+                    "label": "appends entries to a Map datum under fresh number keys",
+                    "source": "parsed",
+                    "file": "src/testing-interface/test/LargeDataSpec.hs",
+                    "line": 76
+                  },
+                  {
+                    "kind": "test",
+                    "label": "appends entries to a Map datum under fresh bytes keys",
+                    "source": "parsed",
+                    "file": "src/testing-interface/test/LargeDataSpec.hs",
+                    "line": 83
+                  },
+                  {
+                    "kind": "test",
+                    "label": "appends entries to a Map datum under fresh Constr keys",
+                    "source": "parsed",
+                    "file": "src/testing-interface/test/LargeDataSpec.hs",
+                    "line": 91
+                  },
+                  {
+                    "kind": "test",
+                    "label": "leaves a Map datum with unperturbable keys unchanged",
+                    "source": "parsed",
+                    "file": "src/testing-interface/test/LargeDataSpec.hs",
+                    "line": 103
+                  },
+                  {
+                    "kind": "test",
+                    "label": "does not scale junk size with the mirrored member",
+                    "source": "parsed",
+                    "file": "src/testing-interface/test/LargeDataSpec.hs",
+                    "line": 110
+                  },
+                  {
+                    "kind": "test",
+                    "label": "mirrors the smallest member of a List datum",
+                    "source": "parsed",
+                    "file": "src/testing-interface/test/LargeDataSpec.hs",
+                    "line": 118
+                  },
+                  {
+                    "kind": "test",
+                    "label": "leaves a Number datum unchanged",
+                    "source": "parsed",
+                    "file": "src/testing-interface/test/LargeDataSpec.hs",
+                    "line": 125
+                  },
+                  {
+                    "kind": "test",
+                    "label": "leaves a Bytes datum unchanged",
+                    "source": "parsed",
+                    "file": "src/testing-interface/test/LargeDataSpec.hs",
+                    "line": 127
+                  }
+                ]
+              },
+              {
+                "kind": "group",
+                "label": "against a script output whose inline datum is",
+                "source": "parsed",
+                "file": "src/testing-interface/test/LargeDataSpec.hs",
+                "line": 130,
+                "children": [
+                  {
+                    "kind": "test",
+                    "label": "list-encoded: the bloated datum is validated",
+                    "source": "parsed",
+                    "file": "src/testing-interface/test/LargeDataSpec.hs",
+                    "line": 136
+                  },
+                  {
+                    "kind": "test",
+                    "label": "a map: the bloated datum is validated",
+                    "source": "parsed",
+                    "file": "src/testing-interface/test/LargeDataSpec.hs",
+                    "line": 145
+                  },
+                  {
+                    "kind": "test",
+                    "label": "a bare integer: the attack is skipped, not reported",
+                    "source": "parsed",
+                    "file": "src/testing-interface/test/LargeDataSpec.hs",
+                    "line": 159
                   }
                 ]
               }
@@ -2848,7 +2980,7 @@
         ]
       },
       "entryBinding": "main",
-      "crossFileFollows": 21
+      "crossFileFollows": 22
     }
   ]
 }

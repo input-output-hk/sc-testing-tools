@@ -1,0 +1,108 @@
+name: pbt-cli
+
+# Builds and tests pbt-cli through its own quarantined project file, on both
+# platform families it ships for. This is fast (a handful of Hackage
+# dependencies, no Cardano stack) and it is what guards the release build: if
+# this job is green, the release matrix will build.
+#
+# scripts/** and the cabal files are in the filter because pbt-cli's tests
+# reach outside its own package: ReferenceSpec runs
+# scripts/list-test-suites/list-test-suites.sh as the oracle for the discovery
+# port, and discovery output is derived from the repository's .cabal /
+# cabal.project layout. Without them, editing the reference script or adding a
+# package would only surface in the slow ci-linux job.
+#
+# The two path lists are duplicated on purpose: GitHub Actions does not support
+# YAML anchors, so they cannot be shared with &anchor / *alias. Keep them in
+# sync by hand.
+#
+# `push` is limited to main: a PR branch push would otherwise fire both the
+# push and pull_request events, and their concurrency groups differ
+# (refs/heads/x vs refs/pull/N/merge), so neither cancels the other and every
+# push would cost two runs.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/pbt-cli/**"
+      - "src/tasty-streaming/**"
+      - "scripts/**"
+      - "cabal.project"
+      - "cabal.project.pbt-cli"
+      - "**/*.cabal"
+      - ".github/workflows/pbt-cli.yaml"
+  pull_request:
+    paths:
+      - "src/pbt-cli/**"
+      - "src/tasty-streaming/**"
+      - "scripts/**"
+      - "cabal.project"
+      - "cabal.project.pbt-cli"
+      - "**/*.cabal"
+      - ".github/workflows/pbt-cli.yaml"
+
+# This workflow only checks out the repository and builds it -- it creates no
+# release, posts no comment, touches no branch -- so the token it is handed
+# needs nothing beyond read access to the contents. Declaring that explicitly
+# stops the job inheriting whatever the repository default happens to be.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.ref }}-pbt-cli
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: linux-x64 }
+          - { os: macos-latest, target: darwin-arm64 }
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: haskell-actions/setup@v2
+        id: setup-haskell
+        with:
+          ghc-version: "9.6.6"
+          cabal-version: "3.10.3.0"
+          cabal-update: true
+
+      - name: Generate build plan (for the cache key)
+        run: cabal build --project-file=cabal.project.pbt-cli --dry-run all
+
+      - name: Cache the cabal store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.setup-haskell.outputs.cabal-store }}
+          key: ${{ runner.os }}-${{ matrix.target }}-pbt-cli-ci-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-pbt-cli-ci-
+
+      - name: Build
+        run: cabal build --project-file=cabal.project.pbt-cli --ghc-options=-Werror all
+
+      - name: Test
+        run: cabal test --project-file=cabal.project.pbt-cli --ghc-options=-Werror all
+
+      # Exercises the binary against this repository: discovery must find the
+      # suites, and the CLI must agree with itself about which are compatible.
+      - name: Smoke-test the binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          PBT=$(cabal list-bin --project-file=cabal.project.pbt-cli exe:pbt-cli)
+          "$PBT" --version
+          "$PBT" doctor
+          "$PBT" suites --table
+          "$PBT" run --dry-run
+          "$PBT" run --stream --compatible-only --dry-run
+          "$PBT" run --json --compatible-only --dry-run
+          # Discovery must see the repository's own suites; an empty result
+          # exits 1, which would otherwise pass unnoticed.
+          "$PBT" suites --compatible-only
