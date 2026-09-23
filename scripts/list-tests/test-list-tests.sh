@@ -176,7 +176,7 @@ b4_bad="$(printf '%s' "$ALL_OUT" | "$JQ" -r '[.. | objects | select(has("source"
 assert_eq "B4 every node has kind/label/source" "0" "$b4_bad"
 
 # B9: when present, role is one of the enum values.
-b9_bad="$(printf '%s' "$ALL_OUT" | "$JQ" -r '[.. | objects | select(has("role")) | select((.role|IN("positive","negative","threat-models-group","expected-vulnerabilities-group","threat-model"))|not)] | length')"
+b9_bad="$(printf '%s' "$ALL_OUT" | "$JQ" -r '[.. | objects | select(has("role")) | select((.role|IN("positive","negative","threat-models-group","surveyed-threat-models-group","expected-vulnerabilities-group","accepted-findings-group","not-applicable-group","threat-model"))|not)] | length')"
 assert_eq "B9 every node.role in enum" "0" "$b9_bad"
 
 # B10: when present, testingInterface is boolean true.
@@ -286,11 +286,13 @@ assert_json "D vesting TI top NOT pendingExpansion" "$V" "$TI.pendingExpansion" 
 assert_json "D vesting TI top label"                "$V" "$TI.label" "Property-based test vesting script"
 assert_json "D vesting TI top model"                "$V" "$TI.model" "VestingModel"
 
-# R4 ORDER INVARIANT: the synthesized group's direct children must be, in order:
-# Positive tests -> Negative tests -> Threat models -> Expected vulnerabilities.
+# R4 ORDER INVARIANT: the synthesized group's direct children must be, in the
+# order the runner builds the slots: Positive -> Negative -> Threat models ->
+# Surveyed -> Expected vulnerabilities -> Accepted findings -> Not applicable
+# (each present only when its slot is non-empty).
 ti_order="$(printf '%s' "$V" | "$JQ" -r "$TI.children | map(.label) | join(\" | \")")"
 assert_eq "D vesting TI children labels+ORDER" \
-  "Positive tests | Negative tests | Threat models | Expected vulnerabilities" "$ti_order"
+  "Positive tests | Negative tests | Threat models | Accepted findings | Not applicable" "$ti_order"
 
 # Positive tests leaf: role=positive, leaf test, pendingExpansion==false.
 assert_json "D vesting 'Positive tests' kind"  "$V" "$TI.children[0].kind" "test"
@@ -300,26 +302,29 @@ assert_json "D vesting 'Positive tests' NOT pendingExpansion" "$V" "$TI.children
 assert_json "D vesting 'Negative tests' role"  "$V" "$TI.children[1].role" "negative"
 assert_json "D vesting 'Negative tests' NOT pendingExpansion" "$V" "$TI.children[1].pendingExpansion" "false"
 
-# "Threat models" group (role + 6 leaves, role=threat-model + pendingExpansion).
+# "Threat models" group (role + 2 claimed leaves, role=threat-model + pendingExpansion).
 assert_json "D vesting 'Threat models' role"   "$V" '[.. | objects | select(.label=="Threat models")][0].role' "threat-models-group"
 tm_count="$(printf '%s' "$V" | "$JQ" -r '[.. | objects | select(.kind=="group" and .label=="Threat models")][0].children | length')"
-assert_eq "D vesting 'Threat models' has 6 children" "6" "$tm_count"
+assert_eq "D vesting 'Threat models' has 2 children" "2" "$tm_count"
 tm_src="$(printf '%s' "$V" | "$JQ" -r '[.. | objects | select(.kind=="group" and .label=="Threat models")][0].source')"
 assert_eq "D vesting 'Threat models' is synthesized" "synthesized" "$tm_src"
 tm_leaf_role="$(printf '%s' "$V" | "$JQ" -r '[.. | objects | select(.kind=="group" and .label=="Threat models")][0].children | all(.role=="threat-model" and .pendingExpansion==false)')"
 assert_eq "D vesting 'Threat models' leaves role=threat-model+NOTpending" "true" "$tm_leaf_role"
 
-# "Expected vulnerabilities" group (role + 1 leaf, role=threat-model, NOT pending).
-assert_json "D vesting 'Expected vulnerabilities' role" "$V" '[.. | objects | select(.label=="Expected vulnerabilities")][0].role' "expected-vulnerabilities-group"
-assert_json "D vesting 'Expected vulnerabilities' NOT pendingExpansion" "$V" '[.. | objects | select(.label=="Expected vulnerabilities")][0].pendingExpansion' "false"
-ev_count="$(printf '%s' "$V" | "$JQ" -r '[.. | objects | select(.kind=="group" and .label=="Expected vulnerabilities")][0].children | length')"
-assert_eq "D vesting 'Expected vulnerabilities' has 1 child" "1" "$ev_count"
-ev_src="$(printf '%s' "$V" | "$JQ" -r '[.. | objects | select(.kind=="group" and .label=="Expected vulnerabilities")][0].source')"
-assert_eq "D vesting 'Expected vulnerabilities' is synthesized" "synthesized" "$ev_src"
-ev_leaf_role="$(printf '%s' "$V" | "$JQ" -r '[.. | objects | select(.kind=="group" and .label=="Expected vulnerabilities")][0].children[0].role')"
-assert_eq "D vesting 'Expected vulnerabilities' leaf role=threat-model" "threat-model" "$ev_leaf_role"
-ev_leaf_pending="$(printf '%s' "$V" | "$JQ" -r '[.. | objects | select(.kind=="group" and .label=="Expected vulnerabilities")][0].children[0].pendingExpansion')"
-assert_eq "D vesting 'Expected vulnerabilities' leaf NOT pendingExpansion" "false" "$ev_leaf_pending"
+# Vesting declares no expected vulnerabilities: its findings are all accepted
+# (benign artifacts of the ()-datum design) and the rest are not applicable.
+af_count="$(printf '%s' "$V" | "$JQ" -r '[.. | objects | select(.kind=="group" and .label=="Accepted findings")][0].children | length')"
+assert_eq "D vesting 'Accepted findings' has 7 children" "7" "$af_count"
+assert_json "D vesting 'Accepted findings' role" "$V" '[.. | objects | select(.label=="Accepted findings")][0].role' "accepted-findings-group"
+assert_json "D vesting 'Accepted findings' NOT pendingExpansion" "$V" '[.. | objects | select(.label=="Accepted findings")][0].pendingExpansion' "false"
+af_src="$(printf '%s' "$V" | "$JQ" -r '[.. | objects | select(.kind=="group" and .label=="Accepted findings")][0].source')"
+assert_eq "D vesting 'Accepted findings' is synthesized" "synthesized" "$af_src"
+af_leaves="$(printf '%s' "$V" | "$JQ" -r '[.. | objects | select(.kind=="group" and .label=="Accepted findings")][0].children | all(.role=="threat-model" and .pendingExpansion==false)')"
+assert_eq "D vesting 'Accepted findings' leaves role=threat-model+NOTpending" "true" "$af_leaves"
+na_count="$(printf '%s' "$V" | "$JQ" -r '[.. | objects | select(.kind=="group" and .label=="Not applicable")][0].children | length')"
+assert_eq "D vesting 'Not applicable' has 10 children" "10" "$na_count"
+assert_json "D vesting 'Not applicable' role" "$V" '[.. | objects | select(.label=="Not applicable")][0].role' "not-applicable-group"
+assert_json "D vesting no 'Expected vulnerabilities' group" "$V" '[[.. | objects | select(.label=="Expected vulnerabilities")] | length]|.[0]' "0"
 
 # R4: the bogus "QuickCheck action sequences" placeholder must be GONE.
 qc_present="$(printf '%s' "$V" | "$JQ" -r '[.. | objects | select(.label=="QuickCheck action sequences")] | length')"
@@ -346,10 +351,10 @@ sgp_grp_kind="$(printf '%s' "$SGP" | "$JQ" -r '.suites[0].tree.children[0].kind'
 assert_eq "D schema-gen-plain child is a test" "test" "$sgp_grp_kind"
 
 # --- D-testing-interface DEFAULT allThreatModels set (list-tests / R6) ---
-# `ctf purchase_offer` writes NO explicit threatModels list (only an explicit
-# expectedVulnerabilities of 3 entries), so its synthesized property-tests group
-# must use the library default: ALL_THREAT_MODELS (19) minus the 3 expected
-# vulnerabilities = 16 leaves. This is the case R6 found diverging from reality.
+# `ctf purchase_offer` writes NO explicit threatModels list, so it claims
+# nothing and has no "Threat models" group. Its 2 expectedVulnerabilities and
+# 17 notApplicable entries account for all 19 models, so candidateModels is
+# empty and there is no survey either.
 run_suite "convex-testing-interface-test"
 TIO="$RUN_OUT"
 # Synthesized property-tests group sitting under "ctf purchase_offer".
@@ -358,26 +363,27 @@ PO_TI="$PO | .. | objects | select(.testingInterface==true and .kind==\"group\" 
 # Direct children order must include the (now present) Threat models group.
 po_order="$(printf '%s' "$TIO" | "$JQ" -r "[$PO_TI][0].children | map(.label) | join(\" | \")")"
 assert_eq "D ti purchase_offer TI children labels+ORDER" \
-  "Positive tests | Negative tests | Threat models | Expected vulnerabilities" "$po_order"
-# The "Threat models" group EXISTS for this default-set instance.
+  "Positive tests | Negative tests | Expected vulnerabilities | Not applicable" "$po_order"
+# No "Threat models" group: the instance claims nothing.
 PO_TM="$PO | .. | objects | select(.kind==\"group\" and .label==\"Threat models\")"
 po_tm_present="$(printf '%s' "$TIO" | "$JQ" -r "[$PO_TM] | length")"
-assert_eq "D ti purchase_offer has a 'Threat models' group" "1" "$po_tm_present"
-# 16 leaves = 19 (ALL_THREAT_MODELS) - 3 (expectedVulnerabilities subtracted).
+assert_eq "D ti purchase_offer has no 'Threat models' group" "0" "$po_tm_present"
+# 17 surveyed leaves = 19 (ALL_THREAT_MODELS) - 2 (expectedVulnerabilities).
+PO_TM="$PO | .. | objects | select(.kind==\"group\" and .label==\"Not applicable\")"
 po_tm_count="$(printf '%s' "$TIO" | "$JQ" -r "[$PO_TM][0].children | length")"
-assert_eq "D ti purchase_offer 'Threat models' has 16 children (19 default - 3 expected vulns)" "16" "$po_tm_count"
+assert_eq "D ti purchase_offer 'Not applicable' has 17 children (19 - 2 expected vulns)" "17" "$po_tm_count"
 # Default-derived leaves are synthesized, role=threat-model, NOT pendingExpansion.
 po_tm_src="$(printf '%s' "$TIO" | "$JQ" -r "[$PO_TM][0].source")"
-assert_eq "D ti purchase_offer 'Threat models' is synthesized" "synthesized" "$po_tm_src"
+assert_eq "D ti purchase_offer 'Not applicable' is synthesized" "synthesized" "$po_tm_src"
 po_tm_leaves_ok="$(printf '%s' "$TIO" | "$JQ" -r "[$PO_TM][0].children | all(.kind==\"test\" and .role==\"threat-model\" and .source==\"synthesized\" and .testingInterface==true and .pendingExpansion==false and (has(\"children\")|not))")"
-assert_eq "D ti purchase_offer 'Threat models' leaves are TI threat-model leaves (no children)" "true" "$po_tm_leaves_ok"
-# The 3 expected-vulnerability entries are SUBTRACTED out of the default set.
-po_tm_no_evs="$(printf '%s' "$TIO" | "$JQ" -r "[$PO_TM][0].children | map(.label) | any(. == \"redeemerAssetSubstitution\" or . == \"timeBoundManipulation\" or (startswith(\"tokenForgeryAttack\"))) | not")"
-assert_eq "D ti purchase_offer default set excludes the 3 expected-vuln entries" "true" "$po_tm_no_evs"
-# Expected vulnerabilities group still has its 3 explicit leaves (unchanged path).
+assert_eq "D ti purchase_offer 'Not applicable' leaves are TI threat-model leaves (no children)" "true" "$po_tm_leaves_ok"
+# The expected-vulnerability entries are not repeated in the other slot.
+po_tm_no_evs="$(printf '%s' "$TIO" | "$JQ" -r "[$PO_TM][0].children | map(.label) | any(. == \"redeemerAssetSubstitution\" or (startswith(\"tokenForgeryAttack\"))) | not")"
+assert_eq "D ti purchase_offer not-applicable excludes the expected-vuln entries" "true" "$po_tm_no_evs"
+# Expected vulnerabilities group still has its explicit leaves (unchanged path).
 PO_EV="$PO | .. | objects | select(.kind==\"group\" and .label==\"Expected vulnerabilities\")"
 po_ev_count="$(printf '%s' "$TIO" | "$JQ" -r "[$PO_EV][0].children | length")"
-assert_eq "D ti purchase_offer 'Expected vulnerabilities' has 3 children" "3" "$po_ev_count"
+assert_eq "D ti purchase_offer 'Expected vulnerabilities' has 2 children" "2" "$po_ev_count"
 
 # ===========================================================================
 # Section E: JSON Schema conformance of the golden trees
@@ -403,7 +409,7 @@ def chknode:
   (if (has("authoritative")|not) then empty else "node has removed authoritative field" end),
   (if (.kind|IN("group","test","placeholder")) then empty else "bad node.kind \(.kind)" end),
   (if (.source|IN("parsed","synthesized","dynamic")) then empty else "bad node.source \(.source)" end),
-  (if (has("role")|not) or (.role|IN("positive","negative","threat-models-group","expected-vulnerabilities-group","threat-model")) then empty else "bad node.role \(.role)" end),
+  (if (has("role")|not) or (.role|IN("positive","negative","threat-models-group","surveyed-threat-models-group","expected-vulnerabilities-group","accepted-findings-group","not-applicable-group","threat-model")) then empty else "bad node.role \(.role)" end),
   (if (has("testingInterface")|not) or (.testingInterface==true) then empty else "node.testingInterface not true" end),
   (if (has("pendingExpansion")|not) or ((.pendingExpansion|type)=="boolean") then empty else "node.pendingExpansion not boolean" end),
   (if ((.label|type) as $t | $t=="string" or $t=="null") then empty else "node.label not string|null" end),
