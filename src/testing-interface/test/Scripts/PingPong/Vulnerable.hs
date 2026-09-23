@@ -4,7 +4,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE NoImplicitPrelude #-}
-{-# OPTIONS_GHC -g -fplugin-opt PlutusTx.Plugin:coverage-all #-}
 
 {- | Vulnerable PingPong validator for threat model demonstration.
 
