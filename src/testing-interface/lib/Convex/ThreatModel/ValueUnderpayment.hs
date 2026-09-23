@@ -83,8 +83,6 @@ valueUnderpaymentAttackWithGen reductionFactorGen =
     -- Skip iterations where the draw is too small to be a meaningful attack.
     ensure (reductionFactor > 0)
 
-    requireScriptInput
-
     {- The floor for the reduced ADA amount has to be each output's own
     protocol-mandated minimum, not a hardcoded guess: 'rebalanceAndSign' runs
     'Convex.ThreatModel.Cardano.Api.topUpUnderfundedOutputs' on every output
@@ -97,24 +95,9 @@ valueUnderpaymentAttackWithGen reductionFactorGen =
     envPParams <- pparams <$> getThreatModelEnv
     let minRequiredAda out = C.calculateMinimumUTxO C.shelleyBasedEra (C.unLedgerProtocolParameters envPParams) (outputTxOut out)
 
-    -- Get all outputs from the transaction
-    outputs <- getTxOutputs
-
-    -- Filter to script outputs (NOT key addresses)
-    let scriptOutputs = filter (not . isKeyAddressAny . addressOf) outputs
-
-    -- Precondition: there must be at least one script output
-    threatPrecondition $ ensure (not $ null scriptOutputs)
-
-    -- Further filter to outputs that have enough ADA to be reduced.
+    -- Only outputs with enough ADA above their own minimum are reducible.
     let hasEnoughAda out = C.selectLovelace (valueOf out) > minRequiredAda out
-        reducibleOutputs = filter hasEnoughAda scriptOutputs
-
-    -- Precondition: there must be at least one script output with enough ADA
-    threatPrecondition $ ensure (not $ null reducibleOutputs)
-
-    -- Pick a target script output
-    target <- pickAny reducibleOutputs
+    target <- anyGuardedOutputSuchThat hasEnoughAda
 
     -- Calculate reduced value
     let currentValue = valueOf target

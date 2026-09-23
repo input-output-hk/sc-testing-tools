@@ -52,8 +52,6 @@ module Convex.ThreatModel.Cardano.Api (
   mockWalletHashes,
   detectSigningWallet,
   txRequiredSigners,
-  txInputs,
-  txReferenceInputs,
   txOutputs,
   txRunsPlutusScript,
   runningPlutusScriptHashes,
@@ -465,12 +463,6 @@ bodyContentReferenceInputs body =
 
 bodyContentOutputs :: TxBodyContent ViewTx Era -> [TxOut CtxTx Era]
 bodyContentOutputs = txOuts
-
-txInputs :: Tx Era -> [TxIn]
-txInputs = bodyContentInputs . txBodyContentOf
-
-txReferenceInputs :: Tx Era -> [TxIn]
-txReferenceInputs = bodyContentReferenceInputs . txBodyContentOf
 
 txOutputs :: Tx Era -> [TxOut CtxTx Era]
 txOutputs = bodyContentOutputs . txBodyContentOf

@@ -148,6 +148,7 @@ test-suite convex-testing-interface-test
     PingPongCoverageSpec
     PingPongSpec
     RebalanceSpec
+    RunningScriptsSpec
     SampleSpec
     ScriptDataSpec
     Scripts

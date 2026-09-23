@@ -64,24 +64,7 @@ negativeIntegerAttack  -- Negate all integers in the datum
 -}
 negativeIntegerAttack :: ThreatModel ()
 negativeIntegerAttack = Named "Negative Integer Attack" $ do
-  requireScriptInput
-
-  -- Get all outputs from the transaction
-  outputs <- getTxOutputs
-
-  -- Filter to script outputs with inline datums
-  let scriptOutputsWithDatum = filter isScriptOutputWithInlineDatum outputs
-
-  -- Precondition: there must be at least one script output with inline datum
-  threatPrecondition $ ensure (not $ null scriptOutputsWithDatum)
-
-  -- Pick a target output
-  target <- pickAny scriptOutputsWithDatum
-
-  -- Extract the inline datum (we know it exists due to the filter)
-  originalDatum <- case getInlineDatum target of
-    Nothing -> failPrecondition "Script output missing inline datum"
-    Just originalDatum' -> pure originalDatum'
+  (target, originalDatum) <- anyGuardedOutputWithInlineDatum
 
   let negatedDatum = negateIntegers originalDatum
 
@@ -131,27 +114,3 @@ negateIntegers (ScriptDataMap entries) =
 negateIntegers (ScriptDataNumber n) =
   ScriptDataNumber (negate n)
 negateIntegers x = x -- bytes, etc. unchanged
-
--- | Check if an output is a script output with an inline datum.
-isScriptOutputWithInlineDatum :: Output -> Bool
-isScriptOutputWithInlineDatum output =
-  not (isKeyAddressAny (addressOf output)) && hasInlineDatum output
-
--- | Check if an output has an inline datum.
-hasInlineDatum :: Output -> Bool
-hasInlineDatum output =
-  case datumOfTxOut (outputTxOut output) of
-    TxOutDatumInline{} -> True
-    _ -> False
-
--- | Extract the inline datum from an output if present.
-getInlineDatum :: Output -> Maybe ScriptData
-getInlineDatum output =
-  case datumOfTxOut (outputTxOut output) of
-    TxOutDatumInline _ hashableData -> Just (getScriptData hashableData)
-    _ -> Nothing
-
--- | Convert a @ScriptData@ to an inline @Datum@ (TxOutDatum CtxTx Era).
-toInlineDatum :: ScriptData -> Datum
-toInlineDatum sd =
-  TxOutDatumInline BabbageEraOnwardsConway (unsafeHashableScriptData sd)
