@@ -98,22 +98,30 @@ evaluated against every transaction produced by a successful positive test run.
 
 ```haskell
 instance ThreatModelsFor MyContractState where
-  -- Threat models that SHOULD NOT find vulnerabilities (test passes if they don't).
-  -- Default: all parameterless threat models minus expectedVulnerabilities.
+  -- Claimed: must apply AND be resisted. A listed model that never applies
+  -- fails too, because the claim would be unverifiable.
   threatModels =
     [ unprotectedScriptOutput
     , largeDataAttackWith 10
     , largeValueAttackWith 10
     ]
 
-  -- Threat models that SHOULD find vulnerabilities (test passes if they do).
-  -- Use this for known issues you haven't fixed yet.
+  -- Known issues you haven't fixed yet, each with the reason it is declared.
   expectedVulnerabilities = []
+
+  -- Attacks that land but are benign artifacts of the design.
+  acceptedFindings = []
+
+  -- Reviewed as not applying to this contract's transaction shapes. Fails if
+  -- one ever starts applying.
+  notApplicable = []
 ```
 
-If you don't override `threatModels`, the default runs **all** built-in threat models
-(from `allThreatModels`) minus any listed in `expectedVulnerabilities`. The built-in
-threat models include:
+Anything you do not place in a slot is run by `candidateModels`, which defaults
+to every built-in model not already spoken for: reported for information, never
+failed for not applying. That makes an empty instance the right starting point —
+run it, then triage the results into the slots above. Set `candidateModels = []`
+to opt out of the survey. The built-in threat models include:
 
 - `datumListBloatAttack` / `datumByteBloatAttack` -- datum bloating variants
 - `doubleSatisfaction` -- a single input satisfies multiple scripts
@@ -224,7 +232,7 @@ Behavior notes:
 
 - Matching is prefix-based and case-sensitive.
 - For multiple threat models, use comma-separated values: `--threat-model-name "TM1, TM2, TM3"`
-- This filter applies only to `threatModels` and does not affect `expectedVulnerabilities`.
+- This filter applies to `threatModels` and `candidateModels`; the triaged slots (`expectedVulnerabilities`, `acceptedFindings`, `notApplicable`) always run.
 - Threat model execution still happens during `Positive tests`, so this option narrows execution but does not decouple it from the positive-test phase.
 - Empty filter (no `--threat-model-name` option) runs all threat models (default behavior).
 
