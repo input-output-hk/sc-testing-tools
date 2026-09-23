@@ -147,6 +147,7 @@ test-suite convex-testing-interface-test
     PingPongCoverageSpec
     PingPongSpec
     RebalanceSpec
+    RunningScriptsSpec
     SampleSpec
     ScriptDataSpec
     Scripts
@@ -155,6 +156,7 @@ test-suite convex-testing-interface-test
     Scripts.PingPong
     Scripts.PingPong.Vulnerable
     Scripts.Sample
+    TestTx
     ZeroCoverageSpec
 
   autogen-modules: Paths_convex_testing_interface

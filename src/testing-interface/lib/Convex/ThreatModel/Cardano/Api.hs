@@ -52,6 +52,8 @@ module Convex.ThreatModel.Cardano.Api (
   txReferenceInputs,
   txOutputs,
   txRunsPlutusScript,
+  runningPlutusScriptHashes,
+  scriptHashOfAddressAny,
 
   -- * Value utilities
   leqValue,
@@ -64,6 +66,7 @@ module Convex.ThreatModel.Cardano.Api (
   validateTxM,
   buildMockState,
   chainStateUTxO,
+  chainStateLedgerUTxO,
   chainStatePParams,
 
   -- * Rebalancing
@@ -108,13 +111,15 @@ import Cardano.Ledger.Conway.Rules (ConwayLedgerPredFailure (..), ConwayUtxoPred
 import Cardano.Ledger.Conway.Scripts qualified as Conway
 import Cardano.Ledger.Conway.State qualified as Conway (certVStateL, vsDReps)
 import Cardano.Ledger.Conway.TxBody qualified as Conway
+import Cardano.Ledger.Credential (Credential (KeyHashObj, ScriptHashObj))
 import Cardano.Ledger.DRep (drepDeposit)
 import Cardano.Ledger.Keys (WitVKey (..), coerceKeyRole, hashKey)
 import Cardano.Ledger.Mary.Value qualified as Mary
 import Cardano.Ledger.Plutus.Language qualified as Plutus
 import Cardano.Ledger.Shelley.API.Mempool (ApplyTxError (..))
 import Cardano.Ledger.Shelley.LedgerState (lsCertState)
-import Cardano.Ledger.State (accountsL, accountsMapL, certDStateL, certPStateL, depositAccountStateL, getScriptsHashesNeeded, getScriptsNeeded, getScriptsProvided, psStakePools)
+import Cardano.Ledger.State (ScriptsProvided (..), accountsL, accountsMapL, certDStateL, certPStateL, depositAccountStateL, getScriptsHashesNeeded, getScriptsNeeded, getScriptsProvided, psStakePools)
+import Cardano.Ledger.State qualified as Ledger (UTxO)
 import Cardano.Ledger.TxIn qualified as Ledger (TxIn)
 import Cardano.Slotting.Slot ()
 import Cardano.Slotting.Time (SlotLength, mkSlotLength)
@@ -145,7 +150,7 @@ import Data.ByteString.Short qualified as SBS
 import Data.Either (isRight)
 import Data.Foldable (foldrM)
 import Data.Map qualified as Map
-import Data.Maybe (isJust, listToMaybe, mapMaybe)
+import Data.Maybe (isJust, isNothing, listToMaybe, mapMaybe)
 import Data.Maybe.Strict
 import Data.Ord (Down (..))
 import Data.SOP.NonEmpty (NonEmpty (NonEmptyOne))
@@ -256,9 +261,12 @@ scriptAddressAny = paymentCredentialToAddressAny . PaymentCredentialByScript
 keyAddressAny :: Hash PaymentKey -> AddressAny
 keyAddressAny = paymentCredentialToAddressAny . PaymentCredentialByKey
 
--- | Check if an address is a public key address.
+{- | Check if an address is a public key address — i.e. has no script
+payment credential. Byron addresses count as key addresses, as they have no
+script credentials at all.
+-}
 isKeyAddressAny :: AddressAny -> Bool
-isKeyAddressAny = isKeyAddress . anyAddressInShelleyBasedEra (shelleyBasedEra @Era)
+isKeyAddressAny = isNothing . scriptHashOfAddressAny
 
 {- | Re-key the Spending redeemers after the set of spend inputs changed:
 optionally drop the redeemer of a removed input, then apply the index shift
@@ -566,8 +574,15 @@ convValidityInterval (lowerBound, upperBound) =
 
 -- | The UTxO set of a chain state.
 chainStateUTxO :: MockChainState Era -> UTxO Era
-chainStateUTxO state =
-  fromLedgerUTxO shelleyBasedEra (state ^. poolState . L.utxoState . L._UTxOState . _1)
+chainStateUTxO = fromLedgerUTxO shelleyBasedEra . chainStateLedgerUTxO
+
+{- | The chain state's UTxO set in ledger form, which is how it is actually
+stored. 'chainStateUTxO' converts it to the api type; anything that only
+feeds it back to a ledger function should take this instead and skip the
+round trip.
+-}
+chainStateLedgerUTxO :: MockChainState Era -> Ledger.UTxO LedgerEra
+chainStateLedgerUTxO state = state ^. poolState . L.utxoState . L._UTxOState . _1
 
 -- | The protocol parameters a chain state validates with.
 chainStatePParams :: MockChainState Era -> LedgerProtocolParameters Era
@@ -1158,9 +1173,49 @@ needsCollateral = \case
   TxBodyNoScriptData -> False
   TxBodyScriptData _ _ (Ledger.Redeemers rdmrs) -> not (Map.null rdmrs)
 
--- | Does this transaction run at least one Plutus script? See 'needsCollateral'.
+{- | Does this transaction run at least one Plutus script? See 'needsCollateral'.
+| Does any Plutus script run in this transaction? 'runningPlutusScriptHashes'
+answers /which/ ones, and is empty exactly when this is 'False'.
+-}
 txRunsPlutusScript :: Tx Era -> Bool
 txRunsPlutusScript (Tx (ShelleyTxBody _ _ _ scriptData _ _) _) = needsCollateral scriptData
+
+{- | The hashes of the Plutus scripts that run in this transaction.
+
+Built from the ledger's own notion of which scripts a transaction must
+satisfy ('getScriptsNeeded'), so it covers every purpose - spending,
+minting, rewarding, certifying, voting, proposing - and cannot drift from
+the ledger rules the way a hand-rolled redeemer walk would.
+
+Narrowed to scripts *provided* as Plutus: a native script runs no Plutus
+code and cannot inspect outputs at all, so it never guards anything.
+Reference scripts are included, since 'getScriptsProvided' resolves them
+from the UTxO set rather than the witness set.
+
+Empty exactly when 'txRunsPlutusScript' is 'False', which is checked first
+both to short-circuit the UTxO walk and to keep that equivalence true by
+construction - 'Convex.ThreatModel.guardedScriptOutputs' relies on it to
+subsume 'Convex.ThreatModel.requireScriptExecution'.
+-}
+runningPlutusScriptHashes :: Ledger.UTxO LedgerEra -> Tx Era -> Set.Set Ledger.ScriptHash
+runningPlutusScriptHashes ledgerUtxo tx@(Tx (ShelleyTxBody _ body _ _ _ _) _)
+  | not (txRunsPlutusScript tx) = Set.empty
+  | otherwise = Set.filter isPlutus (getScriptsHashesNeeded (getScriptsNeeded ledgerUtxo body))
+ where
+  ShelleyTx _ ledgerTx = tx
+  ScriptsProvided provided = getScriptsProvided ledgerUtxo ledgerTx
+  isPlutus h = maybe False (isJust . getScriptLanguage) (Map.lookup h provided)
+
+{- | The payment credential's script hash, or @Nothing@ for a key or Byron
+address. See 'Convex.ThreatModel.guardedScriptOutputs' for what matching
+this against 'runningPlutusScriptHashes' does and does not establish.
+-}
+scriptHashOfAddressAny :: AddressAny -> Maybe Ledger.ScriptHash
+scriptHashOfAddressAny = \case
+  AddressByron{} -> Nothing
+  AddressShelley (ShelleyAddress _ paymentCred _) -> case paymentCred of
+    ScriptHashObj h -> Just h
+    KeyHashObj _ -> Nothing
 
 {- | The candidate collateral input sets to try, in order of preference, each
 paired with the outputs its inputs resolve to in the UTxO set: the existing

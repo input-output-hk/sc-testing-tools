@@ -64,19 +64,7 @@ negativeIntegerAttack  -- Negate all integers in the datum
 -}
 negativeIntegerAttack :: ThreatModel ()
 negativeIntegerAttack = Named "Negative Integer Attack" $ do
-  requireScriptExecution
-
-  -- Get all outputs from the transaction
-  outputs <- getTxOutputs
-
-  -- Filter to script outputs with inline datums
-  let scriptOutputsWithDatum = filter isScriptOutputWithInlineDatum outputs
-
-  -- Precondition: there must be at least one script output with inline datum
-  threatPrecondition $ ensure (not $ null scriptOutputsWithDatum)
-
-  -- Pick a target output
-  target <- pickAny scriptOutputsWithDatum
+  target <- anyGuardedOutputSuchThat hasInlineDatum
 
   -- Extract the inline datum (we know it exists due to the filter)
   originalDatum <- case getInlineDatum target of
@@ -131,11 +119,6 @@ negateIntegers (ScriptDataMap entries) =
 negateIntegers (ScriptDataNumber n) =
   ScriptDataNumber (negate n)
 negateIntegers x = x -- bytes, etc. unchanged
-
--- | Check if an output is a script output with an inline datum.
-isScriptOutputWithInlineDatum :: Output -> Bool
-isScriptOutputWithInlineDatum output =
-  not (isKeyAddressAny (addressOf output)) && hasInlineDatum output
 
 -- | Check if an output has an inline datum.
 hasInlineDatum :: Output -> Bool

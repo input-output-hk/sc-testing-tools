@@ -88,19 +88,7 @@ invalidDatumIndexAttackWithGen invalidIdxGen =
     -- Negative indices belong to the negative-integer attack, not this model.
     ensure (invalidIdx >= 0)
 
-    requireScriptExecution
-
-    -- Get all outputs from the transaction
-    outputs <- getTxOutputs
-
-    -- Filter to script outputs with inline datums that carry a Constr datum
-    let scriptOutputsWithConstr = filter isScriptOutputWithConstrInlineDatum outputs
-
-    -- Precondition: there must be at least one eligible target output
-    threatPrecondition $ ensure (not $ null scriptOutputsWithConstr)
-
-    -- Pick a target output
-    target <- pickAny scriptOutputsWithConstr
+    target <- anyGuardedOutputSuchThat hasConstrInlineDatum
 
     -- Extract the inline datum (we know it exists due to the filter above)
     originalDatum <- case getInlineDatum target of
@@ -168,13 +156,12 @@ replaceConstrIndex newIdx sd = case sd of
   ScriptDataConstructor _idx fields -> ScriptDataConstructor newIdx fields
   _ -> sd
 
--- | True when the output is at a script address and has an inline Constr datum.
-isScriptOutputWithConstrInlineDatum :: Output -> Bool
-isScriptOutputWithConstrInlineDatum output =
-  not (isKeyAddressAny (addressOf output))
-    && case getInlineDatum output of
-      Just (ScriptDataConstructor{}) -> True
-      _ -> False
+-- | True when the output has an inline Constr datum.
+hasConstrInlineDatum :: Output -> Bool
+hasConstrInlineDatum output =
+  case getInlineDatum output of
+    Just (ScriptDataConstructor{}) -> True
+    _ -> False
 
 -- | Extract the inline datum from an output, if present.
 getInlineDatum :: Output -> Maybe ScriptData

@@ -277,6 +277,13 @@ instance ThreatModelsFor MultiPlayerPingPongModel where
   -- transaction, so it asserted nothing and is dropped.
   threatModels =
     [ datumListBloatAttack
+    , -- The validator rejects any change to the players list on its
+      -- continuation output ("players list must not change"), so it resists
+      -- this. It was previously listed as an expected vulnerability, which
+      -- recorded a finding against the init transaction's script output -
+      -- an output no validator inspects, so mutating it "validated"
+      -- vacuously. 'guardedScriptOutputs' no longer offers that output.
+      duplicateListEntryAttack
     , invalidDatumIndexAttack
     , largeDataAttack
     , largeValueAttack
@@ -287,9 +294,7 @@ instance ThreatModelsFor MultiPlayerPingPongModel where
     , unprotectedScriptOutput
     , valueUnderpaymentAttack
     ]
-  expectedVulnerabilities =
-    [ duplicateListEntryAttack
-    ]
+  expectedVulnerabilities = []
 
 -------------------------------------------------------------------------------
 -- Helper functions for the model

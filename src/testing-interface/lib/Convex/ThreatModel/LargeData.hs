@@ -81,19 +81,7 @@ largeDataAttackWithGen fieldsGen =
     -- Skip iterations where the draw is too small to be a meaningful attack.
     ensure (n >= 1)
 
-    requireScriptExecution
-
-    -- Get all outputs from the transaction
-    outputs <- getTxOutputs
-
-    -- Filter to script outputs with inline datums
-    let scriptOutputsWithDatum = filter isScriptOutputWithInlineDatum outputs
-
-    -- Precondition: there must be at least one script output with inline datum
-    threatPrecondition $ ensure (not $ null scriptOutputsWithDatum)
-
-    -- Pick a target output
-    target <- pickAny scriptOutputsWithDatum
+    target <- anyGuardedOutputSuchThat hasInlineDatum
 
     -- Extract the inline datum (we know it exists due to the filter)
     originalDatum <- case getInlineDatum target of
@@ -144,11 +132,6 @@ bloatData n sd = case sd of
      in ScriptDataConstructor idx (fields ++ extraFields)
   -- Other cases: return unchanged
   _ -> sd
-
--- | Check if an output is a script output with an inline datum.
-isScriptOutputWithInlineDatum :: Output -> Bool
-isScriptOutputWithInlineDatum output =
-  not (isKeyAddressAny (addressOf output)) && hasInlineDatum output
 
 -- | Check if an output has an inline datum.
 hasInlineDatum :: Output -> Bool

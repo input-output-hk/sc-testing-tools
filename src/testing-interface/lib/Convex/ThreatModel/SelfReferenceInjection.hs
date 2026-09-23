@@ -100,9 +100,8 @@ selfReferenceInjectionWith False -- Standard mode
 -}
 selfReferenceInjectionWith :: Bool -> ThreatModel ()
 selfReferenceInjectionWith verbose = Named "Self-Reference Injection" $ do
-  -- Get all inputs and outputs
+  -- Get all inputs
   inputs <- getTxInputs
-  outputs <- getTxOutputs
 
   -- Find script inputs (non-key address inputs)
   let scriptInputs = filter (not . isKeyAddressAny . addressOf) inputs
@@ -120,14 +119,8 @@ selfReferenceInjectionWith verbose = Named "Self-Reference Injection" $ do
     Nothing -> failPrecondition "Script output missing"
     Just credBytes' -> pure credBytes'
 
-  -- Filter to script outputs with inline datums (continuation outputs)
-  let continuationOutputs = filter isScriptOutputWithInlineDatum outputs
-
-  -- Precondition: there must be at least one continuation output
-  threatPrecondition $ ensure (not $ null continuationOutputs)
-
-  -- Pick a target output
-  target <- pickAny continuationOutputs
+  -- Pick a continuation output: a guarded script output with an inline datum
+  target <- anyGuardedOutputSuchThat hasInlineDatum
 
   -- Extract the inline datum
   originalDatum <- case getInlineDatum target of
@@ -242,11 +235,6 @@ isAddressLikeStructure (ScriptDataConstructor 0 [cred, _stakingCred]) =
     | n `elem` [0, 1] && BS.length bs == 28 = True
   isCredentialLike _ = False
 isAddressLikeStructure _ = False
-
--- | Check if an output is a script output with an inline datum.
-isScriptOutputWithInlineDatum :: Output -> Bool
-isScriptOutputWithInlineDatum output =
-  not (isKeyAddressAny (addressOf output)) && hasInlineDatum output
 
 -- | Check if an output has an inline datum.
 hasInlineDatum :: Output -> Bool

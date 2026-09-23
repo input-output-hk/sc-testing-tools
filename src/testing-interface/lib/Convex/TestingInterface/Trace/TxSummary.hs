@@ -303,23 +303,25 @@ classifyStakeCredential :: C.StakeCredential -> (AddressType, Text)
 classifyStakeCredential (C.StakeCredentialByKey h) = classifyCredential (Left (C.serialiseToRawBytesHexText h))
 classifyStakeCredential (C.StakeCredentialByScript h) = classifyCredential (Right (C.serialiseToRawBytesHexText h))
 
+-- | An address's payment credential, or @Nothing@ for Byron (which has none).
+paymentCredentialOf :: C.AddressInEra C.ConwayEra -> Maybe C.PaymentCredential
+paymentCredentialOf (C.AddressInEra C.ByronAddressInAnyEra{} _) = Nothing
+paymentCredentialOf (C.AddressInEra C.ShelleyAddressInEra{} (C.ShelleyAddress _ paymentCred _)) =
+  Just (C.fromShelleyPaymentCredential paymentCred)
+
 {- | Classify a payment address's credential as a public key or script
 address, so a client doesn't have to parse the address itself to find out.
 Byron addresses are always key-based (Byron has no script credentials).
 -}
 addressType :: C.AddressInEra C.ConwayEra -> AddressType
-addressType (C.AddressInEra C.ByronAddressInAnyEra{} _) = PublicKey
-addressType (C.AddressInEra C.ShelleyAddressInEra{} (C.ShelleyAddress _ paymentCred _)) =
-  fst (classifyPaymentCredential (C.fromShelleyPaymentCredential paymentCred))
+addressType = maybe PublicKey (fst . classifyPaymentCredential) . paymentCredentialOf
 
 {- | The raw hex of a payment address's credential hash (key or script hash),
 for looking up a friendly label via 'AddressLabeler'. @Nothing@ for Byron
 addresses.
 -}
 addressCredentialHashHex :: C.AddressInEra C.ConwayEra -> Maybe Text
-addressCredentialHashHex (C.AddressInEra C.ByronAddressInAnyEra{} _) = Nothing
-addressCredentialHashHex (C.AddressInEra C.ShelleyAddressInEra{} (C.ShelleyAddress _ paymentCred _)) =
-  Just $ snd (classifyPaymentCredential (C.fromShelleyPaymentCredential paymentCred))
+addressCredentialHashHex = fmap (snd . classifyPaymentCredential) . paymentCredentialOf
 
 {- | Classify a stake address's credential as a public key or script
 address, mirroring 'addressType' for payment addresses.

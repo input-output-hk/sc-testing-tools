@@ -38,6 +38,7 @@ import BountySpec (bountyTests)
 import PingPongCoverageSpec (pingPongCoverageTests)
 import PingPongSpec (pingPongTests)
 import RebalanceSpec (rebalanceTests)
+import RunningScriptsSpec (runningScriptsTests)
 import SampleSpec (sampleScriptTest)
 import ScriptDataSpec (scriptDataTests)
 import Scripts (pingPongCovIdx)
@@ -80,6 +81,7 @@ tests opts runOpts =
     , rebalanceTests
     , zeroCoverageTests
     , scriptDataTests
+    , runningScriptsTests
     , aikenTests opts
     , aikenBankTests runOpts
     , aikenHelloWorldTests runOpts

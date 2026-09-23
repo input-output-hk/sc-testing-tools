@@ -12,17 +12,14 @@ module RebalanceSpec (rebalanceTests) where
 
 import Cardano.Api qualified as C
 import Cardano.Ledger.Api.Tx.Body qualified as Ledger (mkBasicTxBody)
-import Cardano.Ledger.Api.Tx.Wits qualified as Ledger (AsIx (AsIx), Redeemers (Redeemers), TxDats (TxDats))
 import Cardano.Ledger.BaseTypes (StrictMaybe (..))
 import Cardano.Ledger.Coin (Coin (..))
-import Cardano.Ledger.Conway.Scripts qualified as Conway (ConwayPlutusPurpose (ConwaySpending))
 import Cardano.Ledger.Conway.TxBody qualified as Conway
 import Cardano.Ledger.Core qualified as Ledger (TxBody)
-import Cardano.Ledger.Plutus (ExUnits (..))
 import Control.Lens ((^.))
 import Convex.MockChain.Defaults qualified as Defaults
 import Convex.NodeParams (ledgerProtocolParameters)
-import Convex.ThreatModel.Cardano.Api (LedgerEra, dummyTxId, mkSizedShelleyTxOut, recalculateTotalCollateral)
+import Convex.ThreatModel.Cardano.Api (LedgerEra, mkSizedShelleyTxOut, recalculateTotalCollateral)
 import Convex.Utils (scriptAddressV1)
 import Convex.Wallet qualified as Wallet
 import Convex.Wallet.MockWallet qualified as Wallet
@@ -33,6 +30,7 @@ import Data.Set qualified as Set
 import GHC.Exts (fromList)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import TestTx (mkConwayTx, spendRedeemerAt, txInAt)
 
 {- | The transaction under test: a fee, one collateral input, and a single
 Spending redeemer (so the transaction counts as running a Plutus script and
@@ -53,23 +51,17 @@ testTxSpending spendIns = mkTestTx spendIns []
 
 mkTestTx :: [C.TxIn] -> [C.TxIn] -> Coin -> C.Tx C.ConwayEra
 mkTestTx spendIns collIns fee =
-  let body =
-        Ledger.mkBasicTxBody
-          { Conway.ctbSpendInputs = Set.fromList (map C.toShelleyTxIn spendIns)
-          , Conway.ctbCollateralInputs = Set.fromList (map C.toShelleyTxIn collIns)
-          , Conway.ctbTxfee = fee
-          }
-      unitRedeemer = C.toAlonzoData (C.unsafeHashableScriptData (C.ScriptDataNumber 42))
-      redeemers = Ledger.Redeemers (Map.singleton (Conway.ConwaySpending (Ledger.AsIx 0)) (unitRedeemer, ExUnits 0 0))
-      scriptData = C.TxBodyScriptData C.AlonzoEraOnwardsConway (Ledger.TxDats mempty) redeemers
-   in C.Tx (C.ShelleyTxBody C.ShelleyBasedEraConway body [] scriptData Nothing C.TxScriptValidityNone) []
+  mkConwayTx
+    Ledger.mkBasicTxBody
+      { Conway.ctbSpendInputs = Set.fromList (map C.toShelleyTxIn spendIns)
+      , Conway.ctbCollateralInputs = Set.fromList (map C.toShelleyTxIn collIns)
+      , Conway.ctbTxfee = fee
+      }
+    []
+    (spendRedeemerAt 0)
 
 collateralTxIn :: C.TxIn
 collateralTxIn = txInAt 0
-
--- | Inputs of one dummy transaction; 'C.TxIn' orders them by index.
-txInAt :: Word -> C.TxIn
-txInAt = C.TxIn dummyTxId . C.TxIx
 
 walletAddr :: C.AddressInEra C.ConwayEra
 walletAddr = Wallet.addressInEra Defaults.networkId Wallet.w1

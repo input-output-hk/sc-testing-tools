@@ -87,19 +87,7 @@ largeValueAttackWithGen numTokensGen =
     -- Skip iterations where the draw is too small to be a meaningful attack.
     ensure (numTokens >= 1)
 
-    requireScriptExecution
-
-    -- Get all outputs from the transaction
-    outputs <- getTxOutputs
-
-    -- Filter to script outputs (NOT key addresses)
-    let scriptOutputs = filter (not . isKeyAddressAny . addressOf) outputs
-
-    -- Precondition: there must be at least one script output
-    threatPrecondition $ ensure (not $ null scriptOutputs)
-
-    -- Pick a target script output
-    target <- pickAny scriptOutputs
+    target <- anyGuardedOutput
 
     -- Create junk tokens by minting with the always-succeeds policy
     let policyId = C.PolicyId $ hashScript (C.PlutusScript C.PlutusScriptV2 alwaysSucceedsMintingPolicy)

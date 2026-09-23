@@ -22,6 +22,7 @@ import Data.Map qualified as Map
 import Data.Word (Word32)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import TestTx (mkConwayTx)
 
 type Purpose = Conway.ConwayPlutusPurpose Ledger.AsIx (C.ShelleyLedgerEra C.ConwayEra)
 
@@ -96,8 +97,7 @@ removeAt i ix
 
 -- | A minimal transaction carrying the given script data and nothing else.
 txWithScriptData :: C.TxBodyScriptData C.ConwayEra -> C.Tx C.ConwayEra
-txWithScriptData sd =
-  C.Tx (C.ShelleyTxBody C.ShelleyBasedEraConway Ledger.mkBasicTxBody [] sd Nothing C.TxScriptValidityNone) []
+txWithScriptData sd = mkConwayTx Ledger.mkBasicTxBody [] sd
 
 spend, mint, reward, cert :: Word32 -> Purpose
 spend = Conway.ConwaySpending . Ledger.AsIx

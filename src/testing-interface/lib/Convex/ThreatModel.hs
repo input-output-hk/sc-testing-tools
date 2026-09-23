@@ -81,6 +81,9 @@ module Convex.ThreatModel (
   ensure,
   ensureHasInputAt,
   requireScriptExecution,
+  guardedScriptOutputs,
+  anyGuardedOutput,
+  anyGuardedOutputSuchThat,
   failPrecondition,
 
   -- ** Validation
@@ -149,12 +152,14 @@ module Convex.ThreatModel (
 
 import Cardano.Api as X
 
+import Cardano.Ledger.Hashes qualified as Ledger (ScriptHash)
 import Control.Applicative ((<|>))
 import Control.Lens ((%~), (&))
 import Control.Monad
 import Data.Containers.ListUtils (nubOrd)
 import Data.List (intercalate)
 import Data.Map qualified as Map
+import Data.Set qualified as Set
 import Text.PrettyPrint hiding ((<>))
 import Text.Printf
 
@@ -195,6 +200,13 @@ data ThreatModelEnv = ThreatModelEnv
   env, shared between all its users. The data constructor is not exported;
   'mkThreatModelEnv' maintains the invariant.
   -}
+  , runningPlutusScripts :: Set.Set Ledger.ScriptHash
+  {- ^ The Plutus scripts that run in 'currentTx' (see
+  'guardedScriptOutputs'). Deliberately lazy and shared, like
+  'currentUTxOs': computing it walks the transaction's script requirements
+  against the whole UTxO set, and every model that asks for guarded outputs
+  would otherwise redo that for the same env.
+  -}
   , currentChainState :: MockChainState Era
   {- ^ The chain state the transaction validated against (just before it was
   applied). Modified transactions are rebalanced and re-validated against
@@ -217,6 +229,7 @@ mkThreatModelEnv tx chainState =
   ThreatModelEnv
     { currentTx = tx
     , currentUTxOs = chainStateUTxO chainState
+    , runningPlutusScripts = runningPlutusScriptHashes (chainStateLedgerUTxO chainState) tx
     , currentChainState = chainState
     }
 
@@ -847,6 +860,56 @@ originalTx = currentTx <$> getThreatModelEnv
 -- | Get the outputs from the original transaction.
 getTxOutputs :: ThreatModel [Output]
 getTxOutputs = zipWith (flip Output . TxIx) [0 ..] . txOutputs <$> originalTx
+
+{- | The transaction's outputs whose payment credential is the hash of a
+Plutus script that runs in this transaction.
+
+Stronger than 'requireScriptExecution', and what the output-mutation
+attacks actually want: degrading an output is only evidence against a
+contract if a script plausibly responsible for it was executing and failed
+to object. Under the transaction-wide check, a transaction whose only
+script is an unrelated minting policy, paying into a validator for the
+first time, let those attacks degrade the new output and report a finding.
+
+Hash identity is a proxy, not proof, and it cuts both ways. A script
+running under /any/ purpose counts, so the withdraw-zero pattern's
+Rewarding script guards outputs at its own payment address - which is the
+point, and restricting this to Spending purposes would break that pattern,
+as there are no script inputs there at all. By the same token a
+multi-validator whose minting policy id equals its spending hash counts as
+guarding its own outputs. Conversely an output policed by some /other/
+running script is not matched and those attacks skip it; that lost case is
+recorded in @TODO.md@.
+
+Empty when no Plutus script runs at all, which is what lets
+'anyGuardedOutputSuchThat' subsume 'requireScriptExecution'.
+-}
+guardedScriptOutputs :: ThreatModel [Output]
+guardedScriptOutputs = do
+  running <- runningPlutusScripts <$> getThreatModelEnv
+  let guarded o = maybe False (`Set.member` running) (scriptHashOfAddressAny (addressOf o))
+  filter guarded <$> getTxOutputs
+
+{- | Pick any output that 'guardedScriptOutputs' admits and that satisfies
+the predicate, recording a precondition miss when there is none.
+
+The output-mutation attacks all want exactly this, so the emptiness
+convention lives here rather than being restated at each call site. Since
+'guardedScriptOutputs' is empty whenever no Plutus script runs, this
+subsumes 'requireScriptExecution' and no separate call is needed. Attacks
+that corrupt a redeemer of any running script (e.g.
+"Convex.ThreatModel.InvalidScriptPurpose", which targets a key output)
+still want the weaker, transaction-wide check.
+-}
+anyGuardedOutputSuchThat :: (Output -> Bool) -> ThreatModel Output
+anyGuardedOutputSuchThat p = do
+  outputs <- filter p <$> guardedScriptOutputs
+  threatPrecondition $ ensure (not $ null outputs)
+  pickAny outputs
+
+-- | Pick any output that 'guardedScriptOutputs' admits.
+anyGuardedOutput :: ThreatModel Output
+anyGuardedOutput = anyGuardedOutputSuchThat (const True)
 
 -- | Get the inputs from the original transaction.
 getTxInputs :: ThreatModel [Input]

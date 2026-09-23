@@ -9,42 +9,136 @@ code as of `feat/improvements`.
 
 ## Design
 
-- [ ] **`requireScriptExecution` accepts any redeemer, not just the target
-  output's guardian** (`ThreatModel.hs`). The output-mutation attacks it
-  gates only need *some* Plutus script to run, so on a transaction whose sole
-  script is, say, a thread-token minting policy that never looks at outputs,
-  while a key input is paid into spending validator V for the first time,
-  mutating the V output "still validates" vacuously and is reported as a
-  vulnerability of V. No scenario in the repo triggers this today (the
-  RewardWithdrawal validator does inspect its outputs). Options: require some
-  redeemer's script hash to equal the target output's payment credential, or
-  document that such setup transactions belong in `acceptedFindings`.
+## ThreatModelsFor redesign (agreed, not yet implemented)
 
-- [ ] **Replace the `usesDefaultTms` name-comparison heuristic with an
-  explicit signal** (`TestingInterface.hs`). Recognizing "did the user
-  override `threatModels`?" by comparing name lists (a) evaluates
-  `defaultThreatModelsExcluding`, so an unnamed model in
-  `expectedVulnerabilities`/`acceptedFindings` hits the "Unexpected unnamed
-  threat model" error even for a fully-overridden instance, and (b)
-  misclassifies an explicit list that happens to equal the default, silently
-  dropping its coverage claim. Express the intent in the class instead, e.g.
-  a defaulted `threatModelsAreExplicit :: Bool` or a `ThreatModelSelection`
-  type.
+Supersedes the former "`usesDefaultTms` heuristic" and "key the outcome map
+by group" items, which were symptoms. Agreed September 2026 after reviewing
+the class against the user journey rather than against this repo's own
+fixtures (those are all post-triage, several of them testing the harness
+itself, so they are not evidence of how the class should read).
 
-- [ ] **Key the shared threat-model outcome map by group, not just name**
-  (`TestingInterface.hs`, `positiveTest*`/`tmRecord`). Outcomes are collected
-  in one map keyed by the model's `Named` name, so a parameterized variant in
-  `acceptedFindings`/`expectedVulnerabilities` sharing a name with an
-  explicitly listed threat model (e.g. `largeValueAttackWith 10` vs
-  `largeValueAttackWith 1000` — both "Large Value Attack") leaks its
-  `TMFailed` outcomes into the "Threat models" test case and fails it, while
-  `alreadyFailed` then suppresses the innocent listed model. Mitigated today
-  (the default list excludes same-named models), but key by (group, name) or
-  reject duplicate names at setup.
+**The journey the class has to serve.** A user starts with an empty instance
+and all defaults, reads the results, and triages each model into a slot.
+Later the script evolves, or the harness changes what "applies" means (see
+`43ee17c0`, which made the output-mutation attacks start applying to
+withdrawal transactions), and the run must show clearly *what* changed and
+*why*.
+
+### One list, expectation per entry
+
+Replaces `threatModels` / `expectedVulnerabilities` / `acceptedFindings`:
+
+```haskell
+resists        tm          -- must apply, must resist (a coverage claim)
+ifApplicable   tm          -- run it, report, never fail (the untriaged default)
+notApplicable  tm "why"    -- must NOT apply; tell me if it starts
+vulnerableTo   tm "why"    -- must be detected; "resolved" when it stops
+accepts        tm "why"    -- informational only
+```
+
+Default: `ifApplicable` over every model in `allThreatModels`.
+
+This deletes `usesDefaultTms` outright rather than replacing it: leniency
+becomes a property of the entry, stated by the user, instead of something
+the runner infers by comparing name lists against an evaluated default. It
+also makes two things expressible that are not today — a hand-picked model
+that is allowed not to apply, and a reviewed "does not apply here" verdict.
+The latter is the slot 9 fixtures currently fake with `threatModels = []`
+plus a prose comment, which throws away a prediction that can later break.
+
+The `"why"` strings travel into the summary and the NDJSON. Today every
+triage rationale lives in Haskell comments (`AikenBankSpec` has six lines
+justifying one accepted finding) where no report can reach it.
+
+### Attribute the fault
+
+Only one cell below is the contract's fault; most red is a stale
+declaration. Every failure names which of the three it is:
+
+| | detected | blocked | never applied | never attacked / errored |
+|---|---|---|---|---|
+| `resists` | FAIL **contract** | pass | FAIL **declaration** | FAIL **setup** |
+| `ifApplicable` | FAIL **contract** (triage me) | pass | report | warn |
+| `notApplicable` | FAIL **contract**, note stale decl. | FAIL **declaration** | pass | pass |
+| `vulnerableTo` | pass | FAIL **declaration** (resolved) | FAIL **declaration** | FAIL **setup** |
+| `accepts` | report | warn (stale) | report | report |
+
+A resolved `vulnerableTo` still fails — a green CI would be a lie and the
+programmer must act — but the message must say the contract improved and the
+instance is what needs editing. Compare today's, which reads as if the
+attack failed:
+
+```
+Expected vulnerability NOT found in 100 tested tests
+```
+
+with:
+
+```
+RESOLVED - this vulnerability is no longer detected (100/100 attacks blocked).
+Good news for the contract; this declaration is now stale.
+DECLARATION: move it from 'vulnerableTo' to 'resists', or remove it.
+Declared because: "CTF exercise ships with this bug deliberately"
+```
+
+`accepts` never fails: it claims nothing, so green is not a lie there.
+
+### Reporting mechanics
+
+- Lead each failure body with a greppable `CONTRACT:` / `DECLARATION:` /
+  `SETUP:` label.
+- Keep the Tasty groups keyed by slot, **not** by fault. Grouping by fault
+  would migrate a model between groups as its outcome changes, wrecking the
+  run-to-run diffability this whole design is for.
+- Add a `fault` field to the streaming JSON beside the `category` field, so
+  dashboards can route contract regressions separately from declarations
+  that need updating.
+
+### Prerequisite: stable identity
+
+Diffing runs over time needs a key that is not a display string. Today
+`ThreatModelResults` is keyed by the bare `Named` name, parameterized
+variants share one (`largeValueAttackWith 10` vs `1000` are both "Large
+Value Attack"), names are `Maybe` and get patched positionally by
+`nameFallbacks` behind a partial `modelName` that `error`s, and
+`defaultThreatModelsExcluding` matches by name across the
+parameterless/parameterized boundary. Give models a `ThreatModelId` distinct
+from the display name and key the outcome map, the exclusion match and the
+CLI filter on it.
+
+### Decided edge cases
+
+- `notApplicable` + detected: lead with the contract finding (the urgent
+  one), note the stale declaration second.
+- `ifApplicable` + detected on day one: red is correct even before any
+  triage; word it as a triage prompt, not an accusation. An empty instance
+  is a red starting state by design.
+
+### Out of scope
+
+Detecting that a model is *new* (added to `allThreatModels` by a library
+release) needs cross-run memory. Rejected: a checked-in baseline file rots
+and adds review churn. New models get called out in release notes instead.
 
 ## Cleanups
 
 ## Deferred by decision (revisit conditions, not bugs)
+
+- **An output-mutation model for outputs policed by another script**: the
+  tightened `guardedScriptOutputs` precondition matches an output against
+  its own payment credential, so it drops the cases the old
+  transaction-wide `requireScriptExecution` caught where a *different*
+  running script is the one responsible for the output - a validator V
+  paying onward to an unrelated script W, or a thread-token minting policy
+  vetting the datum and value paid into a validator. Both are real
+  vulnerabilities if that script's output check is buggy, and both are now
+  skipped. They are a different accusation from "W failed to protect its
+  own output", which is why they were not folded back into these models;
+  the harness cannot tell statically which running script inspects which
+  output. Revisit as a model of its own if a use-case routes funds between
+  scripts or enforces initial output state from a minting policy. (Note
+  the multi-validator case is *not* affected: there the policy id and the
+  validator hash are equal, so the output still matches.)
 
 - **Token sourcing in `rebalanceAndSign`** (make a negative native-token
   residual satisfiable by adding wallet-owned UTxOs holding that token as
