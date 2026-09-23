@@ -162,15 +162,3 @@ hasConstrInlineDatum output =
   case getInlineDatum output of
     Just (ScriptDataConstructor{}) -> True
     _ -> False
-
--- | Extract the inline datum from an output, if present.
-getInlineDatum :: Output -> Maybe ScriptData
-getInlineDatum output =
-  case datumOfTxOut (outputTxOut output) of
-    TxOutDatumInline _ hashableData -> Just (getScriptData hashableData)
-    _ -> Nothing
-
--- | Wrap a @ScriptData@ as an inline datum for use with @changeDatumOf@.
-toInlineDatum :: ScriptData -> Datum
-toInlineDatum sd =
-  TxOutDatumInline BabbageEraOnwardsConway (unsafeHashableScriptData sd)

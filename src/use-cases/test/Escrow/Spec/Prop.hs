@@ -250,7 +250,7 @@ instance ThreatModelsFor EscrowModel where
     , (timeBoundManipulation, "The validity range's lower bound can be widened to slot 0: Redeem only checks 'to deadline `contains` validRange', which constrains the upper bound and leaves the lower one free.")
     ]
 
--- | Shared reason: used by 13 entries in the instance above.
+-- | Shared reason: used by several entries in the instance above.
 noScriptContinuation :: String
 noScriptContinuation = "Needs a script input and an attackable script output in one transaction. Contribute has the output but spends no script input; redeem and refund spend a script input but produce no continuation output."
 

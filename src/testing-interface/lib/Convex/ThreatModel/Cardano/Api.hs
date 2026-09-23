@@ -16,6 +16,10 @@ module Convex.ThreatModel.Cardano.Api (
   addressOfTxOut,
   valueOfTxOut,
   datumOfTxOut,
+  txBodyContentOf,
+  bodyContentInputs,
+  bodyContentReferenceInputs,
+  bodyContentOutputs,
   referenceScriptOfTxOut,
 
   -- * Redeemer and script data
@@ -48,8 +52,6 @@ module Convex.ThreatModel.Cardano.Api (
   mockWalletHashes,
   detectSigningWallet,
   txRequiredSigners,
-  txInputs,
-  txReferenceInputs,
   txOutputs,
   txRunsPlutusScript,
   runningPlutusScriptHashes,
@@ -441,23 +443,29 @@ txRequiredSigners :: Tx Era -> [Hash PaymentKey]
 txRequiredSigners (Tx (ShelleyTxBody _ body _ _ _ _) _) =
   map (PaymentKeyHash . coerceKeyRole) . Set.toList $ Conway.ctbReqSignerHashes body
 
-txInputs :: Tx Era -> [TxIn]
-txInputs tx = map fst $ txIns body
- where
-  body = getTxBodyContent $ getTxBody tx
+{- | The transaction's body content. Rebuilding this deserialises every
+output's datum and reference script, so a caller that needs more than one
+projection of the same transaction should take the body content once and
+use the @bodyContent*@ accessors (see 'Convex.ThreatModel.ThreatModelEnv',
+which caches it per env).
+-}
+txBodyContentOf :: Tx Era -> TxBodyContent ViewTx Era
+txBodyContentOf = getTxBodyContent . getTxBody
 
-txReferenceInputs :: Tx Era -> [TxIn]
-txReferenceInputs tx =
+bodyContentInputs :: TxBodyContent ViewTx Era -> [TxIn]
+bodyContentInputs = map fst . txIns
+
+bodyContentReferenceInputs :: TxBodyContent ViewTx Era -> [TxIn]
+bodyContentReferenceInputs body =
   case txInsReference body of
     TxInsReferenceNone -> []
     TxInsReference _ txins _ -> txins
- where
-  body = getTxBodyContent $ getTxBody tx
+
+bodyContentOutputs :: TxBodyContent ViewTx Era -> [TxOut CtxTx Era]
+bodyContentOutputs = txOuts
 
 txOutputs :: Tx Era -> [TxOut CtxTx Era]
-txOutputs tx = txOuts body
- where
-  body = getTxBodyContent $ getTxBody tx
+txOutputs = bodyContentOutputs . txBodyContentOf
 
 -- | Check if a value is less or equal than another value.
 leqValue :: Value -> Value -> Bool
@@ -736,6 +744,9 @@ rebalanceAndSign chainState wallet tx utxo = do
   eraHistory <- Convex.Class.queryEraHistory
 
   let walletAddr = Wallet.addressInEra networkId wallet
+      -- Hashing every key witness, so computed once and shared by the fee
+      -- estimate and the re-signing step below.
+      originalSigners = txSigners tx
 
   -- First, recalculate execution units for all scripts in the transaction.
   -- This is necessary because TxModifier may add scripts with ExecutionUnits
@@ -818,7 +829,7 @@ rebalanceAndSign chainState wallet tx utxo = do
           -- The witness count matches the re-signing step at the end: one vkey
           -- witness per original signer (at least 1, so an unsigned transaction
           -- doesn't get its fee underestimated).
-          witnessCount = fromIntegral (max 1 (length (txSigners tx)))
+          witnessCount = fromIntegral (max 1 (length originalSigners))
 
           -- The minimum fee for the transaction with the given outputs: sized
           -- over the collateral shape, with the fee field itself at its
@@ -894,11 +905,10 @@ rebalanceAndSign chainState wallet tx utxo = do
               -- Re-sign (strip old signatures and add new one)
               let Tx finalBody _ = finalTx
                   unsignedTx = makeSignedTransaction [] finalBody
-                  signers = txSigners tx
                   sign hash tx' = case lookup hash mockWalletHashes of
                     Just w -> Right $ Wallet.signTx w tx'
                     Nothing -> Left "Transaction was signed by an unknown wallet"
-              pure $ foldrM sign unsignedTx signers
+              pure $ foldrM sign unsignedTx originalSigners
 
 {- | Update execution units in a transaction by evaluating all scripts.
 

@@ -461,6 +461,6 @@ utxosAt scriptHash = do
     h == C.toShelleyScriptHash scriptHash
   isScriptAddress _ = False
 
--- | Shared reason: used by 3 entries in the instance above.
+-- | Shared reason: used by several entries in the instance above.
 singleStateUtxo :: String
 singleStateUtxo = "Needs a second script input or a second UTxO at the script address; the game is a single-state-UTxO contract."

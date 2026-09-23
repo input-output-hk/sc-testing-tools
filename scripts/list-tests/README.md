@@ -203,12 +203,12 @@ so the extension can label/icon it:
 | `not-applicable-group`            | the `Not applicable` group                                |
 | `threat-model`                    | the individual leaves under **any** of the above groups  |
 
-> **Note:** expected-vulnerability leaves are structurally identical to
-> threat-model leaves (both are rendered via `getThreatModelName`, both are
-> `testCaseSteps`). They therefore share `role: threat-model`; the semantic
-> difference between "expected NOT to find a vuln" and "expected to FIND a vuln"
-> is carried only by the **parent group's** role. There is no separate
-> `expected-vulnerability` leaf role. Nodes with no special role omit `role`.
+> **Note:** the leaves of all five slots are structurally identical (each is
+> rendered via `getThreatModelName`, each is a `testCaseSteps`). They therefore
+> all share `role: threat-model`, and which slot a model was declared in — and
+> so what the suite claims about it — is carried only by the **parent group's**
+> role. There are no per-slot leaf roles. Nodes with no special role omit
+> `role`.
 
 ### The three node classes
 
@@ -237,8 +237,14 @@ so the extension can label/icon it:
      ├── "Expected vulnerabilities"   (group, ONLY if expectedVulnerabilities non-empty, role=expected-vulnerabilities-group)
      ├── "Accepted findings"          (group, ONLY if acceptedFindings non-empty, role=accepted-findings-group)
      └── "Not applicable"             (group, ONLY if notApplicable non-empty, role=not-applicable-group)
-           ├── <slot[0]>               (leaf, role=threat-model)
-           └── ...                     (one per list element, in list order)
+
+   Every one of those five groups has the same children — one leaf per
+   element of its slot, in list order:
+
+   ```
+     "<any of the five groups>"
+       ├── <slot[0]>                   (leaf, role=threat-model)
+       └── ...                         (one per list element, in list order)
    ```
 
    - `<groupName>` is the string passed to `propRunActions` /

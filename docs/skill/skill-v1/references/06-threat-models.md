@@ -13,8 +13,8 @@
 > Every subagent dispatched from this skill MUST receive this rule verbatim in its prompt.
 
 How to pick built-in threat models for the contract under test, how
-to wire them into the `ThreatModelsFor` instance, and the inverted
-the triaged slots' semantics. Loaded by subagents in the
+to wire them into the `ThreatModelsFor` instance, and the triaged
+slots' semantics. Loaded by subagents in the
 Implemented phase and in the Green-maintenance verbs **add threat
 model** and **swap threat model**.
 

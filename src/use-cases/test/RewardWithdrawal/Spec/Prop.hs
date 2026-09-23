@@ -115,11 +115,10 @@ instance TestingInterface RewardWithdrawalModel where
 instance ThreatModelsFor RewardWithdrawalModel where
   -- The 'Lock' transactions are the interesting ones here: they spend no
   -- script input at all, so the output-targeting attacks below only apply
-  -- because the harness recognises the zero-lovelace withdrawal's Rewarding
-  -- redeemer as a running validator ('requireScriptExecution'). The validator
+  -- because 'guardedScriptOutputs' counts the zero-lovelace withdrawal's
+  -- Rewarding script as guarding outputs at its own address. The validator
   -- vets each lock output's datum constructor, owner, amount and value, so
   -- these attacks are expected to be rejected.
-  --
   threatModels =
     [ signatoryRemoval
     , invalidDatumIndexAttack
@@ -151,6 +150,6 @@ instance ThreatModelsFor RewardWithdrawalModel where
       )
     ]
 
--- | Shared reason: used by 5 entries in the instance above.
+-- | Shared reason: used by several entries in the instance above.
 noScriptInput :: String
 noScriptInput = "Needs a script input, and the withdraw-zero pattern never spends one - every input is key-owned."

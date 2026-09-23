@@ -84,6 +84,10 @@ module Convex.ThreatModel (
   guardedScriptOutputs,
   anyGuardedOutput,
   anyGuardedOutputSuchThat,
+  anyGuardedOutputWithInlineDatum,
+  hasInlineDatum,
+  getInlineDatum,
+  toInlineDatum,
   failPrecondition,
 
   -- ** Validation
@@ -104,6 +108,7 @@ module Convex.ThreatModel (
 
   -- ** Random generation
   forAllTM,
+  shrinkPositive,
   pickAny,
   anySigner,
   anyInput,
@@ -200,6 +205,12 @@ data ThreatModelEnv = ThreatModelEnv
   env, shared between all its users. The data constructor is not exported;
   'mkThreatModelEnv' maintains the invariant.
   -}
+  , currentTxBodyContent :: TxBodyContent ViewTx Era
+  {- ^ The body content of 'currentTx'. Deliberately lazy and shared, like
+  'currentUTxOs': rebuilding it deserialises every output's datum and
+  reference script, and each model that asks for the transaction's inputs
+  or outputs would otherwise redo that for the same env.
+  -}
   , runningPlutusScripts :: Set.Set Ledger.ScriptHash
   {- ^ The Plutus scripts that run in 'currentTx' (see
   'guardedScriptOutputs'). Deliberately lazy and shared, like
@@ -229,6 +240,7 @@ mkThreatModelEnv tx chainState =
   ThreatModelEnv
     { currentTx = tx
     , currentUTxOs = chainStateUTxO chainState
+    , currentTxBodyContent = txBodyContentOf tx
     , runningPlutusScripts = runningPlutusScriptHashes (chainStateLedgerUTxO chainState) tx
     , currentChainState = chainState
     }
@@ -859,7 +871,9 @@ originalTx = currentTx <$> getThreatModelEnv
 
 -- | Get the outputs from the original transaction.
 getTxOutputs :: ThreatModel [Output]
-getTxOutputs = zipWith (flip Output . TxIx) [0 ..] . txOutputs <$> originalTx
+getTxOutputs =
+  zipWith (flip Output . TxIx) [0 ..] . bodyContentOutputs . currentTxBodyContent
+    <$> getThreatModelEnv
 
 {- | The transaction's outputs whose payment credential is the hash of a
 Plutus script that runs in this transaction.
@@ -878,8 +892,8 @@ point, and restricting this to Spending purposes would break that pattern,
 as there are no script inputs there at all. By the same token a
 multi-validator whose minting policy id equals its spending hash counts as
 guarding its own outputs. Conversely an output policed by some /other/
-running script is not matched and those attacks skip it; that lost case is
-recorded in @TODO.md@.
+running script is not matched and those attacks skip it, which is a
+known and accepted gap.
 
 Empty when no Plutus script runs at all, which is what lets
 'anyGuardedOutputSuchThat' subsume 'requireScriptExecution'.
@@ -911,15 +925,48 @@ anyGuardedOutputSuchThat p = do
 anyGuardedOutput :: ThreatModel Output
 anyGuardedOutput = anyGuardedOutputSuchThat (const True)
 
+{- | Pick any output that 'guardedScriptOutputs' admits and that carries an
+inline datum, returning the output together with that datum.
+
+Every datum-mutating attack starts here, so the predicate and the
+extraction are one operation: splitting them left each call site with a
+@Nothing@ branch the predicate had already ruled out.
+-}
+anyGuardedOutputWithInlineDatum :: ThreatModel (Output, ScriptData)
+anyGuardedOutputWithInlineDatum = do
+  target <- anyGuardedOutputSuchThat hasInlineDatum
+  case getInlineDatum target of
+    Just datum -> pure (target, datum)
+    -- Unreachable: 'hasInlineDatum' is exactly the guard for this case.
+    Nothing -> failPrecondition "Script output missing inline datum"
+
+-- | Does this output carry an inline datum?
+hasInlineDatum :: Output -> Bool
+hasInlineDatum output =
+  case datumOfTxOut (outputTxOut output) of
+    TxOutDatumInline{} -> True
+    _ -> False
+
+-- | The output's inline datum, if it has one.
+getInlineDatum :: Output -> Maybe ScriptData
+getInlineDatum output =
+  case datumOfTxOut (outputTxOut output) of
+    TxOutDatumInline _ hashableData -> Just (getScriptData hashableData)
+    _ -> Nothing
+
+-- | Wrap a 'ScriptData' as an inline datum, for use with 'changeDatumOf'.
+toInlineDatum :: ScriptData -> Datum
+toInlineDatum sd =
+  TxOutDatumInline BabbageEraOnwardsConway (unsafeHashableScriptData sd)
+
 -- | Get the inputs from the original transaction.
 getTxInputs :: ThreatModel [Input]
 getTxInputs = do
   env <- getThreatModelEnv
-  let tx = currentTx env
-      UTxO utxos = currentUTxOs env
+  let UTxO utxos = currentUTxOs env
   pure
     [ Input txout i
-    | i <- txInputs tx
+    | i <- bodyContentInputs (currentTxBodyContent env)
     , Just txout <- [Map.lookup i utxos]
     ]
 
@@ -927,11 +974,10 @@ getTxInputs = do
 getTxReferenceInputs :: ThreatModel [Input]
 getTxReferenceInputs = do
   env <- getThreatModelEnv
-  let tx = currentTx env
-      UTxO utxos = currentUTxOs env
+  let UTxO utxos = currentUTxOs env
   pure
     [ Input txout i
-    | i <- txReferenceInputs tx
+    | i <- bodyContentReferenceInputs (currentTxBodyContent env)
     , Just txout <- [Map.lookup i utxos]
     ]
 
@@ -948,6 +994,13 @@ getTxRequiredSigners = TM.txRequiredSigners <$> originalTx
 -- | Generate a random value. Takes a QuickCheck generator and a `shrink` function.
 forAllTM :: (Show a) => Gen a -> (a -> [a]) -> ThreatModel a
 forAllTM g s = Generate g s pure
+
+{- | Shrink towards 1, never below it: the counts these attacks generate are
+sizes, and a size of zero is not a smaller failing case but a different
+(no-op) one.
+-}
+shrinkPositive :: Int -> [Int]
+shrinkPositive = filter (>= 1) . shrinkIntegral
 
 -- | Pick a random input
 anyInput :: ThreatModel Input

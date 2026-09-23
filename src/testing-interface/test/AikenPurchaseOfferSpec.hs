@@ -822,10 +822,10 @@ aikenPurchaseOfferTests runOpts =
         ]
     ]
 
--- | Shared reason: used by 12 entries in the instance above.
+-- | Shared reason: used by several entries in the instance above.
 noScriptContinuation :: String
 noScriptContinuation = "Needs a script input and an attackable script output in one transaction. CreateOffer pays into the script but spends no script input; FulfillOffer spends the offer but produces no continuation output."
 
--- | Shared reason: used by 3 entries in the instance above.
+-- | Shared reason: used by several entries in the instance above.
 singleStateUtxo :: String
 singleStateUtxo = "Needs a second script input or a second UTxO at the script address; the offer is a single state UTxO."

@@ -516,6 +516,6 @@ closeAuctionPBT params curSlot highestBidder highestBidAmount = do
   _ <- tryBalanceAndSubmit mempty MockWallet.w1 payoutTx TrailingChange []
   pure ()
 
--- | Shared reason: used by 2 entries in the instance above.
+-- | Shared reason: used by several entries in the instance above.
 singleStateUtxo :: String
 singleStateUtxo = "Needs a second script input or a second UTxO at the script address; the auction locks a single state UTxO."

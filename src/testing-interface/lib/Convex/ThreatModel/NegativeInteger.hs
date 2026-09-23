@@ -64,12 +64,7 @@ negativeIntegerAttack  -- Negate all integers in the datum
 -}
 negativeIntegerAttack :: ThreatModel ()
 negativeIntegerAttack = Named "Negative Integer Attack" $ do
-  target <- anyGuardedOutputSuchThat hasInlineDatum
-
-  -- Extract the inline datum (we know it exists due to the filter)
-  originalDatum <- case getInlineDatum target of
-    Nothing -> failPrecondition "Script output missing inline datum"
-    Just originalDatum' -> pure originalDatum'
+  (target, originalDatum) <- anyGuardedOutputWithInlineDatum
 
   let negatedDatum = negateIntegers originalDatum
 
@@ -119,22 +114,3 @@ negateIntegers (ScriptDataMap entries) =
 negateIntegers (ScriptDataNumber n) =
   ScriptDataNumber (negate n)
 negateIntegers x = x -- bytes, etc. unchanged
-
--- | Check if an output has an inline datum.
-hasInlineDatum :: Output -> Bool
-hasInlineDatum output =
-  case datumOfTxOut (outputTxOut output) of
-    TxOutDatumInline{} -> True
-    _ -> False
-
--- | Extract the inline datum from an output if present.
-getInlineDatum :: Output -> Maybe ScriptData
-getInlineDatum output =
-  case datumOfTxOut (outputTxOut output) of
-    TxOutDatumInline _ hashableData -> Just (getScriptData hashableData)
-    _ -> Nothing
-
--- | Convert a @ScriptData@ to an inline @Datum@ (TxOutDatum CtxTx Era).
-toInlineDatum :: ScriptData -> Datum
-toInlineDatum sd =
-  TxOutDatumInline BabbageEraOnwardsConway (unsafeHashableScriptData sd)

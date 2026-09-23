@@ -100,7 +100,7 @@ import Test.Tasty.HUnit (assertFailure, testCaseSteps)
 
 import Cardano.Api qualified as C
 import Cardano.Ledger.Core qualified as L
-import Control.Exception (SomeException, catch, throwIO, try)
+import Control.Exception (SomeException, catch, evaluate, throwIO, try)
 import Control.Lens ((&), (.~), (^.))
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.Reader (ReaderT (..))
@@ -352,21 +352,15 @@ mock wallets ('Convex.Wallet.MockWallet.mockWallets') as @"Wallet 1".."Wallet
 10"@.
 -}
 
-{- | The default 'threatModels' list: every parameterless threat model except
-the given ones (used to exclude a model's 'expectedVulnerabilities' and
-'acceptedFindings'). Kept as a top-level function so the test runner can
-recognise a model that uses the default list: an explicitly overridden list
-is a coverage claim (a listed model that never applies fails the suite),
-whereas the default list means "run whatever applies" and tolerates models
-whose preconditions never hold.
+{- | The default 'candidateModels' survey: every parameterless threat model
+except the given ones, which is how a slot excludes the models it has
+already spoken for.
 
 Models are compared by name, totally: an unnamed model is never equal to
 anything (not even another unnamed model), so an unnamed entry in the
-excluded list simply excludes nothing. This function is forced whenever a
-test case checks for the default list, so it must not error on unnamed
-models - they are legal in 'expectedVulnerabilities' and 'acceptedFindings'
-(they get index-based fallback names before anything runs, see
-'nameFallbacks') even when 'threatModels' is overridden.
+excluded list simply excludes nothing. It must not error on unnamed models -
+they are legal in the triaged slots, where they get index-based fallback
+names before anything runs (see 'nameFallbacks').
 -}
 defaultThreatModelsExcluding :: [ThreatModel ()] -> [ThreatModel ()]
 defaultThreatModelsExcluding excluded = deleteFirstsBy eqName allThreatModels excluded
@@ -451,19 +445,19 @@ data ThreatModelId = ThreatModelId
 
 type ThreatModelResults = Map.Map ThreatModelId [(ThreatModelOutcome, [String])]
 
-{- | A model together with the reason its slot records for it, where that
-slot carries one. 'threatModels' and 'candidateModels' declare no reason;
-the three triaged slots require one.
+{- | A model together with the reason its slot records for it. The three
+triaged slots require a reason; 'threatModels' and 'candidateModels' carry
+none, and the test cases built for those two never read the field.
 -}
-type DeclaredModel = (ThreatModel (), Maybe String)
+type DeclaredModel = (ThreatModel (), String)
 
 -- | Models from a slot that carries no reason.
 withoutReason :: [ThreatModel ()] -> [DeclaredModel]
-withoutReason = map (\tm -> (tm, Nothing))
+withoutReason = map (\tm -> (tm, ""))
 
 -- | Models from a slot that carries a reason, given fallback names.
 declaredWith :: String -> [(ThreatModel (), String)] -> [DeclaredModel]
-declaredWith prefix ms = zip (nameFallbacks prefix (map fst ms)) (map (Just . snd) ms)
+declaredWith prefix ms = zip (nameFallbacks prefix (map fst ms)) (map snd ms)
 
 -- | Try up to 100 times to generate a value satisfying a predicate
 suchThatMaybe :: Gen a -> (a -> Bool) -> Gen (Maybe a)
@@ -490,9 +484,10 @@ data RunOptions = RunOptions
   If @Nothing@, negative tests run normally. Default: @Nothing@.
   -}
   , threatModelFilter :: [String]
-  {- ^ If non-empty, run only threat models whose names start with any value in this list.
-  This filter applies only to 'threatModels' and not to 'expectedVulnerabilities'.
-  If empty, all threat models run. Default: @[]@.
+  {- ^ If non-empty, run only threat models whose names start with any value
+  in this list. The filter applies to every slot of 'ThreatModelsFor', so a
+  narrowed run builds test cases for the matching models only. If empty, all
+  threat models run. Default: @[]@.
   -}
   }
 
@@ -532,16 +527,15 @@ modelName tm =
     (error "modelName: unnamed threat model - models must go through nameFallbacks before running")
     (getThreatModelName tm)
 
-filterThreatModelsByOptions :: RunOptions -> [ThreatModel ()] -> [ThreatModel ()]
-filterThreatModelsByOptions RunOptions{threatModelFilter} =
-  filter matchesThreatModelFilter
- where
-  matchesThreatModelFilter tm =
-    case threatModelFilter of
-      [] -> True
-      names ->
-        let tmName = modelName tm
-         in any (`isPrefixOf` tmName) names
+{- | Does this model pass @--threat-model-name@? An empty filter admits
+everything; otherwise the model's rendered name must start with one of the
+given prefixes.
+-}
+matchesThreatModelFilter :: RunOptions -> ThreatModel () -> Bool
+matchesThreatModelFilter RunOptions{threatModelFilter} tm =
+  case threatModelFilter of
+    [] -> True
+    names -> any (`isPrefixOf` modelName tm) names
 
 {- | Main property for testing a testing interface.
 Generates random action sequences and checks that the implementation matches the model.
@@ -561,11 +555,14 @@ propRunActionsWithOptions groupName opts =
   withFrozenCallStack $
     withSrcLoc $
       askOption $ \(recorder :: TraceRecorder) ->
-        let tms = withoutReason (filterThreatModelsByOptions opts (nameFallbacks "Threat model" (threatModels @state)))
-            cands = withoutReason (filterThreatModelsByOptions opts (nameFallbacks "Candidate model" (candidateModels @state)))
-            evs = declaredWith "Expected vulnerability" (expectedVulnerabilities @state)
-            afs = declaredWith "Accepted finding" (acceptedFindings @state)
-            nas = declaredWith "Not applicable" (notApplicable @state)
+        -- Fallback names are assigned before filtering, so an unnamed model's
+        -- index does not shift with the filter.
+        let keep = filter (matchesThreatModelFilter opts . fst)
+            tms = keep (withoutReason (nameFallbacks "Threat model" (threatModels @state)))
+            cands = keep (withoutReason (nameFallbacks "Candidate model" (candidateModels @state)))
+            evs = keep (declaredWith "Expected vulnerability" (expectedVulnerabilities @state))
+            afs = keep (declaredWith "Accepted finding" (acceptedFindings @state))
+            nas = keep (declaredWith "Not applicable" (notApplicable @state))
             {- The one place a model is tagged with what the suite claims
             about it: the claim decides how the model's outcomes are tallied
             and reported, which Tasty group its test
@@ -977,11 +974,17 @@ positiveTestFast opts mGetTmResultsRef tms = do
           let tmid = ThreatModelId category (modelName tm)
           ((outcome, traceEntries, monitors), tmFinalState) <-
             runMockchainIO (runThreatModelCheckTraced AutoSign tm envs) params state0
-          pure (tmid, category, outcome, traceEntries, mcsCoverageData tmFinalState, monitors)
+          -- Summarise here, not at the use site. This path keeps no trace,
+          -- so nothing downstream reads the entries - but each one holds two
+          -- transactions and two UTxO sets, and left as a thunk they would
+          -- stay reachable from the results 'IORef' until the per-model test
+          -- cases run, long after the last iteration.
+          summary <- evaluate (summarizeThreatModelIteration outcome traceEntries)
+          pure (tmid, summary, mcsCoverageData tmFinalState, monitors)
 
-    let tmResults = [(n, summarizeThreatModelIteration o entries) | (n, _, o, entries, _, _) <- tmResultsWithCov]
-        tmCoverage = mconcat [cov | (_, _, _, _, cov, _) <- tmResultsWithCov]
-        tmMonitors = [m | (_, _, _, _, _, m) <- tmResultsWithCov]
+    let tmResults = [(n, summary) | (n, summary, _, _) <- tmResultsWithCov]
+        tmCoverage = mconcat [cov | (_, _, cov, _) <- tmResultsWithCov]
+        tmMonitors = [m | (_, _, _, m) <- tmResultsWithCov]
 
     pure (finalState, tmResults, tmCoverage, tmMonitors)
 
@@ -1011,9 +1014,11 @@ errors as warnings, record the summary, and dispatch the two cases that mean
 the same thing in every slot — no transactions at all, and none the model
 could be tried on.
 
-Only the third case differs by slot, so that is all a caller supplies. The
-summary is recorded here, before the verdict runs, so that a verdict which
-fails can re-record it with a fault (see 'failWithFault') and win.
+Only the tested case differs by slot, so that is all a caller supplies:
+zero coverage is reported the same way everywhere, by 'reportZeroCoverage',
+which is where the per-slot meaning of "nothing applied" lives. The summary
+is recorded here, before the verdict runs, so that a verdict which fails
+can re-record it with a fault (see 'failWithFault') and win.
 -}
 perModelCase
   :: ThreatModelCategory
@@ -1023,10 +1028,8 @@ perModelCase
   -> ThreatModel ()
   -> ((String -> IO ()) -> TMRecorder -> String -> ThreatModelSummary -> [(ThreatModelOutcome, [String])] -> IO ())
   -- ^ What to do when the model was actually tested
-  -> ((String -> IO ()) -> TMRecorder -> String -> ThreatModelSummary -> [(ThreatModelOutcome, [String])] -> IO ())
-  -- ^ What to do when nothing could be tested
   -> TestTree
-perModelCase claim getTmResultsRef groupName tm onTested onUntested =
+perModelCase claim getTmResultsRef groupName tm onTested =
   let name = modelName tm
       key = groupName <> "/" <> name
    in askOption $ \(recorder :: TMRecorder) ->
@@ -1046,7 +1049,7 @@ perModelCase claim getTmResultsRef groupName tm onTested onUntested =
             then step "No tests were generated by positive tests"
             else
               if tested == 0
-                then onUntested step recorder key summary outcomeEntries
+                then reportZeroCoverage step recorder key claim summary outcomeEntries
                 else onTested step recorder key summary outcomeEntries
 
 -- | Create a test case for displaying threat model results
@@ -1061,11 +1064,9 @@ threatModelTestCase
   -> DeclaredModel
   -- ^ The threat model, and the reason its slot records
   -> TestTree
-threatModelTestCase claim getTmResultsRef groupName (tm, _mReason) =
-  perModelCase claim getTmResultsRef groupName tm onTested onUntested
+threatModelTestCase claim getTmResultsRef groupName (tm, _noReason) =
+  perModelCase claim getTmResultsRef groupName tm onTested
  where
-  onUntested step recorder key summary outcomeEntries =
-    reportZeroCoverage step recorder key claim summary outcomeEntries
   onTested step recorder key summary outcomeEntries = do
     let outcomes = map fst outcomeEntries
         ThreatModelSummary{tmsTotal = total, tmsPassed = numPassed} = summary
@@ -1117,14 +1118,10 @@ triagedFindingTestCase
   -> DeclaredModel
   -- ^ The triaged model, and the reason its slot records
   -> TestTree
-triagedFindingTestCase claim getTmResultsRef groupName (tm, mReason) =
-  perModelCase claim getTmResultsRef groupName tm onTested onUntested
+triagedFindingTestCase claim getTmResultsRef groupName (tm, why) =
+  perModelCase claim getTmResultsRef groupName tm onTested
  where
   accepted = claim == Accepted
-  why = fromMaybe "(no reason given)" mReason
-  -- A declaration nothing verified is the same lie in both slots.
-  onUntested step recorder key summary outcomeEntries =
-    reportZeroCoverage step recorder key claim summary outcomeEntries
   onTested step recorder key summary outcomeEntries = do
     let ThreatModelSummary{tmsTotal = total, tmsFailed = numFound, tmsTested = tested} = summary
         validationErrors = distinctValidationErrors outcomeEntries
@@ -1320,15 +1317,9 @@ notApplicableTestCase
   -> DeclaredModel
   -- ^ The threat model declared not to apply, and why
   -> TestTree
-notApplicableTestCase claim getTmResultsRef groupName (tm, mReason) =
-  perModelCase claim getTmResultsRef groupName tm onTested onUntested
+notApplicableTestCase claim getTmResultsRef groupName (tm, why) =
+  perModelCase claim getTmResultsRef groupName tm onTested
  where
-  why = fromMaybe "(no reason given)" mReason
-  -- Zero coverage means something different in every slot, and
-  -- 'zeroCoverageVerdict' is where that lives - including this slot, for
-  -- which never applying is the confirming outcome.
-  onUntested step recorder key summary outcomeEntries =
-    reportZeroCoverage step recorder key claim summary outcomeEntries
   {- Unlike a 'Surveyed' hit, this slot carries a prior: the model was
   recorded as unable to apply here. A detection therefore means two things
   changed at once - the model now applies, and the contract accepted the
@@ -1366,9 +1357,10 @@ vulnerability that it does not; either promise is unchecked when the attack
 was never carried out, whatever the reason:
 
 * 'PreconditionNeverMet': the model does not apply to any generated
-  transaction. For an explicitly listed model that is a fault in the test
-  setup (the suite advertises coverage it cannot have), so it fails. The
-  default list means "run whatever applies", so there it is only reported.
+  transaction. For a model the suite declared - 'Claimed', 'Expected' or
+  'Accepted' - that is a fault in the test setup (it advertises coverage it
+  cannot have), so it fails. A 'Surveyed' model was never declared, so there
+  it is only reported, and for 'NotApplicable' it is the confirming outcome.
 
 * 'AttackNeverCarriedOut': the precondition held somewhere, but every
   attempt hit a Phase 1 invalidation or a rebalancing failure. Per
@@ -1379,10 +1371,10 @@ was never carried out, whatever the reason:
 * 'ModelErrored': the model never got as far as a precondition, so the
   suite learned nothing at all.
 
-In the latter two an explicitly listed model and an expected vulnerability
-fail, naming the distinct reasons so the setup can be fixed; a default-list
-model gets a loud warning instead, since the user did not opt into it and
-failing would block them on a limitation they may not be able to lift.
+In the latter two the declared slots fail, naming the distinct reasons so
+the setup can be fixed; a 'Surveyed' model gets a loud warning instead,
+since the user did not opt into it and failing would block them on a
+limitation they may not be able to lift.
 
 An 'Accepted' finding is judged exactly like an 'Expected' one: the
 acceptance is a declaration too, so a run that never verifies it fails,
@@ -1394,19 +1386,16 @@ that never rebalanced stayed green forever.
 -}
 zeroCoverageVerdict :: ThreatModelCategory -> ThreatModelSummary -> [String] -> Either (Fault, String) [String]
 zeroCoverageVerdict claim summary reasons = case claim of
-  -- The default list means "run whatever applies", so a model that simply
-  -- does not apply to this contract is reported, not failed; the other kinds
-  -- still warn, since the user did not opt in and may not be able to lift a
-  -- harness limitation.
+  -- A surveyed model was never declared, so one that simply does not apply
+  -- to this contract is reported, not failed; the other kinds still warn,
+  -- since the user did not opt in and may not be able to lift a harness
+  -- limitation.
   Surveyed
     | PreconditionNeverMet <- kind -> Right [skippedMessage summary]
     | otherwise ->
         Right $
           ("WARNING: zero attack coverage - " <> headline <> ".")
             : withReasons "  The model provides no evidence about this contract"
-  -- Never applying is exactly what this slot predicts, so it is the passing
-  -- outcome rather than a missing one. (A model that *did* apply is failed
-  -- by 'notApplicableTestCase' before it ever reaches this verdict.)
   -- Never applying is what this slot predicts, so only a precondition miss
   -- confirms it. An environmental skip proves the precondition held at least
   -- once, which falsifies the declaration; an error leaves it unverified.
@@ -1480,9 +1469,19 @@ reportZeroCoverage step recorder key claim summary outcomeEntries =
     $ zeroCoverageVerdict claim summary
     $ modelErrors (map fst outcomeEntries) <> distinctValidationErrors outcomeEntries
 
+{- | Reduce an iteration's trace entries to the outcome and the distinct
+error strings they yielded.
+
+Forcing the result to WHNF forces the strings too, which is what lets a
+caller that has no further use for the entries drop them: they are the only
+thing holding the iteration's transactions and UTxO sets alive.
+-}
 summarizeThreatModelIteration :: ThreatModelOutcome -> [ThreatModelCheckEntry] -> (ThreatModelOutcome, [String])
 summarizeThreatModelIteration outcome entries =
-  (outcome, distinctValidationErrorsFromEntries entries)
+  totalLength `seq` (outcome, msgs)
+ where
+  msgs = distinctValidationErrorsFromEntries entries
+  totalLength = sum (map length msgs)
 
 distinctValidationErrorsFromEntries :: [ThreatModelCheckEntry] -> [String]
 distinctValidationErrorsFromEntries entries =

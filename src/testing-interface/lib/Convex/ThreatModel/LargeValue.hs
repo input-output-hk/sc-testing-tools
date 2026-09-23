@@ -60,7 +60,7 @@ import Convex.ThreatModel
 import Convex.ThreatModel.TxModifier (addPlutusScriptMint, alwaysSucceedsMintingPolicy)
 import Data.ByteString.Char8 qualified as BS
 import GHC.Exts (fromList)
-import Test.QuickCheck (Gen, choose, shrinkIntegral)
+import Test.QuickCheck (Gen, choose)
 
 {- | Default large-value attack. The number of junk tokens is drawn per
 transaction from a curated range, so QuickCheck explores the parameter space
@@ -144,8 +144,6 @@ largeValueAttackWithGen numTokensGen =
 {- | Shrink a positive integer toward 1 (the smallest meaningful value),
 never reaching 0.
 -}
-shrinkPositive :: Int -> [Int]
-shrinkPositive = filter (>= 1) . shrinkIntegral
 
 -- | Coarse bucket for the parameter distribution report.
 bucket :: Int -> String

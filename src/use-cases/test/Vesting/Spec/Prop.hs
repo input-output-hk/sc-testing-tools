@@ -405,6 +405,6 @@ withdrawPBT params scriptHash curSlot ownerWallet amt lockedAmt = do
             (C.lovelaceToValue remaining)
   void $ tryBalanceAndSubmit mempty ownerWallet withdrawTx TrailingChange []
 
--- | Shared reason: used by 3 entries in the instance above.
+-- | Shared reason: used by several entries in the instance above.
 singleStateUtxo :: String
 singleStateUtxo = "Needs a second script input or a second UTxO at the script address; this contract locks a single state UTxO."

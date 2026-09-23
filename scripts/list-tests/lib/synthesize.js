@@ -42,10 +42,7 @@ const PROP_RUN_FNS = new Set(["propRunActions", "propRunActionsWithOptions"]);
 // Mirror of src/testing-interface/lib/Convex/ThreatModel/All.hs :: allThreatModels
 // (19 entries, in order). KEEP IN SYNC: if that Haskell list changes, update this
 // array. Each label is the SOURCE-TEXT form an explicit-list leaf would render via
-// A.elementLabel (so the deleteFirstsBy/expectedVulnerabilities subtraction below
-// can match by exact string). The tokenForgeryAttack entry is the full applied
-// expression, matching how it appears in allThreatModels (and in instances'
-// expectedVulnerabilities lists).
+// A.elementLabel (so the subtraction below can match by exact string).
 const ALL_THREAT_MODELS = [
   "datumListBloatAttack",
   "datumByteBloatAttack",
@@ -63,7 +60,7 @@ const ALL_THREAT_MODELS = [
   "selfReferenceInjection",
   "signatoryRemoval",
   "timeBoundManipulation",
-  "tokenForgeryAttack simpleAlwaysSucceedsMintingPolicyV2 simpleTestAssetName",
+  "tokenForgeryAttack",
   "unprotectedScriptOutput",
   "valueUnderpaymentAttack",
 ];
@@ -82,8 +79,6 @@ function findInstanceBind(instanceNode, bindName) {
   return null;
 }
 
-// Find a `binding = [ e1, e2, ... ]` decl inside an instance and return a
-// readable label per list element.
 // Read a list-valued instance bind as labels. `unwrap` maps each list
 // element to the node that names the model: identity for a plain list of
 // models, and the tuple's first component for the triaged slots, which hold
@@ -96,9 +91,8 @@ function readInstanceListBind(instanceNode, bindName, unwrap = (el) => el) {
   return A.listElements(expr).map((el) => A.elementLabel(unwrap(el)));
 }
 
-// The triaged slots hold `(model, "reason")` tuples; only the model half
-// names a test case. Anything that is not a tuple reads as a bare model,
-// which keeps this working if a slot is ever simplified back.
+// Anything that is not a tuple reads as a bare model, which keeps this
+// working if a slot is ever simplified back.
 const tupleHead = (el) =>
   (el.type === "tuple" ? el.namedChildren.filter((c) => c.type !== "comment")[0] : null) || el;
 
@@ -201,26 +195,19 @@ function synthesizePropRunActions(applyNode, args, ctxModule, ctx, fnName, helpe
 
   const found = findThreatModelsForInstance(model, ctxModule, helpers);
 
-  // The three triaged slots hold (model, "reason") tuples; only the model
-  // half names a test case.
-  const expectedVulns = found
-    ? readInstanceListBind(found.instance, "expectedVulnerabilities", tupleHead)
-    : [];
-  const acceptedFindings = found
-    ? readInstanceListBind(found.instance, "acceptedFindings", tupleHead)
-    : [];
-  const notApplicable = found
-    ? readInstanceListBind(found.instance, "notApplicable", tupleHead)
-    : [];
+  const readSlot = (name, unwrap) =>
+    found ? readInstanceListBind(found.instance, name, unwrap) : [];
+
+  const expectedVulns = readSlot("expectedVulnerabilities", tupleHead);
+  const acceptedFindings = readSlot("acceptedFindings", tupleHead);
+  const notApplicable = readSlot("notApplicable", tupleHead);
 
   // threatModels: an explicit list is used verbatim; the library default is
   // now [] (a claim you have not made), NOT the whole set.
   // An absent binding, or an RHS we cannot read as a list, claims nothing —
   // which is the library default. Synthesizing the whole set here would
   // invent a coverage claim the instance may not make.
-  const threatModels = found
-    ? readInstanceListBind(found.instance, "threatModels")
-    : [];
+  const threatModels = readSlot("threatModels");
 
   // candidateModels carries the survey, and is where the default set lives
   // now: every model not already spoken for by another slot. Matching is
@@ -265,43 +252,23 @@ function synthesizePropRunActions(applyNode, args, ctxModule, ctx, fnName, helpe
     });
   };
 
-  slotGroup(
-    "Threat models",
-    "threat-models-group",
-    threatModels,
-    "Threat model",
-    "best-guess label from source"
-  );
-  slotGroup(
-    "Surveyed threat models",
-    "surveyed-threat-models-group",
-    candidateModels,
-    "Candidate model",
-    candidatesFromDefault
-      ? "from the default candidateModels set (mirror of Convex/ThreatModel/All.hs, minus models spoken for by another slot)"
-      : "best-guess label from source"
-  );
-  slotGroup(
-    "Expected vulnerabilities",
-    "expected-vulnerabilities-group",
-    expectedVulns,
-    "Expected vulnerability",
-    "best-guess label from source"
-  );
-  slotGroup(
-    "Accepted findings",
-    "accepted-findings-group",
-    acceptedFindings,
-    "Accepted finding",
-    "best-guess label from source"
-  );
-  slotGroup(
-    "Not applicable",
-    "not-applicable-group",
-    notApplicable,
-    "Not applicable",
-    "best-guess label from source"
-  );
+  const BEST_GUESS = "best-guess label from source";
+  const SLOTS = [
+    ["Threat models", "threat-models-group", threatModels, "Threat model", BEST_GUESS],
+    [
+      "Surveyed threat models",
+      "surveyed-threat-models-group",
+      candidateModels,
+      "Candidate model",
+      candidatesFromDefault
+        ? "from the default candidateModels set (mirror of Convex/ThreatModel/All.hs, minus models spoken for by another slot)"
+        : BEST_GUESS,
+    ],
+    ["Expected vulnerabilities", "expected-vulnerabilities-group", expectedVulns, "Expected vulnerability", BEST_GUESS],
+    ["Accepted findings", "accepted-findings-group", acceptedFindings, "Accepted finding", BEST_GUESS],
+    ["Not applicable", "not-applicable-group", notApplicable, "Not applicable", BEST_GUESS],
+  ];
+  for (const slot of SLOTS) slotGroup(...slot);
 
   return node;
 }
