@@ -21,15 +21,22 @@ import Convex.MockChain.Defaults qualified as Defaults
 import Convex.PlutusLedger.V1 (transPubKeyHash)
 import Convex.Tasty.QuickCheck qualified as QC
 import Convex.TestingInterface (AddressLabeler (..), TestingInterface (..), ThreatModelsFor (..), mockWalletAddressLabeler, propRunActions)
-import Convex.ThreatModel.DatumBloat (datumListBloatAttack)
+import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
+import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
 import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
+import Convex.ThreatModel.InputDuplication (inputDuplication)
 import Convex.ThreatModel.InvalidDatumIndex (invalidDatumIndexAttack)
 import Convex.ThreatModel.LargeData (largeDataAttack)
 import Convex.ThreatModel.LargeValue (largeValueAttack)
 import Convex.ThreatModel.MissingOutputDatum (missingOutputDatumAttack)
+import Convex.ThreatModel.MutualExclusion (mutualExclusionAttack)
 import Convex.ThreatModel.NegativeInteger (negativeIntegerAttack)
 import Convex.ThreatModel.OutputDatumHashMissing (outputDatumHashMissingAttack)
+import Convex.ThreatModel.RedeemerAssetSubstitution (redeemerAssetSubstitution)
+import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
 import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
+import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
+import Convex.ThreatModel.TokenForgery (tokenForgeryAttack)
 import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
 import Convex.ThreatModel.ValueUnderpayment (valueUnderpaymentAttack)
 import Convex.Utxos (toApiUtxo)
@@ -267,21 +274,15 @@ nextStateForHitTurn m =
   nextRounds = if nextIx == 0 then _roundCount m + 1 else _roundCount m
 
 instance ThreatModelsFor MultiPlayerPingPongModel where
-  -- Notably absent: 'mutualExclusionAttack', 'inputDuplication' and
-  -- 'doubleSatisfaction' need a second script input / a second UTxO at the
-  -- script address, but the game is a single-state-UTxO contract; the
-  -- byte-bloat, redeemer-substitution and self-reference attacks never find
-  -- the datum/redeemer shape they target here. 'timeBoundManipulation' was
-  -- listed as an expected vulnerability but its precondition (a validity
-  -- range constraint to manipulate) never held on any generated
-  -- transaction, so it asserted nothing and is dropped.
-  -- 'duplicateListEntryAttack' was likewise listed as an expected
-  -- vulnerability, but with outputs now filtered to those a running script
-  -- guards it no longer finds one: the finding it recorded came from
-  -- degrading an output no validator was asked about.
   threatModels =
     [ datumListBloatAttack
-    , duplicateListEntryAttack
+    , -- The validator rejects any change to the players list on its
+      -- continuation output ("players list must not change"), so it resists
+      -- this. It was previously listed as an expected vulnerability, which
+      -- recorded a finding against the init transaction's script output -
+      -- an output no validator inspects, so mutating it "validated"
+      -- vacuously. 'guardedScriptOutputs' no longer offers that output.
+      duplicateListEntryAttack
     , invalidDatumIndexAttack
     , largeDataAttack
     , largeValueAttack
@@ -291,6 +292,16 @@ instance ThreatModelsFor MultiPlayerPingPongModel where
     , signatoryRemoval
     , unprotectedScriptOutput
     , valueUnderpaymentAttack
+    ]
+  notApplicable =
+    [ (doubleSatisfaction, singleStateUtxo)
+    , (inputDuplication, singleStateUtxo)
+    , (mutualExclusionAttack, singleStateUtxo)
+    , (datumByteBloatAttack, "Never finds the datum shape it targets here.")
+    , (redeemerAssetSubstitution, "Never finds the redeemer shape it targets here.")
+    , (selfReferenceInjection, "Never finds the datum shape it targets here.")
+    , (timeBoundManipulation, "Needs a validity-range constraint to manipulate, and no generated transaction carries one.")
+    , (tokenForgeryAttack, "Needs the transaction to mint Plutus-policy assets, and this contract's transactions mint none.")
     ]
 
 -------------------------------------------------------------------------------
@@ -449,3 +460,7 @@ utxosAt scriptHash = do
   isScriptAddress (C.AddressInEra _ (C.ShelleyAddress _ (ScriptHashObj h) _)) =
     h == C.toShelleyScriptHash scriptHash
   isScriptAddress _ = False
+
+-- | Shared reason: used by several entries in the instance above.
+singleStateUtxo :: String
+singleStateUtxo = "Needs a second script input or a second UTxO at the script address; the game is a single-state-UTxO contract."

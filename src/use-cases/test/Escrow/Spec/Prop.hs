@@ -21,10 +21,25 @@ import Convex.MockChain.CoinSelection (tryBalanceAndSubmit)
 import Convex.MockChain.Defaults qualified as Defaults
 import Convex.PlutusLedger.V1 (transPubKeyHash)
 import Convex.Tasty.QuickCheck qualified as QC
-import Convex.TestingInterface (TestingInterface (..), ThreatModelsFor (expectedVulnerabilities, threatModels), propRunActions)
+import Convex.TestingInterface (TestingInterface (..), ThreatModelsFor (..), propRunActions)
+import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
 import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
+import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
+import Convex.ThreatModel.InputDuplication (inputDuplication)
+import Convex.ThreatModel.InvalidDatumIndex (invalidDatumIndexAttack)
+import Convex.ThreatModel.LargeData (largeDataAttack)
+import Convex.ThreatModel.LargeValue (largeValueAttack)
+import Convex.ThreatModel.MissingOutputDatum (missingOutputDatumAttack)
+import Convex.ThreatModel.MutualExclusion (mutualExclusionAttack)
+import Convex.ThreatModel.NegativeInteger (negativeIntegerAttack)
+import Convex.ThreatModel.OutputDatumHashMissing (outputDatumHashMissingAttack)
+import Convex.ThreatModel.RedeemerAssetSubstitution (redeemerAssetSubstitution)
+import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
 import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
 import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
+import Convex.ThreatModel.TokenForgery (tokenForgeryAttack)
+import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
+import Convex.ThreatModel.ValueUnderpayment (valueUnderpaymentAttack)
 import Convex.Utils (slotToUtcTime, utcTimeToPosixTime)
 import Convex.Utxos (toApiUtxo)
 import Convex.Wallet (Wallet, verificationKeyHash)
@@ -208,19 +223,36 @@ instance TestingInterface EscrowModel where
   monitoring _ _ = id
 
 instance ThreatModelsFor EscrowModel where
-  -- The escrow's transaction shapes rule almost everything out: contribute
-  -- transactions have script outputs but spend no script input, and
-  -- redeem/refund transactions spend script inputs but produce no script
-  -- continuation output - so every model requiring a script input plus an
-  -- attackable script output (the bloat/datum/value/output families,
-  -- 'mutualExclusionAttack', 'valueUnderpaymentAttack', ...) never applies.
   threatModels =
     [ signatoryRemoval
     ]
-  expectedVulnerabilities =
-    [ doubleSatisfaction
-    , timeBoundManipulation
+  notApplicable =
+    [ (datumByteBloatAttack, noScriptContinuation)
+    , (datumListBloatAttack, noScriptContinuation)
+    , (duplicateListEntryAttack, noScriptContinuation)
+    , (inputDuplication, noScriptContinuation)
+    , (invalidDatumIndexAttack, noScriptContinuation)
+    , (largeDataAttack, noScriptContinuation)
+    , (largeValueAttack, noScriptContinuation)
+    , (missingOutputDatumAttack, noScriptContinuation)
+    , (mutualExclusionAttack, noScriptContinuation)
+    , (negativeIntegerAttack, noScriptContinuation)
+    , (outputDatumHashMissingAttack, noScriptContinuation)
+    , (unprotectedScriptOutput, noScriptContinuation)
+    , (valueUnderpaymentAttack, noScriptContinuation)
+    , (tokenForgeryAttack, "Needs the transaction to mint Plutus-policy assets, and this contract's transactions mint none.")
+    , (redeemerAssetSubstitution, "The Action redeemer carries no asset fields to substitute.")
+    , (selfReferenceInjection, "Needs a script input and a continuation output carrying an inline datum in one transaction; redeem and refund spend a script input but produce no continuation output.")
     ]
+
+  expectedVulnerabilities =
+    [ (doubleSatisfaction, "'meetsTarget' searches the outputs for one paying each target, without tying it to this transaction's own funds - so an attacker-funded extra input can meet the targets while the escrowed value goes elsewhere.")
+    , (timeBoundManipulation, "The validity range's lower bound can be widened to slot 0: Redeem only checks 'to deadline `contains` validRange', which constrains the upper bound and leaves the lower one free.")
+    ]
+
+-- | Shared reason: used by several entries in the instance above.
+noScriptContinuation :: String
+noScriptContinuation = "Needs a script input and an attackable script output in one transaction. Contribute has the output but spends no script input; redeem and refund spend a script input but produce no continuation output."
 
 -------------------------------------------------------------------------------
 -- Helpers

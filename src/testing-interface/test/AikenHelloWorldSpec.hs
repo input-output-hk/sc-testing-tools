@@ -411,6 +411,12 @@ instance TestingInterface HelloWorldModel where
       )
 
 instance ThreatModelsFor HelloWorldModel where
+  {- These are harness fixtures, not contracts under review: the CTF
+  exercises are deliberately vulnerable, so surveying every model finds
+  real bugs that are beside the point. The models each fixture exercises
+  are declared explicitly below. -}
+  candidateModels = []
+
   -- No threat models for this simple contract
   threatModels = []
 
@@ -448,6 +454,12 @@ instance TestingInterface HelloWorldMonitoringModel where
       (QC.property False)
 
 instance ThreatModelsFor HelloWorldMonitoringModel where
+  {- These are harness fixtures, not contracts under review: the CTF
+  exercises are deliberately vulnerable, so surveying every model finds
+  real bugs that are beside the point. The models each fixture exercises
+  are declared explicitly below. -}
+  candidateModels = []
+
   threatModels = []
 
 -- ----------------------------------------------------------------------------

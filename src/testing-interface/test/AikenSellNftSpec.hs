@@ -445,6 +445,12 @@ instance TestingInterface SellNftModel where
   monitoring _state _action prop = prop
 
 instance ThreatModelsFor SellNftModel where
+  {- These are harness fixtures, not contracts under review: the CTF
+  exercises are deliberately vulnerable, so surveying every model finds
+  real bugs that are beside the point. The models each fixture exercises
+  are declared explicitly below. -}
+  candidateModels = []
+
   -- NOTE: threatModels is intentionally empty for sell_nft because:
   --
   -- 1. sell_nft is a "one-shot spend" pattern: ListNft creates script outputs
@@ -463,7 +469,7 @@ instance ThreatModelsFor SellNftModel where
 
   -- doubleSatisfaction is a KNOWN vulnerability in this contract.
   -- It's run as an expected vulnerability (inverted pass/fail).
-  expectedVulnerabilities = [doubleSatisfaction]
+  expectedVulnerabilities = [(doubleSatisfaction, "CTF exercise: the contract ships with this vulnerability deliberately")]
 
 -- ----------------------------------------------------------------------------
 -- Test tree
