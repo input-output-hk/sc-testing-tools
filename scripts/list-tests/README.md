@@ -197,8 +197,11 @@ so the extension can label/icon it:
 | `positive`                        | the `Positive tests` leaf                                 |
 | `negative`                        | the `Negative tests` leaf                                 |
 | `threat-models-group`             | the `Threat models` group                                 |
+| `surveyed-threat-models-group`    | the `Surveyed threat models` group                        |
 | `expected-vulnerabilities-group`  | the `Expected vulnerabilities` group                      |
-| `threat-model`                    | the individual leaves under **both** of the above groups  |
+| `accepted-findings-group`         | the `Accepted findings` group                             |
+| `not-applicable-group`            | the `Not applicable` group                                |
+| `threat-model`                    | the individual leaves under **any** of the above groups  |
 
 > **Note:** expected-vulnerability leaves are structurally identical to
 > threat-model leaves (both are rendered via `getThreatModelName`, both are
@@ -219,44 +222,49 @@ so the extension can label/icon it:
    *runtime*, so it cannot be read syntactically — but this repo *owns* the
    generator (see `propRunActionsWithOptions` in
    `src/testing-interface/lib/Convex/TestingInterface.hs`), so its shape is
-   known. The tool reads the `ThreatModelsFor` instance's
-   `threatModels = [...]` and `expectedVulnerabilities = [...]` lists and
-   synthesizes a faithful subtree with this **exact shape and order** (the order
-   is a hard invariant — getting it wrong makes the tree diverge from what
-   `--list-tests` returns):
+   known. The tool reads the `ThreatModelsFor` instance's five slots —
+   `threatModels`, `candidateModels`, `expectedVulnerabilities`,
+   `acceptedFindings` and `notApplicable` — and synthesizes a faithful subtree
+   with this **exact shape and order** (the order is a hard invariant — getting
+   it wrong makes the tree diverge from what `--list-tests` returns):
 
    ```
    "<groupName>"                       (top synthesized group; testingInterface, pendingExpansion=false)
      ├── "Positive tests"              (leaf, ALWAYS present, role=positive)
      ├── "Negative tests"              (leaf, ALWAYS present, role=negative)
      ├── "Threat models"              (group, ONLY if threatModels non-empty, role=threat-models-group)
-     │     ├── <threatModels[0]>       (leaf, role=threat-model)
-     │     └── ...                     (one per list element, in list order)
-     └── "Expected vulnerabilities"   (group, ONLY if expectedVulnerabilities non-empty, role=expected-vulnerabilities-group)
-           ├── <expectedVulnerabilities[0]>  (leaf, role=threat-model)
+     ├── "Surveyed threat models"     (group, ONLY if candidateModels non-empty, role=surveyed-threat-models-group)
+     ├── "Expected vulnerabilities"   (group, ONLY if expectedVulnerabilities non-empty, role=expected-vulnerabilities-group)
+     ├── "Accepted findings"          (group, ONLY if acceptedFindings non-empty, role=accepted-findings-group)
+     └── "Not applicable"             (group, ONLY if notApplicable non-empty, role=not-applicable-group)
+           ├── <slot[0]>               (leaf, role=threat-model)
            └── ...                     (one per list element, in list order)
    ```
 
    - `<groupName>` is the string passed to `propRunActions` /
      `propRunActionsWithOptions`.
-   - The literal labels are exactly `Positive tests`, `Negative tests`,
-     `Threat models` (lowercase `m`), `Expected vulnerabilities` (lowercase `v`).
-   - `Positive tests` and `Negative tests` are **always** present. The
-     `Threat models` group appears only if `threatModels` is non-empty; the
-     `Expected vulnerabilities` group only if `expectedVulnerabilities` is
-     non-empty. With both lists empty, only the two leaves appear.
-   - **Default `threatModels` (no explicit list).** Many instances do *not*
-     write a `threatModels = [...]` literal — they rely on the library default,
-     which is `deleteFirstsBy eqName allThreatModels (expectedVulnerabilities)`
-     (see `Convex/TestingInterface.hs`). For these (binding absent, or RHS is the
-     bare identifier `allThreatModels`/`All.allThreatModels`), the tool
-     enumerates the default set from a **hardcoded mirror** of
-     `allThreatModels` (`ALL_THREAT_MODELS` in `lib/synthesize.js`, 19 entries in
-     source order) and **subtracts** any entry that also appears in that
-     instance's `expectedVulnerabilities`. So default-set property tests now show
-     their `Threat models` group too (e.g. `ctf purchase_offer`: 19 − 3 expected
-     vulnerabilities = 16 leaves). These leaves are structurally identical to
-     explicit-list leaves (`pendingExpansion: false`). **Keep-in-sync caveat:**
+   - Leaves under every one of those groups use `role=threat-model`; the
+     parent group's role carries the distinction.
+   - `Positive tests` and `Negative tests` are **always** present. Each group
+     appears only if its slot is non-empty.
+   - `expectedVulnerabilities`, `acceptedFindings` and `notApplicable` hold
+     `(model, "reason")` tuples. Only the model half names a test case, so the
+     tool labels the tuple's first component.
+   - **Default `candidateModels` (no explicit list).** `threatModels` defaults
+     to `[]`, so an instance that writes no list claims nothing. The *survey*
+     carries the default set instead: every model not already spoken for by
+     another slot. For instances with no `candidateModels` literal, the tool
+     enumerates that from a **hardcoded mirror** of `allThreatModels`
+     (`ALL_THREAT_MODELS` in `lib/synthesize.js`, 19 entries in source order)
+     and subtracts entries appearing in any other slot, comparing by head
+     identifier (so `tokenForgeryAttack mp asset` masks a bare
+     `tokenForgeryAttack`; a `...With n` variant still reads as a different
+     head, which is the remaining gap against the library's name-based
+     matching). E.g. `ctf purchase_offer` declares 2 `expectedVulnerabilities` and 17
+     `notApplicable`, which together account for all 19 models — so
+     `candidateModels` is empty and it has neither a `Threat models` nor a
+     `Surveyed threat models` group.
+     **Keep-in-sync caveat:**
      `ALL_THREAT_MODELS` is a static mirror — if the Haskell `allThreatModels`
      list in `Convex/ThreatModel/All.hs` changes, update that array.
    - Leaf labels are a **best guess** from the source list-element text; the real

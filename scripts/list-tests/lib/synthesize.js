@@ -9,12 +9,18 @@
 //   "<groupName>"                       (top synthesized group; testingInterface)
 //     ├─ "Positive tests"               (leaf, ALWAYS, role=positive)
 //     ├─ "Negative tests"               (leaf, ALWAYS, role=negative)
-//     ├─ "Threat models"                (group, iff threatModels non-empty,
-//     │                                  role=threat-models-group)
-//     │    └─ <one leaf per threatModels elem, role=threat-model, pending>
-//     └─ "Expected vulnerabilities"     (group, iff expectedVulnerabilities
-//                                        non-empty, role=expected-vulnerabilities-group)
-//          └─ <one leaf per expectedVulnerabilities elem, role=threat-model, pending>
+//     ├─ "Threat models"                (group, iff threatModels non-empty)
+//     ├─ "Surveyed threat models"       (group, iff candidateModels non-empty)
+//     ├─ "Expected vulnerabilities"     (group, iff expectedVulnerabilities non-empty)
+//     ├─ "Accepted findings"            (group, iff acceptedFindings non-empty)
+//     └─ "Not applicable"               (group, iff notApplicable non-empty)
+//          └─ <one leaf per slot element, role=threat-model, in list order>
+//
+// One group per non-empty slot of the ThreatModelsFor instance, each with the
+// role named in list-tests.schema.json. `threatModels` defaults to [];
+// `candidateModels` carries the default set (every model not spoken for by
+// another slot). The last three slots hold (model, "reason") tuples, of which
+// only the model half names a test case.
 //
 // All synthesized nodes carry source:"synthesized" and testingInterface:true.
 // The whole subtree has been VERIFIED to match the real tasty tree in labels,
@@ -22,11 +28,10 @@
 // pendingExpansion:false: the shape is FULLY KNOWN statically. (Approximate leaf
 // names are mere renames, not expansions, so they do not justify pending.)
 //
-// NOTE: expected-vulnerability leaves are structurally identical to threat-model
-// leaves (both rendered via getThreatModelName, both testCaseSteps). The leaf
-// role is therefore `threat-model` in BOTH groups; the semantic difference is
-// carried by the parent group's role. There is NO separate
-// `expected-vulnerability` leaf role.
+// NOTE: leaves are structurally identical across all five groups (all rendered
+// via getThreatModelName, all testCaseSteps). The leaf role is therefore
+// `threat-model` everywhere; the semantic difference is carried by the parent
+// group's role. There are NO per-slot leaf roles.
 
 const path = require("path");
 
@@ -79,42 +84,23 @@ function findInstanceBind(instanceNode, bindName) {
 
 // Find a `binding = [ e1, e2, ... ]` decl inside an instance and return a
 // readable label per list element.
-function readInstanceListBind(instanceNode, bindName) {
+// Read a list-valued instance bind as labels. `unwrap` maps each list
+// element to the node that names the model: identity for a plain list of
+// models, and the tuple's first component for the triaged slots, which hold
+// `(model, "reason")` pairs.
+function readInstanceListBind(instanceNode, bindName, unwrap = (el) => el) {
   const target = findInstanceBind(instanceNode, bindName);
   if (!target) return [];
   const expr = A.bindExpression(target);
   if (!expr || expr.type !== "list") return [];
-  return A.listElements(expr).map(A.elementLabel);
+  return A.listElements(expr).map((el) => A.elementLabel(unwrap(el)));
 }
 
-// Decide how an instance's `threatModels` binding should be interpreted:
-//   { kind: "explicit", list: [...] }  — an explicit `threatModels = [...]` list
-//                                         literal; use it verbatim (UNCHANGED).
-//   { kind: "default" }                — the library DEFAULT applies: either the
-//                                         binding is ABSENT, or its RHS is the
-//                                         bare identifier `allThreatModels`
-//                                         (optionally module-qualified). The
-//                                         effective list is ALL_THREAT_MODELS
-//                                         minus expectedVulnerabilities (applied
-//                                         by the caller).
-// Anything else (e.g. a non-list, non-allThreatModels expression we can't read)
-// is treated as "default" too — the safest faithful approximation, since the
-// real default is what the compiler would use when no usable override is given.
-function classifyThreatModelsBind(instanceNode) {
-  const target = findInstanceBind(instanceNode, "threatModels");
-  if (!target) return { kind: "default" }; // (a) binding absent
-  const expr = A.bindExpression(target);
-  if (expr && expr.type === "list") {
-    return { kind: "explicit", list: A.listElements(expr).map(A.elementLabel) };
-  }
-  // (b) RHS is the bare identifier `allThreatModels` (plain or qualified, e.g.
-  //     `All.allThreatModels`). refTarget peels parens/qualified for us.
-  const ref = expr ? A.refTarget(expr) : null;
-  if (ref && ref.name === "allThreatModels") return { kind: "default" };
-  // Fallback: an RHS we can't statically read as a list — mirror the library
-  // default rather than emitting NO group.
-  return { kind: "default" };
-}
+// The triaged slots hold `(model, "reason")` tuples; only the model half
+// names a test case. Anything that is not a tuple reads as a bare model,
+// which keeps this working if a slot is ever simplified back.
+const tupleHead = (el) =>
+  (el.type === "tuple" ? el.namedChildren.filter((c) => c.type !== "comment")[0] : null) || el;
 
 // Locate the `instance ThreatModelsFor <model>` node, searching:
 //   1. the call-site module (ctxModule), then
@@ -215,67 +201,107 @@ function synthesizePropRunActions(applyNode, args, ctxModule, ctx, fnName, helpe
 
   const found = findThreatModelsForInstance(model, ctxModule, helpers);
 
-  // expectedVulnerabilities has NO synthesized default (library default = []),
-  // so we only ever read an explicit list for it.
+  // The three triaged slots hold (model, "reason") tuples; only the model
+  // half names a test case.
   const expectedVulns = found
-    ? readInstanceListBind(found.instance, "expectedVulnerabilities")
+    ? readInstanceListBind(found.instance, "expectedVulnerabilities", tupleHead)
+    : [];
+  const acceptedFindings = found
+    ? readInstanceListBind(found.instance, "acceptedFindings", tupleHead)
+    : [];
+  const notApplicable = found
+    ? readInstanceListBind(found.instance, "notApplicable", tupleHead)
     : [];
 
-  // threatModels: explicit list literal is used verbatim; otherwise the library
-  // DEFAULT applies and the effective list is ALL_THREAT_MODELS with any entry
-  // whose label also appears in expectedVulnerabilities removed (mirroring
-  // `deleteFirstsBy eqName allThreatModels (expectedVulnerabilities @state)`).
-  let threatModels = [];
-  let threatModelsFromDefault = false;
+  // threatModels: an explicit list is used verbatim; the library default is
+  // now [] (a claim you have not made), NOT the whole set.
+  // An absent binding, or an RHS we cannot read as a list, claims nothing —
+  // which is the library default. Synthesizing the whole set here would
+  // invent a coverage claim the instance may not make.
+  const threatModels = found
+    ? readInstanceListBind(found.instance, "threatModels")
+    : [];
+
+  // candidateModels carries the survey, and is where the default set lives
+  // now: every model not already spoken for by another slot. Matching is
+  // textual, mirroring `defaultThreatModelsExcluding` only approximately —
+  // the library compares rendered names, so a parameterised override such as
+  // `largeDataAttackWith 10` does not mask `largeDataAttack` here.
+  let candidateModels = [];
+  let candidatesFromDefault = false;
   if (found) {
-    const cls = classifyThreatModelsBind(found.instance);
-    if (cls.kind === "explicit") {
-      threatModels = cls.list;
+    if (findInstanceBind(found.instance, "candidateModels")) {
+      candidateModels = readInstanceListBind(found.instance, "candidateModels");
     } else {
-      threatModelsFromDefault = true;
-      const removed = new Set(expectedVulns);
-      threatModels = ALL_THREAT_MODELS.filter((tm) => !removed.has(tm));
+      candidatesFromDefault = true;
+      // Compare by head identifier: the library excludes by rendered name, so
+      // `tokenForgeryAttack mp asset` and a bare `tokenForgeryAttack` are the
+      // same model. (A `...With n` variant still reads as a different head,
+      // which is the remaining gap.)
+      const head = (label) => String(label).split(/\s+/)[0];
+      const spokenFor = new Set(
+        [...threatModels, ...expectedVulns, ...acceptedFindings, ...notApplicable].map(head)
+      );
+      candidateModels = ALL_THREAT_MODELS.filter((tm) => !spokenFor.has(head(tm)));
     }
   }
 
-  // "Threat models" group — ONLY if threatModels is non-empty.
-  if (threatModels.length > 0) {
-    const noteFor = (i) =>
-      threatModelsFromDefault
-        ? `from default allThreatModels set (mirror of Convex/ThreatModel/All.hs, minus expectedVulnerabilities); real rendered name comes from getThreatModelName (fallback "Threat model ${i + 1}")`
-        : `best-guess label from source; real rendered name comes from getThreatModelName (fallback "Threat model ${i + 1}")`;
+  // One group per non-empty slot, in the order the runner builds them.
+  const slotGroup = (label, role, entries, fallbackName, note) => {
+    if (entries.length === 0) return;
     node.children.push({
       kind: "group",
-      label: "Threat models",
+      label,
       source: "synthesized",
       testingInterface: true,
-      role: "threat-models-group",
+      role,
       pendingExpansion: false,
-      children: threatModels.map((tmLabel, i) =>
-        threatModelLeaf(tmLabel, noteFor(i))
-      ),
-    });
-  }
-
-  // "Expected vulnerabilities" group — ONLY if expectedVulnerabilities is
-  // non-empty. Leaves are structurally identical to threat-model leaves, so
-  // they use role=threat-model too; the group role carries the distinction.
-  if (expectedVulns.length > 0) {
-    node.children.push({
-      kind: "group",
-      label: "Expected vulnerabilities",
-      source: "synthesized",
-      testingInterface: true,
-      role: "expected-vulnerabilities-group",
-      pendingExpansion: false,
-      children: expectedVulns.map((vLabel, i) =>
+      children: entries.map((tmLabel, i) =>
         threatModelLeaf(
-          vLabel,
-          `best-guess label from source; real rendered name comes from getThreatModelName (fallback "Expected vulnerability ${i + 1}")`
+          tmLabel,
+          `${note}; real rendered name comes from getThreatModelName (fallback "${fallbackName} ${i + 1}")`
         )
       ),
     });
-  }
+  };
+
+  slotGroup(
+    "Threat models",
+    "threat-models-group",
+    threatModels,
+    "Threat model",
+    "best-guess label from source"
+  );
+  slotGroup(
+    "Surveyed threat models",
+    "surveyed-threat-models-group",
+    candidateModels,
+    "Candidate model",
+    candidatesFromDefault
+      ? "from the default candidateModels set (mirror of Convex/ThreatModel/All.hs, minus models spoken for by another slot)"
+      : "best-guess label from source"
+  );
+  slotGroup(
+    "Expected vulnerabilities",
+    "expected-vulnerabilities-group",
+    expectedVulns,
+    "Expected vulnerability",
+    "best-guess label from source"
+  );
+  slotGroup(
+    "Accepted findings",
+    "accepted-findings-group",
+    acceptedFindings,
+    "Accepted finding",
+    "best-guess label from source"
+  );
+  slotGroup(
+    "Not applicable",
+    "not-applicable-group",
+    notApplicable,
+    "Not applicable",
+    "best-guess label from source"
+  );
 
   return node;
 }
@@ -286,6 +312,5 @@ module.exports = {
   synthesizePropRunActions,
   readInstanceListBind,
   findInstanceBind,
-  classifyThreatModelsBind,
   findThreatModelsForInstance,
 };

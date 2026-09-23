@@ -14,7 +14,7 @@
 
 How to pick built-in threat models for the contract under test, how
 to wire them into the `ThreatModelsFor` instance, and the inverted
-`expectedVulnerabilities` semantics. Loaded by subagents in the
+the triaged slots' semantics. Loaded by subagents in the
 Implemented phase and in the Green-maintenance verbs **add threat
 model** and **swap threat model**.
 
@@ -272,7 +272,6 @@ instance ThreatModelsFor MyModel where
     , signatoryRemoval
     , largeDataAttack  -- randomised; was largeDataAttackWith 10
     ]
-  expectedVulnerabilities = []
 ```
 
 Notes:
@@ -291,29 +290,44 @@ Notes:
   "never applied" or "never tested": that is zero attack coverage, a
   test-setup problem (see §G, zero-coverage policy), not a contract bug.
 
-## §E. `expectedVulnerabilities`
+## §E. The triaged slots
 
-**Inverted semantics.** A test in `expectedVulnerabilities` passes
-if the attack SUCCEEDS — i.e. the vulnerability is consistently
-exploitable.
+Beyond `threatModels` (a claim the contract resists a model) and
+`candidateModels` (the untriaged survey, which is where everything
+starts), three slots record a triage decision. Each takes a reason,
+which travels into the failure message and the streamed summary.
 
-When to populate:
+`expectedVulnerabilities :: [(ThreatModel (), String)]` — **inverted
+semantics**: the entry passes if the attack SUCCEEDS. When the attack
+stops succeeding the case fails as **RESOLVED**, because the contract
+improved and the declaration is now stale. Use for CTF-style
+intentionally-vulnerable contracts, and for documenting a known issue
+before writing the fix.
 
-- CTF-style intentionally-vulnerable contracts.
-- Documenting known issues for regression testing (catches accidental
-  fixes that change the surface area).
-- Verifying a vulnerability exists *before* writing the fix.
+`acceptedFindings :: [(ThreatModel (), String)]` — the attack lands but
+is a benign artifact of the design, not exploitable. Judged exactly like
+`expectedVulnerabilities` — the finding must still be reproduced, and the
+case fails as **NO LONGER DETECTED** when it stops being. What differs is
+the meaning, and so the report: a detection here is labelled accepted by
+design, where `expectedVulnerabilities` advertises the contract as
+vulnerable. Prefer this one for anything that is not a genuine bug.
+
+`notApplicable :: [(ThreatModel (), String)]` — reviewed and found not
+to apply to this contract's transaction shapes. The inverse claim to
+`threatModels`: it must *not* apply, and one that starts applying fails
+with **APPLIES NOW**. Prefer this over deleting a model from the lists,
+which records the same decision where nothing can check it.
 
 Behavioural difference from `threatModels`:
 
-- `threatModels` early-stops on first failure for a model.
-- `expectedVulnerabilities` runs the model against ALL transactions
-  in the positive suite — to confirm consistency, not a one-off.
+- `threatModels` and `candidateModels` early-stop on a model's first
+  detection; the triaged slots run against ALL transactions in the
+  positive suite, to confirm consistency rather than a one-off.
 - Output is quieter: no verbose transaction dumps.
 
-**Skill default**: leave `expectedVulnerabilities = []`. Populate
-only when the user explicitly asks. If they do, ask which models and
-why before writing.
+**Skill default**: leave all three empty and let `candidateModels`
+survey. Populate them from what the survey reports, writing the reason
+as you go.
 
 Examples that exercise this field heavily:
 [`AikenVestingSpec.hs`](https://github.com/input-output-hk/sc-testing-tools/blob/main/src/testing-interface/test/AikenVestingSpec.hs),
@@ -369,9 +383,9 @@ Each threat-model run produces one of five outcomes:
 
   Each `ThreatModelTrace` in a `test_trace` event is one `Validate` call, and its `outcome` is the verdict of the *whole* threat model run repeated on every entry. To see how the ledger judged that particular mutated transaction, read the entry's `validation` field instead: `"valid"` (accepted), `"phase2_invalid"` (a script rejected it, with `errors`), `"phase1_invalid"` (ledger rules rejected it, with `errors`) or `"rebalance_failed"` (never validated, with `reason`). It is `null` when there is no verdict to report, normally the lightweight entry emitted when the model made no `Validate` call.
 
-  **Zero-coverage policy.** A model with no `TMPassed`/`TMFailed` outcome at all was never tested, and its test case says so. If the precondition never held, an explicitly listed `threatModels` entry or an `expectedVulnerabilities` entry FAILS ("never applied" / "never exercised"); the default list only reports SKIPPED. If the precondition held but every attempt was a Phase 1 invalidation or a rebalancing failure ("attack never carried out"), or if the model errored without ever attacking anything ("errored before it could attack anything"), an explicit entry and an expected vulnerability FAIL too, listing the distinct reasons, and a default-list model prints a loud WARNING. An `acceptedFindings` entry claims nothing, so it only reports - but with the same reasons, which is what distinguishes a stale entry from an attack that was blocked every time. A single tested transaction lifts the verdict; environmental skips never fail an individual iteration. With the direct runners (`runThreatModelM`), the equivalent situation ends in a bare QuickCheck "Gave up!": QuickCheck keeps nothing from discarded iterations, so run the model through the testing interface (or `runThreatModelCheckTraced`) to see the reasons.
+  **Zero-coverage policy.** A model with no `TMPassed`/`TMFailed` outcome at all was never tested, and its test case says so. If the precondition never held, a `threatModels` entry or an `expectedVulnerabilities` entry FAILS ("never applied" / "never exercised"); a `candidateModels` (surveyed) entry only reports SKIPPED, and a `notApplicable` entry treats it as the confirming outcome - but only when the precondition genuinely never held, since a Phase 1 skip proves it did hold and so falsifies the declaration. If the precondition held but every attempt was a Phase 1 invalidation or a rebalancing failure ("attack never carried out"), or if the model errored without ever attacking anything ("errored before it could attack anything"), an explicit entry and an expected vulnerability FAIL too, listing the distinct reasons, and a default-list model prints a loud WARNING. An `acceptedFindings` entry FAILS on the same terms as an expected vulnerability - an acceptance is a declaration too, so a run that never verifies it leaves a model suppressed for a reason nothing checked. A single tested transaction lifts the verdict; environmental skips never fail an individual iteration. With the direct runners (`runThreatModelM`), the equivalent situation ends in a bare QuickCheck "Gave up!": QuickCheck keeps nothing from discarded iterations, so run the model through the testing interface (or `runThreatModelCheckTraced`) to see the reasons.
 
-  In the streaming events, `ThreatModelSummary.failed` counts `TMFailed` outcomes regardless of what they mean for the suite; `ThreatModelSummary.category` (`"claimed"`, `"expected"` or `"accepted"`, after the `ThreatModelsFor` list the model came from) says how to read it. Only a `"claimed"` model's `failed > 0` is a vulnerability; for `"expected"` it is the required outcome and for `"accepted"` a tolerated artifact. Each `ThreatModelTrace` carries the same value in its own `category` field, so a consumer of the `test_trace` stream can tell a vulnerability from an expected or accepted finding without waiting for the `test_done` event that carries the summary.
+  In the streaming events, `ThreatModelSummary.failed` counts `TMFailed` outcomes regardless of what they mean for the suite; `ThreatModelSummary.category` (`"claimed"`, `"surveyed"`, `"expected"`, `"accepted"` or `"not_applicable"`, after the `ThreatModelsFor` slot the model came from) says how to read it. A `"claimed"` or `"surveyed"` model's `failed > 0` is a vulnerability; for `"expected"` it is the required outcome and for `"accepted"` a tolerated artifact. Every failing case carries `ThreatModelSummary.fault` (`"contract"`, `"declaration"` or `"setup"`), saying whether the script is at fault, the declaration is stale or incomplete, or the attack could not be carried out. A `"surveyed"` detection is `"declaration"`: the action it demands is to triage the model into a slot, whatever that triage concludes. Each `ThreatModelTrace` carries the same value in its own `category` field, so a consumer of the `test_trace` stream can tell a vulnerability from an expected or accepted finding without waiting for the `test_done` event that carries the summary.
 
 ### When to use which tier
 

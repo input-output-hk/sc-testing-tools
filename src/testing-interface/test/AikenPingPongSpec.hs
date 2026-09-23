@@ -247,6 +247,12 @@ instance TestingInterface AikenPingPongModel where
   monitoring _state _action prop = prop
 
 instance ThreatModelsFor AikenPingPongModel where
+  {- These are harness fixtures, not contracts under review: the CTF
+  exercises are deliberately vulnerable, so surveying every model finds
+  real bugs that are beside the point. The models each fixture exercises
+  are declared explicitly below. -}
+  candidateModels = []
+
   -- The secure Aiken validator should RESIST all these attacks
   threatModels = [unprotectedScriptOutput, largeValueAttackWith 10, largeDataAttackWith 10]
 

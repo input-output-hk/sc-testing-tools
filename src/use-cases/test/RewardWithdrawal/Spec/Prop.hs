@@ -9,11 +9,23 @@ module RewardWithdrawal.Spec.Prop (
 
 import Convex.TestingInterface (RunOptions, TestingInterface (..), ThreatModelsFor (..), propRunActionsWithOptions)
 import Convex.TestingInterface.Trace.RedeemerTag (autoRedeemerTag)
+import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
+import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
+import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
+import Convex.ThreatModel.InputDuplication (inputDuplication)
 import Convex.ThreatModel.InvalidDatumIndex (invalidDatumIndexAttack)
 import Convex.ThreatModel.LargeData (largeDataAttack)
 import Convex.ThreatModel.LargeValue (largeValueAttack)
+import Convex.ThreatModel.MissingOutputDatum (missingOutputDatumAttack)
+import Convex.ThreatModel.MutualExclusion (mutualExclusionAttack)
 import Convex.ThreatModel.NegativeInteger (negativeIntegerAttack)
+import Convex.ThreatModel.OutputDatumHashMissing (outputDatumHashMissingAttack)
+import Convex.ThreatModel.RedeemerAssetSubstitution (redeemerAssetSubstitution)
+import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
 import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
+import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
+import Convex.ThreatModel.TokenForgery (tokenForgeryAttack)
+import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
 import Convex.ThreatModel.ValueUnderpayment (valueUnderpaymentAttack)
 import Data.Aeson (ToJSON (..))
 import Data.Proxy (Proxy (..))
@@ -108,12 +120,6 @@ instance ThreatModelsFor RewardWithdrawalModel where
   -- vets each lock output's datum constructor, owner, amount and value, so
   -- these attacks are expected to be rejected.
   --
-  -- Notably absent: the input-shaped attacks ('doubleSatisfaction',
-  -- 'inputDuplication', 'mutualExclusionAttack', 'unprotectedScriptOutput')
-  -- need a script input, and nothing here ever spends one; the datum-bloat
-  -- attacks need a list field and 'missingOutputDatumAttack' /
-  -- 'outputDatumHashMissingAttack' a datum-hash output, and the lock datum
-  -- has neither.
   threatModels =
     [ signatoryRemoval
     , invalidDatumIndexAttack
@@ -122,11 +128,29 @@ instance ThreatModelsFor RewardWithdrawalModel where
     , largeValueAttack
     ]
 
-  -- largeDataAttack appends extra fields to the lock datum's constructor and
-  -- the transaction still validates: the derived 'FromData' decoder for
-  -- 'LockDatum' reads the two fields it knows and ignores any trailing ones.
-  -- That is a benign artifact rather than an exploitable bug here - the
-  -- owner, amount and value of the output are still checked in full, nothing
-  -- ever consumes a lock output on-chain, and the only party paying for the
-  -- bloated datum's min-UTxO is the locker themselves.
-  acceptedFindings = [largeDataAttack]
+  notApplicable =
+    [ (doubleSatisfaction, noScriptInput)
+    , (inputDuplication, noScriptInput)
+    , (mutualExclusionAttack, noScriptInput)
+    , (unprotectedScriptOutput, noScriptInput)
+    , (datumByteBloatAttack, "The lock datum has no bytestring field to bloat.")
+    , (datumListBloatAttack, "The lock datum has no list field to bloat.")
+    , (duplicateListEntryAttack, "The lock datum has no list whose entries could be duplicated.")
+    , (missingOutputDatumAttack, "Needs a datum-hash output; the lock output carries an inline datum.")
+    , (outputDatumHashMissingAttack, "Needs a datum-hash output; the lock output carries an inline datum.")
+    , (tokenForgeryAttack, "Needs the transaction to mint Plutus-policy assets, and this contract's transactions mint none.")
+    , (redeemerAssetSubstitution, "The redeemer is (), with no asset fields to substitute.")
+    , (selfReferenceInjection, noScriptInput)
+    , (timeBoundManipulation, "No withdraw-zero transaction constrains its validity range, so there is nothing to manipulate.")
+    ]
+
+  acceptedFindings =
+    [
+      ( largeDataAttack
+      , "Benign: the derived FromData for LockDatum reads its two known fields and ignores trailing ones. The output's owner, amount and value are still checked in full, nothing consumes a lock output on-chain, and only the locker pays the bloated datum's min-UTxO."
+      )
+    ]
+
+-- | Shared reason: used by 5 entries in the instance above.
+noScriptInput :: String
+noScriptInput = "Needs a script input, and the withdraw-zero pattern never spends one - every input is key-owned."

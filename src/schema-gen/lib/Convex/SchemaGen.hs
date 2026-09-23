@@ -112,7 +112,19 @@ in both the run-level summary and the per-entry trace, which each say how their
 own @failed@\/@outcome@ is to be read.
 -}
 threatModelCategory :: Referenced Schema
-threatModelCategory = Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["claimed", "expected", "accepted"]
+threatModelCategory = Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["claimed", "expected", "accepted", "surveyed", "not_applicable"]
+
+{- | Schema of a 'Convex.Tasty.Streaming.TMSummary.Fault', which only a
+failing case carries.
+-}
+nullableFault :: Referenced Schema
+nullableFault =
+  Inline $
+    mempty
+      & anyOf
+        ?~ [ Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["contract", "declaration", "setup"]
+           , null
+           ]
 
 -- ============================================================
 -- ToSchema instances for convex-tasty-streaming types
@@ -180,6 +192,12 @@ instance ToSchema ThreatModelSummary where
               , ("skipped", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("skipped_phase1", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("errors", Inline $ mempty & type_ ?~ OpenApiInteger)
+              , -- Whose fault a failing case is, so a consumer can route a
+                -- contract regression apart from a declaration that needs
+                -- updating. A "surveyed" detection is "declaration": it
+                -- demands a triage decision. Absent (or null) only when the
+                -- case did not fail.
+                ("fault", nullableFault)
               ]
           & required .~ ["name", "category", "tested", "total", "passed", "failed", "skipped", "skipped_phase1", "errors"]
 

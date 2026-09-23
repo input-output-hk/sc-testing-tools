@@ -22,13 +22,20 @@ import Convex.MockChain.Defaults qualified as Defaults
 import Convex.PlutusLedger.V1 (transPubKeyHash, unTransAssetName)
 import Convex.Tasty.QuickCheck qualified as QC
 import Convex.TestingInterface (AddressLabeler (..), TestingInterface (..), ThreatModelsFor (..), mockWalletAddressLabeler, propRunActions)
+import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
 import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
+import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
+import Convex.ThreatModel.InputDuplication (inputDuplication)
 import Convex.ThreatModel.InvalidDatumIndex (invalidDatumIndexAttack)
 import Convex.ThreatModel.LargeData (largeDataAttack)
 import Convex.ThreatModel.LargeValue (largeValueAttack)
 import Convex.ThreatModel.MissingOutputDatum (missingOutputDatumAttack)
+import Convex.ThreatModel.MutualExclusion (mutualExclusionAttack)
 import Convex.ThreatModel.NegativeInteger (negativeIntegerAttack)
 import Convex.ThreatModel.OutputDatumHashMissing (outputDatumHashMissingAttack)
+import Convex.ThreatModel.RedeemerAssetSubstitution (redeemerAssetSubstitution)
+import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
+import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
 import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
 import Convex.ThreatModel.TokenForgery (tokenForgeryAttack)
 import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
@@ -256,12 +263,6 @@ instance TestingInterface AuctionModel where
   addressLabeler = auctionAddressLabeler <> mockWalletAddressLabeler
 
 instance ThreatModelsFor AuctionModel where
-  -- Notably absent: 'mutualExclusionAttack' and 'inputDuplication' need a
-  -- second script input / a second UTxO at the script address, but the
-  -- auction is a single-state-UTxO contract; the bloat,
-  -- duplicate-list-entry, redeemer-substitution, self-reference, and
-  -- signatory-removal attacks never find the datum/redeemer/witness shape
-  -- they target here.
   threatModels =
     [ invalidDatumIndexAttack
     , missingOutputDatumAttack
@@ -270,7 +271,24 @@ instance ThreatModelsFor AuctionModel where
     , unprotectedScriptOutput
     , valueUnderpaymentAttack
     ]
-  expectedVulnerabilities = [doubleSatisfaction, largeDataAttack, largeValueAttack, timeBoundManipulation, tokenForgeryAttack]
+  notApplicable =
+    [ (inputDuplication, singleStateUtxo)
+    , (mutualExclusionAttack, singleStateUtxo)
+    , (datumByteBloatAttack, "Never finds the datum shape it targets here.")
+    , (datumListBloatAttack, "Never finds the datum shape it targets here.")
+    , (duplicateListEntryAttack, "Never finds the datum shape it targets here.")
+    , (redeemerAssetSubstitution, "Never finds the redeemer shape it targets here.")
+    , (selfReferenceInjection, "Never finds the datum shape it targets here.")
+    , (signatoryRemoval, "Never finds the witness shape it targets here.")
+    ]
+
+  expectedVulnerabilities =
+    [ (doubleSatisfaction, "The validator locates payouts by searching for an output paid to the seller / highest bidder of the right amount, without tying that output to this transaction's own funds - so an attacker-funded extra input can satisfy the search while the auction's value goes elsewhere.")
+    , (largeDataAttack, "Extra fields can be appended to the bid datum: the decoder reads the fields it knows and ignores trailing ones.")
+    , (largeValueAttack, "Junk tokens can be added to a checked output: payouts are compared with 'lovelaceValueOf' plus a single-asset 'valueOf', so unrelated assets are never rejected.")
+    , (timeBoundManipulation, "The validity range's lower bound can be widened to slot 0: only the upper bound is constrained against the auction's end time.")
+    , (tokenForgeryAttack, "The auction NFT can be minted in quantity 2: the validator never inspects 'txInfoMint', only that specific outputs carry one of it.")
+    ]
 
 -------------------------------------------------------------------------------
 -- Helper functions for the AuctionModel
@@ -497,3 +515,7 @@ closeAuctionPBT params curSlot highestBidder highestBidAmount = do
 
   _ <- tryBalanceAndSubmit mempty MockWallet.w1 payoutTx TrailingChange []
   pure ()
+
+-- | Shared reason: used by 2 entries in the instance above.
+singleStateUtxo :: String
+singleStateUtxo = "Needs a second script input or a second UTxO at the script address; the auction locks a single state UTxO."

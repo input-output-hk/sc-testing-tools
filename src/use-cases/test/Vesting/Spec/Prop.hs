@@ -19,13 +19,22 @@ import Convex.MockChain.Defaults qualified as Defaults
 import Convex.PlutusLedger.V1 (transPubKeyHash)
 import Convex.Tasty.QuickCheck qualified as QC
 import Convex.TestingInterface (RunOptions, TestingInterface (..), ThreatModelsFor (..), propRunActionsWithOptions)
+import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
+import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
+import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
+import Convex.ThreatModel.InputDuplication (inputDuplication)
 import Convex.ThreatModel.InvalidDatumIndex (invalidDatumIndexAttack)
 import Convex.ThreatModel.LargeData (largeDataAttack)
 import Convex.ThreatModel.LargeValue (largeValueAttack)
 import Convex.ThreatModel.MissingOutputDatum (missingOutputDatumAttack)
+import Convex.ThreatModel.MutualExclusion (mutualExclusionAttack)
+import Convex.ThreatModel.NegativeInteger (negativeIntegerAttack)
 import Convex.ThreatModel.OutputDatumHashMissing (outputDatumHashMissingAttack)
+import Convex.ThreatModel.RedeemerAssetSubstitution (redeemerAssetSubstitution)
+import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
 import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
 import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
+import Convex.ThreatModel.TokenForgery (tokenForgeryAttack)
 import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
 import Convex.ThreatModel.ValueUnderpayment (valueUnderpaymentAttack)
 import Convex.UseCases.Utils (utxosAt)
@@ -230,38 +239,42 @@ instance TestingInterface VestingModel where
   monitoring _ _ = id
 
 instance ThreatModelsFor VestingModel where
-  -- Notably absent: 'mutualExclusionAttack', 'inputDuplication' and
-  -- 'doubleSatisfaction' need a second script input / a second UTxO at the
-  -- script address, but vesting locks a single state UTxO; the ()-datum
-  -- rules out every datum-shaped attack, and the redeemer/self-reference
-  -- substitutions never find the shape they target here.
   threatModels =
     [ signatoryRemoval
     , timeBoundManipulation
     ]
 
-  expectedVulnerabilities =
-    [ invalidDatumIndexAttack
-    , largeDataAttack
-    , largeValueAttack
-    , missingOutputDatumAttack
-    , outputDatumHashMissingAttack
-    , unprotectedScriptOutput
+  notApplicable =
+    [ (doubleSatisfaction, singleStateUtxo)
+    , (inputDuplication, singleStateUtxo)
+    , (mutualExclusionAttack, singleStateUtxo)
+    , (datumByteBloatAttack, "The datum is (), so there is no bytestring field to bloat.")
+    , (datumListBloatAttack, "The datum is (), so there is no list field to bloat.")
+    , (duplicateListEntryAttack, "The datum is (), so there is no list field whose entries could be duplicated.")
+    , (negativeIntegerAttack, "The datum is (), so there is no integer field to negate.")
+    , (redeemerAssetSubstitution, "Never finds the redeemer shape it targets here.")
+    , (selfReferenceInjection, "Never finds the datum shape it targets here.")
+    , (tokenForgeryAttack, "Needs the transaction to mint Plutus-policy assets, and this contract's transactions mint none.")
     ]
 
-  -- valueUnderpaymentAttack is listed here rather than in 'threatModels' or
-  -- 'expectedVulnerabilities' because it flags a benign artifact of this
-  -- validator's design rather than an exploitable bug: the datum is always
-  -- (), so the validator instead checks that the value remaining locked at
-  -- its own address is at least the amount still owed for the unvested
-  -- tranches ('remainingExpected' in Vesting.Validator). Once the
-  -- transaction's validity range is past both tranche dates,
-  -- 'remainingExpected' is zero, so that check degrades to "leftover >= 0"
-  -- and validates no matter how much the continuing output is reduced by.
-  -- That's not a fund-safety issue: the owner (who must still sign) is by
-  -- then entitled to withdraw everything anyway, so this only ever
-  -- "underpays" their own already fully-vested funds.
-  acceptedFindings = [valueUnderpaymentAttack]
+  {- All seven share two facts about 'Vesting.Validator.mkValidator': it
+  never reads its continuation output's datum (the datum is (), carrying no
+  state), and its only value check is that the aggregate at its own address
+  is `geq` what the unvested tranches still owe. Each attack lands, but none
+  of them lets anyone take funds they are not already entitled to, so these
+  are artifacts of a deliberately stateless design rather than
+  vulnerabilities - listing them as expected vulnerabilities would advertise
+  the contract as vulnerable in every report.
+  -}
+  acceptedFindings =
+    [ (invalidDatumIndexAttack, "Benign: the validator never decodes its continuation output's datum, so changing the constructor index (Con0 -> Con6) changes nothing it relies on.")
+    , (largeDataAttack, "Benign: the validator never decodes its continuation output's datum, so extra appended fields change nothing it relies on - and the owner pays the larger min-UTxO themselves.")
+    , (largeValueAttack, "Benign: the value check is `geq`, so junk tokens added to the continuation output can only increase what stays locked; they cannot reduce what is owed.")
+    , (missingOutputDatumAttack, "Benign: the validator neither reads nor requires a datum on its continuation output, so dropping it changes nothing it relies on.")
+    , (outputDatumHashMissingAttack, "Benign: the validator neither reads nor requires an inline datum, so replacing it with a hash changes nothing it relies on.")
+    , (unprotectedScriptOutput, "Benign: the output is redirected to the owner's own key address, and only once the validity range is past both tranche dates, when 'remainingExpected' is zero and the owner - who must still sign - is entitled to withdraw everything anyway.")
+    , (valueUnderpaymentAttack, "Benign: the validator only checks that the value left at its own address covers the unvested tranches. Past both tranche dates that degrades to 'leftover >= 0', so the signing owner can only underpay their own already-vested funds.")
+    ]
 
 -------------------------------------------------------------------------------
 -- Helper functions
@@ -391,3 +404,7 @@ withdrawPBT params scriptHash curSlot ownerWallet amt lockedAmt = do
             C.NoStakeAddress
             (C.lovelaceToValue remaining)
   void $ tryBalanceAndSubmit mempty ownerWallet withdrawTx TrailingChange []
+
+-- | Shared reason: used by 3 entries in the instance above.
+singleStateUtxo :: String
+singleStateUtxo = "Needs a second script input or a second UTxO at the script address; this contract locks a single state UTxO."

@@ -7,8 +7,8 @@ and which are only reported as status lines.
 -}
 module ZeroCoverageSpec (zeroCoverageTests) where
 
-import Convex.Tasty.Streaming.TMSummary (ThreatModelCategory (..), ThreatModelSummary (..))
-import Convex.TestingInterface (CoverageClaim (..), ZeroCoverageKind (..), claimCategory, skippedMessage, zeroCoverageKind, zeroCoverageVerdict)
+import Convex.Tasty.Streaming.TMSummary (Fault (..), ThreatModelCategory (..), ThreatModelSummary (..))
+import Convex.TestingInterface (ZeroCoverageKind (..), skippedMessage, zeroCoverageKind, zeroCoverageVerdict)
 import Convex.ThreatModel (ThreatModelOutcome (..), finalOutcome)
 import Data.List (isInfixOf)
 import Test.Tasty (TestTree, testGroup)
@@ -27,6 +27,7 @@ neverTested skipped phase1 errors =
     , tmsSkipped = skipped
     , tmsSkippedPhase1 = phase1
     , tmsErrors = errors
+    , tmsFault = Nothing
     }
 
 preconditionNeverMet, oneEnvironmentalSkip, allErrors :: ThreatModelSummary
@@ -40,25 +41,36 @@ rebalanceReason :: String
 rebalanceReason = "Rebalancing failed: No change output found to wallet address"
 
 -- | The verdict is a failure whose message contains every fragment.
-fails :: String -> CoverageClaim -> ThreatModelSummary -> [String] -> [String] -> TestTree
+fails :: String -> ThreatModelCategory -> ThreatModelSummary -> [String] -> [String] -> TestTree
 fails name claim summary reasons fragments = testCase name $
   case zeroCoverageVerdict claim summary reasons of
-    Left msg -> mapM_ (\f -> assertBool ("expected " <> show f <> " in failure:\n" <> msg) (f `isInfixOf` msg)) fragments
+    Left (_, msg) -> mapM_ (\f -> assertBool ("expected " <> show f <> " in failure:\n" <> msg) (f `isInfixOf` msg)) fragments
     Right steps -> assertFailure $ "expected a failure, got status lines:\n" <> unlines steps
 
 -- | The verdict is a failure whose message contains none of the fragments.
-failsWithout :: String -> CoverageClaim -> ThreatModelSummary -> [String] -> [String] -> TestTree
+failsWithout :: String -> ThreatModelCategory -> ThreatModelSummary -> [String] -> [String] -> TestTree
 failsWithout name claim summary reasons fragments = testCase name $
   case zeroCoverageVerdict claim summary reasons of
-    Left msg -> mapM_ (\f -> assertBool ("expected " <> show f <> " NOT in failure:\n" <> msg) (not (f `isInfixOf` msg))) fragments
+    Left (_, msg) -> mapM_ (\f -> assertBool ("expected " <> show f <> " NOT in failure:\n" <> msg) (not (f `isInfixOf` msg))) fragments
+    Right steps -> assertFailure $ "expected a failure, got status lines:\n" <> unlines steps
+
+{- | The verdict is a failure attributed to the given fault. Which fault a
+zero-coverage failure carries is the whole point of the distinction: a model
+that never applied is a claim you cannot have, while one that applied but
+could never be attacked is a limit of the generator or the harness.
+-}
+blames :: String -> ThreatModelCategory -> ThreatModelSummary -> Fault -> TestTree
+blames name claim summary expected = testCase name $
+  case zeroCoverageVerdict claim summary [] of
+    Left (fault, _) -> fault @?= expected
     Right steps -> assertFailure $ "expected a failure, got status lines:\n" <> unlines steps
 
 -- | The verdict is a set of status lines that together contain every fragment.
-reports :: String -> CoverageClaim -> ThreatModelSummary -> [String] -> [String] -> TestTree
+reports :: String -> ThreatModelCategory -> ThreatModelSummary -> [String] -> [String] -> TestTree
 reports name claim summary reasons fragments = testCase name $
   case zeroCoverageVerdict claim summary reasons of
     Right steps -> mapM_ (\f -> assertBool ("expected " <> show f <> " in status lines:\n" <> unlines steps) (f `isInfixOf` unlines steps)) fragments
-    Left msg -> assertFailure $ "expected status lines, got a failure:\n" <> msg
+    Left (fault, msg) -> assertFailure $ "expected status lines, got a " <> show fault <> " failure:\n" <> msg
 
 zeroCoverageTests :: TestTree
 zeroCoverageTests =
@@ -66,29 +78,29 @@ zeroCoverageTests =
     "zero-coverage policy"
     [ testGroup
         "precondition never met"
-        [ reports "default list is only reported" ClaimedByDefault preconditionNeverMet [] ["SKIPPED: Precondition never met", "0/100 tests applicable"]
-        , fails "explicit list fails" ClaimedExplicitly preconditionNeverMet [] ["Threat model never applied", "100 generated transactions", "'threatModels'"]
-        , fails "expected vulnerability fails" ExpectedToBeFound preconditionNeverMet [] ["Expected vulnerability never exercised", "'expectedVulnerabilities'"]
+        [ reports "default list is only reported" Surveyed preconditionNeverMet [] ["SKIPPED: Precondition never met", "0/100 tests applicable"]
+        , fails "explicit list fails" Claimed preconditionNeverMet [] ["Threat model never applied", "100 generated transactions", "'threatModels'"]
+        , fails "expected vulnerability fails" Expected preconditionNeverMet [] ["Expected vulnerability never exercised", "'expectedVulnerabilities'"]
         ]
     , testGroup
         "attack never carried out"
-        [ reports "default list warns loudly, with reasons" ClaimedByDefault oneEnvironmentalSkip [rebalanceReason] ["WARNING: zero attack coverage", "1 phase 1/rebalance skipped", rebalanceReason]
-        , fails "explicit list fails, with reasons" ClaimedExplicitly oneEnvironmentalSkip [rebalanceReason] ["Threat model never tested", "99 precondition skipped, 1 phase 1/rebalance skipped", rebalanceReason]
-        , fails "expected vulnerability fails, with reasons" ExpectedToBeFound oneEnvironmentalSkip [rebalanceReason] ["Expected vulnerability never tested", rebalanceReason]
-        , fails "reasons are capped at five" ClaimedExplicitly oneEnvironmentalSkip (map (\i -> "reason " <> show i) [1 .. 7 :: Int]) ["reason 5", "... and 2 more"]
-        , failsWithout "the sixth reason is not listed" ClaimedExplicitly oneEnvironmentalSkip (map (\i -> "reason " <> show i) [1 .. 7 :: Int]) ["reason 6"]
+        [ reports "default list warns loudly, with reasons" Surveyed oneEnvironmentalSkip [rebalanceReason] ["WARNING: zero attack coverage", "1 phase 1/rebalance skipped", rebalanceReason]
+        , fails "explicit list fails, with reasons" Claimed oneEnvironmentalSkip [rebalanceReason] ["Threat model never tested", "99 precondition skipped, 1 phase 1/rebalance skipped", rebalanceReason]
+        , fails "expected vulnerability fails, with reasons" Expected oneEnvironmentalSkip [rebalanceReason] ["Expected vulnerability never tested", rebalanceReason]
+        , fails "reasons are capped at five" Claimed oneEnvironmentalSkip (map (\i -> "reason " <> show i) [1 .. 7 :: Int]) ["reason 5", "... and 2 more"]
+        , failsWithout "the sixth reason is not listed" Claimed oneEnvironmentalSkip (map (\i -> "reason " <> show i) [1 .. 7 :: Int]) ["reason 6"]
         ]
     , testGroup
         "model errored"
-        [ fails "an all-error run names the error, not the precondition" ClaimedExplicitly allErrors ["No signing wallet found"] ["Threat model never tested", "errored before it could attack anything", "100 errors", "No signing wallet found"]
-        , failsWithout "an all-error run does not blame the precondition" ClaimedExplicitly allErrors ["No signing wallet found"] ["precondition held"]
-        , reports "default list warns instead of failing" ClaimedByDefault allErrors ["No signing wallet found"] ["WARNING: zero attack coverage", "errored before it could attack anything"]
-        , fails "expected vulnerability fails too" ExpectedToBeFound allErrors ["No signing wallet found"] ["Expected vulnerability never tested", "errored before it could attack anything"]
+        [ fails "an all-error run names the error, not the precondition" Claimed allErrors ["No signing wallet found"] ["Threat model never tested", "errored before it could attack anything", "100 errors", "No signing wallet found"]
+        , failsWithout "an all-error run does not blame the precondition" Claimed allErrors ["No signing wallet found"] ["precondition held"]
+        , reports "default list warns instead of failing" Surveyed allErrors ["No signing wallet found"] ["WARNING: zero attack coverage", "errored before it could attack anything"]
+        , fails "expected vulnerability fails too" Expected allErrors ["No signing wallet found"] ["Expected vulnerability never tested", "errored before it could attack anything"]
         ]
     , testGroup
         "no reasons to report"
-        [ fails "the sentence ends in a period" ClaimedExplicitly oneEnvironmentalSkip [] ["remove the model."]
-        , failsWithout "never a dangling colon" ClaimedExplicitly oneEnvironmentalSkip [] [":\n"]
+        [ fails "the sentence ends in a period" Claimed oneEnvironmentalSkip [] ["remove it."]
+        , failsWithout "never a dangling colon" Claimed oneEnvironmentalSkip [] [":\n"]
         ]
     , testGroup
         -- 'zeroCoverageVerdict' fails a claimed model on a TMError, so a run
@@ -112,15 +124,23 @@ zeroCoverageTests =
               other -> assertFailure ("rankings disagree: " <> show (fst other))
         ]
     , testGroup
-        "accepted findings claim nothing"
-        [ reports "zero coverage is only reported" AcceptedByDesign preconditionNeverMet [] ["SKIPPED: Precondition never met"]
-        , reports "the reasons are still listed" AcceptedByDesign oneEnvironmentalSkip [rebalanceReason] [rebalanceReason]
+        "an accepted finding is judged exactly like an expected vulnerability"
+        [ fails "zero coverage fails it too" Accepted preconditionNeverMet [] ["Accepted finding never applied"]
+        , fails "the reasons are still listed" Accepted oneEnvironmentalSkip [rebalanceReason] [rebalanceReason]
+        , blames "never applying is the declaration's fault" Accepted preconditionNeverMet Declaration
+        , blames "never being attacked is the setup's fault" Accepted oneEnvironmentalSkip Setup
         ]
     , testGroup
-        "every claim reports under a category"
-        [ testCase "each claim maps to the list it came from" $
-            map claimCategory [ClaimedByDefault, ClaimedExplicitly, ExpectedToBeFound, AcceptedByDesign]
-              @?= [Claimed, Claimed, Expected, Accepted]
+        "a model declared not applicable is confirmed by zero coverage"
+        [ reports "never applying is the passing outcome" NotApplicable preconditionNeverMet [] ["Confirmed not applicable"]
+        ]
+    , testGroup
+        "zero coverage names whose fault it is"
+        [ blames "a claim that never applied is the declaration's fault" Claimed preconditionNeverMet Declaration
+        , blames "a claim that could not be attacked is the setup's fault" Claimed oneEnvironmentalSkip Setup
+        , blames "a model that only errored is the setup's fault" Claimed allErrors Setup
+        , blames "an expected vulnerability that never applied is the declaration's fault" Expected preconditionNeverMet Declaration
+        , blames "an expected vulnerability that could not be attacked is the setup's fault" Expected oneEnvironmentalSkip Setup
         ]
     , testGroup
         "skipped status line"

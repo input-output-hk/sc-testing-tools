@@ -68,7 +68,24 @@ import Convex.TestingInterface (
   propRunActionsWithOptions,
  )
 import Convex.ThreatModel.Cardano.Api (dummyTxId)
+import Convex.ThreatModel.DatumBloat (datumByteBloatAttack, datumListBloatAttack)
+import Convex.ThreatModel.DoubleSatisfaction (doubleSatisfaction)
+import Convex.ThreatModel.DuplicateListEntry (duplicateListEntryAttack)
+import Convex.ThreatModel.InputDuplication (inputDuplication)
+import Convex.ThreatModel.InvalidDatumIndex (invalidDatumIndexAttack)
+import Convex.ThreatModel.LargeData (largeDataAttack)
+import Convex.ThreatModel.LargeValue (largeValueAttack)
+import Convex.ThreatModel.MissingOutputDatum (missingOutputDatumAttack)
+import Convex.ThreatModel.MutualExclusion (mutualExclusionAttack)
+import Convex.ThreatModel.NegativeInteger (negativeIntegerAttack)
+import Convex.ThreatModel.OutputDatumHashMissing (outputDatumHashMissingAttack)
 import Convex.ThreatModel.RedeemerAssetSubstitution (redeemerAssetSubstitution)
+import Convex.ThreatModel.SelfReferenceInjection (selfReferenceInjection)
+import Convex.ThreatModel.SignatoryRemoval (signatoryRemoval)
+import Convex.ThreatModel.TimeBoundManipulation (timeBoundManipulation)
+import Convex.ThreatModel.TokenForgery (tokenForgeryAttack)
+import Convex.ThreatModel.UnprotectedScriptOutput (unprotectedScriptOutput)
+import Convex.ThreatModel.ValueUnderpayment (valueUnderpaymentAttack)
 import Convex.Utils (failOnError)
 import Convex.Wallet (Wallet, addressInEra)
 import Convex.Wallet.MockWallet qualified as Wallet
@@ -90,7 +107,6 @@ import Convex.Tasty.QuickCheck (
   testProperty,
  )
 import Convex.Tasty.QuickCheck qualified as QC
-import Convex.ThreatModel.TokenForgery (tokenForgeryAttack)
 import Data.Aeson (ToJSON (..))
 import System.IO.Unsafe (unsafePerformIO)
 import Test.QuickCheck.Monadic (monadicIO, monitor, run)
@@ -756,7 +772,34 @@ instance TestingInterface PurchaseOfferModel where
       )
 
 instance ThreatModelsFor PurchaseOfferModel where
-  expectedVulnerabilities = [redeemerAssetSubstitution, tokenForgeryAttack]
+  {- Every model this contract does not already declare was surveyed and
+  never applied once - the survey verified nothing. Recorded as not
+  applicable instead, so a shape change that makes one apply fails loudly
+  rather than passing in silence. -}
+  notApplicable =
+    [ (datumByteBloatAttack, noScriptContinuation)
+    , (datumListBloatAttack, noScriptContinuation)
+    , (duplicateListEntryAttack, noScriptContinuation)
+    , (invalidDatumIndexAttack, noScriptContinuation)
+    , (largeDataAttack, noScriptContinuation)
+    , (largeValueAttack, noScriptContinuation)
+    , (missingOutputDatumAttack, noScriptContinuation)
+    , (negativeIntegerAttack, noScriptContinuation)
+    , (outputDatumHashMissingAttack, noScriptContinuation)
+    , (selfReferenceInjection, noScriptContinuation)
+    , (unprotectedScriptOutput, noScriptContinuation)
+    , (valueUnderpaymentAttack, noScriptContinuation)
+    , (doubleSatisfaction, singleStateUtxo)
+    , (inputDuplication, singleStateUtxo)
+    , (mutualExclusionAttack, singleStateUtxo)
+    , (signatoryRemoval, "No transaction declares a required signer, so there is none to remove.")
+    , (timeBoundManipulation, "No transaction constrains its validity range, so there is nothing to manipulate.")
+    ]
+
+  expectedVulnerabilities =
+    [ (redeemerAssetSubstitution, "CTF exercise: the contract ships with this vulnerability deliberately")
+    , (tokenForgeryAttack, "CTF exercise: the contract ships with this vulnerability deliberately")
+    ]
 
 -- ----------------------------------------------------------------------------
 -- Test tree
@@ -778,3 +821,11 @@ aikenPurchaseOfferTests runOpts =
             (propPurchaseOfferVulnerableToRedeemerManipulation runOpts)
         ]
     ]
+
+-- | Shared reason: used by 12 entries in the instance above.
+noScriptContinuation :: String
+noScriptContinuation = "Needs a script input and an attackable script output in one transaction. CreateOffer pays into the script but spends no script input; FulfillOffer spends the offer but produces no continuation output."
+
+-- | Shared reason: used by 3 entries in the instance above.
+singleStateUtxo :: String
+singleStateUtxo = "Needs a second script input or a second UTxO at the script address; the offer is a single state UTxO."

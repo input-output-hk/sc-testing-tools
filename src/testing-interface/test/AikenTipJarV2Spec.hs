@@ -537,16 +537,22 @@ instance TestingInterface TipJarV2Model where
   monitoring _state _action prop = prop
 
 instance ThreatModelsFor TipJarV2Model where
+  {- These are harness fixtures, not contracts under review: the CTF
+  exercises are deliberately vulnerable, so surveying every model finds
+  real bugs that are beside the point. The models each fixture exercises
+  are declared explicitly below. -}
+  candidateModels = []
+
   -- Threat models to test vulnerability detection.
   -- Note: We intentionally exclude datumByteBloatAttackWith and largeValueAttackWith here
   -- because they WOULD find vulnerabilities (which is expected for this contract).
   -- Including unprotectedScriptOutput and largeDataAttackWith for basic coverage.
   threatModels = [unprotectedScriptOutput, largeDataAttackWith 10]
 
-  -- Expected vulnerabilities: threat models that SHOULD find vulnerabilities.
-  -- V2 is STILL vulnerable to datum bloat (no message size limit) and large value
-  -- attacks (value_preserved only prevents REMOVAL, not ADDITION of tokens).
-  expectedVulnerabilities = [datumByteBloatAttackWith 1000, largeValueAttackWith 10]
+  expectedVulnerabilities =
+    [ (datumByteBloatAttackWith 1000, "V2 still has no message size limit")
+    , (largeValueAttackWith 10, "V2's value_preserved check only prevents REMOVAL of tokens, not ADDITION")
+    ]
 
 -- ----------------------------------------------------------------------------
 -- Test tree
