@@ -39,6 +39,7 @@ import LargeDataSpec (largeDataTests)
 import PingPongCoverageSpec (pingPongCoverageTests)
 import PingPongSpec (pingPongTests)
 import RebalanceSpec (rebalanceTests)
+import RunningScriptsSpec (runningScriptsTests)
 import SampleSpec (sampleScriptTest)
 import ScriptDataSpec (scriptDataTests)
 import Scripts (pingPongCovIdx)
@@ -79,6 +80,7 @@ tests opts runOpts =
         ]
     , rebalanceTests
     , scriptDataTests
+    , runningScriptsTests
     , largeDataTests
     , aikenTests opts
     , aikenBankTests runOpts

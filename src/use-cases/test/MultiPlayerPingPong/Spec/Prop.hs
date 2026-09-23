@@ -275,8 +275,13 @@ instance ThreatModelsFor MultiPlayerPingPongModel where
   -- listed as an expected vulnerability but its precondition (a validity
   -- range constraint to manipulate) never held on any generated
   -- transaction, so it asserted nothing and is dropped.
+  -- 'duplicateListEntryAttack' was likewise listed as an expected
+  -- vulnerability, but with outputs now filtered to those a running script
+  -- guards it no longer finds one: the finding it recorded came from
+  -- degrading an output no validator was asked about.
   threatModels =
     [ datumListBloatAttack
+    , duplicateListEntryAttack
     , invalidDatumIndexAttack
     , largeDataAttack
     , largeValueAttack
@@ -286,9 +291,6 @@ instance ThreatModelsFor MultiPlayerPingPongModel where
     , signatoryRemoval
     , unprotectedScriptOutput
     , valueUnderpaymentAttack
-    ]
-  expectedVulnerabilities =
-    [ duplicateListEntryAttack
     ]
 
 -------------------------------------------------------------------------------
