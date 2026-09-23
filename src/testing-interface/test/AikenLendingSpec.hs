@@ -965,6 +965,12 @@ instance TestingInterface LendingModel where
       )
 
 instance ThreatModelsFor LendingModel where
+  {- These are harness fixtures, not contracts under review: the CTF
+  exercises are deliberately vulnerable, so surveying every model finds
+  real bugs that are beside the point. The models each fixture exercises
+  are declared explicitly below. -}
+  candidateModels = []
+
   -- threatModels is empty - vulnerabilities are tested via expectedVulnerabilities
   -- or via standalone tests.
   threatModels = []
@@ -973,7 +979,10 @@ instance ThreatModelsFor LendingModel where
   -- They are run as expected vulnerabilities (inverted pass/fail).
   -- - unprotectedScriptOutput: Anyone can spend without proper authorization
   -- - inputDuplication: Multiple loans can be exploited via input duplication
-  expectedVulnerabilities = [unprotectedScriptOutput, inputDuplication]
+  expectedVulnerabilities =
+    [ (unprotectedScriptOutput, "CTF exercise: the contract ships with this vulnerability deliberately")
+    , (inputDuplication, "CTF exercise: the contract ships with this vulnerability deliberately")
+    ]
 
 -- ----------------------------------------------------------------------------
 -- Test tree

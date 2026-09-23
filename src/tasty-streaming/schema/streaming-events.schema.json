@@ -519,7 +519,9 @@
                     "enum": [
                         "claimed",
                         "expected",
-                        "accepted"
+                        "accepted",
+                        "surveyed",
+                        "not_applicable"
                     ],
                     "type": "string"
                 },
@@ -528,6 +530,23 @@
                 },
                 "failed": {
                     "type": "integer"
+                },
+                "fault": {
+                    "anyOf": [
+                        {
+                            "enum": [
+                                "contract",
+                                "declaration",
+                                "setup"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "enum": [
+                                null
+                            ]
+                        }
+                    ]
                 },
                 "name": {
                     "type": "string"
@@ -567,7 +586,9 @@
                     "enum": [
                         "claimed",
                         "expected",
-                        "accepted"
+                        "accepted",
+                        "surveyed",
+                        "not_applicable"
                     ],
                     "type": "string"
                 },

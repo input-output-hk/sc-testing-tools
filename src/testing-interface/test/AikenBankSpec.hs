@@ -1014,22 +1014,22 @@ instance TestingInterface BankModel where
   addressLabeler = bankAddressLabeler <> mockWalletAddressLabeler
 
 instance ThreatModelsFor BankModel where
+  {- These are harness fixtures, not contracts under review: the CTF
+  exercises are deliberately vulnerable, so surveying every model finds
+  real bugs that are beside the point. The models each fixture exercises
+  are declared explicitly below. -}
+  candidateModels = []
+
   threatModels = [unprotectedScriptOutput, negativeIntegerAttack]
 
-  expectedVulnerabilities = [mutualExclusionAttack]
+  expectedVulnerabilities = [(mutualExclusionAttack, "CTF exercise: the contract ships with this vulnerability deliberately")]
 
-  -- valueUnderpaymentAttack is listed here rather than in 'threatModels' or
-  -- 'expectedVulnerabilities' because it flags a benign artifact of this
-  -- contract's design rather than an exploitable bug: fund custody lives
-  -- entirely in the bank's own pooled UTxO, whose ADA change is tied to the
-  -- account's balance change by 'ctf_bank_00_bank.ak' ("fund_difference ==
-  -- balance change"). The account UTxO's own ADA is never checked against
-  -- its balance datum by either validator ('ctf_bank_00_account.ak' only
-  -- checks signatures), so reducing it while leaving the datum unchanged
-  -- always still validates - it doesn't let an attacker touch the pooled
-  -- funds, only recover ADA they themselves put into their own account
-  -- UTxO.
-  acceptedFindings = [valueUnderpaymentAttack]
+  acceptedFindings =
+    [
+      ( valueUnderpaymentAttack
+      , "Benign: fund custody lives in the bank's pooled UTxO, whose ADA change is tied to the account's balance change by ctf_bank_00_bank.ak. The account UTxO's own ADA is never checked against its balance datum, so reducing it always validates - but that only recovers ADA the attacker put into their own account, never the pooled funds."
+      )
+    ]
 
 -- ----------------------------------------------------------------------------
 -- Test tree

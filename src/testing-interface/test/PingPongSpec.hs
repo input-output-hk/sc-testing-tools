@@ -361,6 +361,12 @@ instance TestingInterface PingPongModel where
   redeemerTagger = autoRedeemerTag (Proxy @PingPong.PingPongRedeemer)
 
 instance ThreatModelsFor PingPongModel where
+  {- These are harness fixtures, not contracts under review: the CTF
+  exercises are deliberately vulnerable, so surveying every model finds
+  real bugs that are beside the point. The models each fixture exercises
+  are declared explicitly below. -}
+  candidateModels = []
+
   threatModels =
     [ largeDataAttackWith 10
     , largeValueAttackWith 10
@@ -406,6 +412,12 @@ instance TestingInterface PingPongMonitoringModel where
       (QC.property False)
 
 instance ThreatModelsFor PingPongMonitoringModel where
+  {- These are harness fixtures, not contracts under review: the CTF
+  exercises are deliberately vulnerable, so surveying every model finds
+  real bugs that are beside the point. The models each fixture exercises
+  are declared explicitly below. -}
+  candidateModels = []
+
   threatModels = []
   expectedVulnerabilities = []
 

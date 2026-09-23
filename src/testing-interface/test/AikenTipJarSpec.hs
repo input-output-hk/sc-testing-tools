@@ -560,14 +560,18 @@ instance TestingInterface TipJarModel where
   redeemerTagger = autoRedeemerTag (Proxy @TipJarRedeemer)
 
 instance ThreatModelsFor TipJarModel where
-  -- Threat models to test vulnerability detection.
-  -- Note: largeDataAttackWith, largeValueAttackWith, and datumByteBloatAttackWith
-  -- all FAIL (detecting vulnerabilities), so only unprotectedScriptOutput is included.
+  {- These are harness fixtures, not contracts under review: the CTF
+  exercises are deliberately vulnerable, so surveying every model finds
+  real bugs that are beside the point. The models each fixture exercises
+  are declared explicitly below. -}
+  candidateModels = []
+
   threatModels = [unprotectedScriptOutput, largeDataAttackWith 10]
 
-  -- Expected vulnerabilities: threat models that SHOULD find vulnerabilities.
-  -- These are run with inverted pass/fail semantics.
-  expectedVulnerabilities = [datumByteBloatAttackWith 1000, largeValueAttackWith 10]
+  expectedVulnerabilities =
+    [ (datumByteBloatAttackWith 1000, "No message size limit on the tip datum. (V2 carries this forward - see AikenTipJarV2Spec.)")
+    , (largeValueAttackWith 10, "Nothing prevents tokens being ADDED to the jar's output. (V2 adds a value_preserved check, which still only prevents removal.)")
+    ]
 
 -- ----------------------------------------------------------------------------
 -- Test tree

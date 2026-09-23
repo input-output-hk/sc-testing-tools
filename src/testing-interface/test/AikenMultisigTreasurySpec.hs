@@ -748,6 +748,12 @@ instance TestingInterface MultisigModel where
       _ -> Nothing
 
 instance ThreatModelsFor MultisigModel where
+  {- These are harness fixtures, not contracts under review: the CTF
+  exercises are deliberately vulnerable, so surveying every model finds
+  real bugs that are beside the point. The models each fixture exercises
+  are declared explicitly below. -}
+  candidateModels = []
+
   -- NOTE: threatModels is empty for multisig because most action sequences
   -- end with UseMultisig (which doesn't create a script output). Threat models
   -- like unprotectedScriptOutput require a script output, causing 100% test discard.
@@ -755,7 +761,7 @@ instance ThreatModelsFor MultisigModel where
 
   -- Expected vulnerabilities: these threat models SHOULD find issues
   -- (inverted pass/fail, quiet output)
-  expectedVulnerabilities = [unprotectedScriptOutput]
+  expectedVulnerabilities = [(unprotectedScriptOutput, "CTF exercise: the contract ships with this vulnerability deliberately")]
 
 -- ----------------------------------------------------------------------------
 -- Test tree
