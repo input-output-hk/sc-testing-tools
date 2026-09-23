@@ -71,6 +71,7 @@ module Convex.ThreatModel (
   runThreatModelCheck,
   runThreatModelCheckTraced,
   ThreatModelCheckEntry (..),
+  finalOutcome,
   assertThreatModel,
   getThreatModelName,
 
@@ -79,7 +80,14 @@ module Convex.ThreatModel (
   inPrecondition,
   ensure,
   ensureHasInputAt,
-  requireScriptInput,
+  requireScriptExecution,
+  guardedScriptOutputs,
+  anyGuardedOutput,
+  anyGuardedOutputSuchThat,
+  anyGuardedOutputWithInlineDatum,
+  hasInlineDatum,
+  getInlineDatum,
+  toInlineDatum,
   failPrecondition,
 
   -- ** Validation
@@ -100,6 +108,7 @@ module Convex.ThreatModel (
 
   -- ** Random generation
   forAllTM,
+  shrinkPositive,
   pickAny,
   anySigner,
   anyInput,
@@ -148,11 +157,14 @@ module Convex.ThreatModel (
 
 import Cardano.Api as X
 
+import Cardano.Ledger.Hashes qualified as Ledger (ScriptHash)
+import Control.Applicative ((<|>))
 import Control.Lens ((%~), (&))
 import Control.Monad
 import Data.Containers.ListUtils (nubOrd)
 import Data.List (intercalate)
 import Data.Map qualified as Map
+import Data.Set qualified as Set
 import Text.PrettyPrint hiding ((<>))
 import Text.Printf
 
@@ -193,6 +205,19 @@ data ThreatModelEnv = ThreatModelEnv
   env, shared between all its users. The data constructor is not exported;
   'mkThreatModelEnv' maintains the invariant.
   -}
+  , currentTxBodyContent :: TxBodyContent ViewTx Era
+  {- ^ The body content of 'currentTx'. Deliberately lazy and shared, like
+  'currentUTxOs': rebuilding it deserialises every output's datum and
+  reference script, and each model that asks for the transaction's inputs
+  or outputs would otherwise redo that for the same env.
+  -}
+  , runningPlutusScripts :: Set.Set Ledger.ScriptHash
+  {- ^ The Plutus scripts that run in 'currentTx' (see
+  'guardedScriptOutputs'). Deliberately lazy and shared, like
+  'currentUTxOs': computing it walks the transaction's script requirements
+  against the whole UTxO set, and every model that asks for guarded outputs
+  would otherwise redo that for the same env.
+  -}
   , currentChainState :: MockChainState Era
   {- ^ The chain state the transaction validated against (just before it was
   applied). Modified transactions are rebalanced and re-validated against
@@ -215,6 +240,8 @@ mkThreatModelEnv tx chainState =
   ThreatModelEnv
     { currentTx = tx
     , currentUTxOs = chainStateUTxO chainState
+    , currentTxBodyContent = txBodyContentOf tx
+    , runningPlutusScripts = runningPlutusScriptHashes (chainStateLedgerUTxO chainState) tx
     , currentChainState = chainState
     }
 
@@ -483,10 +510,16 @@ runThreatModelM' quiet signingWallet = go False
             -- Surface the reason as a QuickCheck table (even in quiet mode),
             -- so partial coverage loss is visible: when some envs rebalance
             -- and others don't, the passing property's tables name the
-            -- failures. Note QuickCheck only prints tables from completed
-            -- tests, so a run where EVERY iteration is discarded still ends
-            -- in a bare "Gave up!" - use the check runners (which record
-            -- 'tmceRebalanceError') to diagnose that case.
+            -- failures. QuickCheck keeps nothing from a discarded test
+            -- though - no tables, no labels, no callbacks' output - and
+            -- offers no state that survives an iteration, so a run where
+            -- EVERY iteration is discarded ends in a bare "*** Gave up!".
+            -- Read that as "the attack could never be built on this
+            -- contract's transactions" and diagnose it with the check
+            -- runners, which record the reason per entry in
+            -- 'tmceRebalanceError', or through the testing interface, whose
+            -- per-model test case fails with the distinct reasons (see
+            -- 'Convex.TestingInterface.zeroCoverageVerdict').
             QC.tabulate "Rebalancing failed with reason" [err] <$> go b model envs
           Right rebalancedTx -> do
             -- Validate with full Phase 1 + Phase 2
@@ -530,17 +563,17 @@ runThreatModelCheck
   -> ThreatModel a
   -> [ThreatModelEnv]
   -> m (ThreatModelOutcome, Property -> Property)
-runThreatModelCheck signingWallet = go False False []
+runThreatModelCheck signingWallet = go False False Nothing []
  where
   composeMonitors = foldr (.) id
-  go b hadPhase1Error mons _model [] = pure (if b then TMPassed else if hadPhase1Error then TMSkippedPhase1 else TMSkipped, composeMonitors mons)
-  go b hadPhase1Error mons model (env : envs) = do
+  go b hadPhase1Error firstErr mons _model [] = pure (finalOutcome b hadPhase1Error firstErr, composeMonitors mons)
+  go b hadPhase1Error firstErr mons model (env : envs) = do
     -- Resolve wallet: use provided or detect from transaction
     let resolvedWallet = case signingWallet of
           SignWith w -> Right w
           AutoSign -> TM.detectSigningWallet (currentTx env)
     case resolvedWallet of
-      Left err -> pure (TMError err, composeMonitors mons) -- Continue to next env would lose the error, so return it
+      Left err -> go b hadPhase1Error (firstErr <|> Just err) (walletMonitor err : mons) model envs
       Right wallet -> checkInterp wallet mons model
    where
     checkInterp wallet mons' = \case
@@ -555,24 +588,24 @@ runThreatModelCheck signingWallet = go False False []
             -- environmental skip (like a Phase 1 invalidation), NOT a
             -- precondition miss: the model applied, the attack transaction
             -- just couldn't be built.
-            go b True mons' model envs
+            go b True firstErr mons' model envs
           Right rebalancedTx -> do
             (report, covData) <- validateTxM params (currentChainState env) rebalancedTx modifiedUtxo
             modifyMockChainState $ \s -> ((), s & coverageData %~ (<> covData))
             case validity report of
-              Phase1Invalid -> go b True mons' model envs
+              Phase1Invalid -> go b True firstErr mons' model envs
               _ -> checkInterp wallet mons' (k report)
       Generate gen _shr k -> do
         a <- liftIO $ QC.generate gen
         checkInterp wallet mons' (k a)
       GetCtx k ->
         checkInterp wallet mons' (k env)
-      Skip -> go b hadPhase1Error mons' model envs
+      Skip -> go b hadPhase1Error firstErr mons' model envs
       InPrecondition k -> checkInterp wallet mons' (k False)
       Fail err -> pure (TMFailed err, composeMonitors mons')
       Monitor m k -> checkInterp wallet (m : mons') k
       MonitorLocal m k -> checkInterp wallet (m : mons') k
-      Done{} -> go True hadPhase1Error mons' model envs
+      Done{} -> go True hadPhase1Error firstErr mons' model envs
       Named _n k -> checkInterp wallet mons' k
 
 -- | A single trace entry from a threat model check against one ThreatModelEnv.
@@ -607,17 +640,17 @@ runThreatModelCheckTraced
   -> ThreatModel a
   -> [ThreatModelEnv]
   -> m (ThreatModelOutcome, [ThreatModelCheckEntry], Property -> Property)
-runThreatModelCheckTraced signingWallet = go False False [] [] 0
+runThreatModelCheckTraced signingWallet = go False False Nothing [] [] 0
  where
   composeMonitors = foldr (.) id
-  go b hadPhase1Error acc mons _envIdx _model [] = pure (if b then TMPassed else if hadPhase1Error then TMSkippedPhase1 else TMSkipped, reverse acc, composeMonitors mons)
-  go b hadPhase1Error acc mons envIdx model (env : envs) = do
+  go b hadPhase1Error firstErr acc mons _envIdx _model [] = pure (finalOutcome b hadPhase1Error firstErr, reverse acc, composeMonitors mons)
+  go b hadPhase1Error firstErr acc mons envIdx model (env : envs) = do
     -- Resolve wallet: use provided or detect from transaction
     let resolvedWallet = case signingWallet of
           SignWith w -> Right w
           AutoSign -> TM.detectSigningWallet (currentTx env)
     case resolvedWallet of
-      Left err -> pure (TMError err, reverse acc, composeMonitors mons)
+      Left err -> go b hadPhase1Error (firstErr <|> Just err) acc (walletMonitor err : mons) (envIdx + 1) model envs
       Right wallet -> checkInterp wallet acc mons model
    where
     checkInterp wallet acc' mons' = \case
@@ -643,7 +676,7 @@ runThreatModelCheckTraced signingWallet = go False False [] [] 0
             -- environmental skip (like a Phase 1 invalidation), NOT a
             -- precondition miss: the model applied, the attack transaction
             -- just couldn't be built.
-            go b True (entry : acc') mons' (envIdx + 1) model envs
+            go b True firstErr (entry : acc') mons' (envIdx + 1) model envs
           Right rebalancedTx -> do
             (report, covData) <- validateTxM params (currentChainState env) rebalancedTx modifiedUtxo
             modifyMockChainState $ \s -> ((), s & coverageData %~ (<> covData))
@@ -659,20 +692,42 @@ runThreatModelCheckTraced signingWallet = go False False [] [] 0
                     , tmceRebalanceError = Nothing
                     }
             case validity report of
-              Phase1Invalid -> go b True (entry : acc') mons' (envIdx + 1) model envs
+              Phase1Invalid -> go b True firstErr (entry : acc') mons' (envIdx + 1) model envs
               _ -> checkInterp wallet (entry : acc') mons' (k report)
       Generate gen _shr k -> do
         a <- liftIO $ QC.generate gen
         checkInterp wallet acc' mons' (k a)
       GetCtx k ->
         checkInterp wallet acc' mons' (k env)
-      Skip -> go b hadPhase1Error acc' mons' (envIdx + 1) model envs
+      Skip -> go b hadPhase1Error firstErr acc' mons' (envIdx + 1) model envs
       InPrecondition k -> checkInterp wallet acc' mons' (k False)
       Fail err -> pure (TMFailed err, reverse acc', composeMonitors mons')
       Monitor m k -> checkInterp wallet acc' (m : mons') k
       MonitorLocal m k -> checkInterp wallet acc' (m : mons') k
-      Done{} -> go True hadPhase1Error acc' mons' (envIdx + 1) model envs
+      Done{} -> go True hadPhase1Error firstErr acc' mons' (envIdx + 1) model envs
       Named _n k -> checkInterp wallet acc' mons' k
+
+{- | The outcome of a whole model run, most informative first: a pass beats
+everything else, an environmental skip at least proves the precondition
+held, and an error only speaks when nothing else happened. Mirrors
+'Convex.TestingInterface.zeroCoverageKind', which ranks the same three when
+deciding whether zero coverage should fail a test case - so 'TMError' there
+can be trusted to mean "no attack was ever carried out".
+-}
+finalOutcome :: Bool -> Bool -> Maybe String -> ThreatModelOutcome
+finalOutcome b hadPhase1Error firstErr
+  | b = TMPassed
+  | hadPhase1Error = TMSkippedPhase1
+  | Just err <- firstErr = TMError err
+  | otherwise = TMSkipped
+
+{- | Surface a transaction the model could not sign. Skipping the env keeps
+the envs after it attackable and keeps an earlier pass intact, but the
+reason would then be invisible on a run that otherwise succeeds, so record
+it the way rebalancing failures are recorded.
+-}
+walletMonitor :: String -> (Property -> Property)
+walletMonitor err = QC.tabulate "Threat model could not detect a signing wallet" [err]
 
 {- | Check a precondition. If the argument threat model fails, the evaluation of the current
   transaction is skipped. If all transactions in an evaluation of `runThreatModel` are skipped
@@ -713,23 +768,29 @@ ensureHasInputAt addr = do
   inputs <- getTxInputs
   ensure $ any ((addr ==) . addressOf) inputs
 
-{- | Precondition that requires the original transaction to spend at least one
-script input. Attacks that mutate a script output and then check whether
-spending it still validates need this: on a transaction that runs no script
-at all (e.g. a setup transaction that just pays a key input into a script for
-the first time), no validator ever gets a chance to reject the mutation, so
-"the mutated transaction still validates" is vacuous and proves nothing about
-the validator under test.
+{- | Precondition that requires the original transaction to run at least one
+Plutus script, of any purpose: a spending validator, a minting policy, a
+withdraw-zero staking validator, ... Attacks that mutate a script output and
+then check whether the transaction still validates need this: on a
+transaction that runs no script at all (e.g. a setup transaction that just
+pays a key input into a script for the first time), no validator ever gets a
+chance to reject the mutation, so "the mutated transaction still validates" is
+vacuous and proves nothing about the contract under test.
+
+The check is based on the transaction's redeemer set, not on its input
+addresses, because the script that guards a contract's outputs is not always
+a spending validator - the withdraw-zero pattern, for instance, validates the
+whole transaction from a Rewarding script while every input is key-owned.
+Conversely, an input at a native-script address runs no Plutus code and does
+not count.
 
 Not every attack needs this - one that tests a minting policy in isolation
 (e.g. "Convex.ThreatModel.TokenForgery") is still meaningful on a transaction
 that spends no script - so this is opt-in per attack rather than applied
 globally to every 'ThreatModelEnv'.
 -}
-requireScriptInput :: ThreatModel ()
-requireScriptInput = do
-  inputs <- getTxInputs
-  ensure $ any (not . isKeyAddressAny . addressOf) inputs
+requireScriptExecution :: ThreatModel ()
+requireScriptExecution = originalTx >>= ensure . txRunsPlutusScript
 
 -- | Returns @True@ if evaluated under a `threatPrecondition` and @False@ otherwise.
 inPrecondition :: ThreatModel Bool
@@ -810,17 +871,102 @@ originalTx = currentTx <$> getThreatModelEnv
 
 -- | Get the outputs from the original transaction.
 getTxOutputs :: ThreatModel [Output]
-getTxOutputs = zipWith (flip Output . TxIx) [0 ..] . txOutputs <$> originalTx
+getTxOutputs =
+  zipWith (flip Output . TxIx) [0 ..] . bodyContentOutputs . currentTxBodyContent
+    <$> getThreatModelEnv
+
+{- | The transaction's outputs whose payment credential is the hash of a
+Plutus script that runs in this transaction.
+
+Stronger than 'requireScriptExecution', and what the output-mutation
+attacks actually want: degrading an output is only evidence against a
+contract if a script plausibly responsible for it was executing and failed
+to object. Under the transaction-wide check, a transaction whose only
+script is an unrelated minting policy, paying into a validator for the
+first time, let those attacks degrade the new output and report a finding.
+
+Hash identity is a proxy, not proof, and it cuts both ways. A script
+running under /any/ purpose counts, so the withdraw-zero pattern's
+Rewarding script guards outputs at its own payment address - which is the
+point, and restricting this to Spending purposes would break that pattern,
+as there are no script inputs there at all. By the same token a
+multi-validator whose minting policy id equals its spending hash counts as
+guarding its own outputs. Conversely an output policed by some /other/
+running script is not matched and those attacks skip it, which is a
+known and accepted gap.
+
+Empty when no Plutus script runs at all, which is what lets
+'anyGuardedOutputSuchThat' subsume 'requireScriptExecution'.
+-}
+guardedScriptOutputs :: ThreatModel [Output]
+guardedScriptOutputs = do
+  running <- runningPlutusScripts <$> getThreatModelEnv
+  let guarded o = maybe False (`Set.member` running) (scriptHashOfAddressAny (addressOf o))
+  filter guarded <$> getTxOutputs
+
+{- | Pick any output that 'guardedScriptOutputs' admits and that satisfies
+the predicate, recording a precondition miss when there is none.
+
+The output-mutation attacks all want exactly this, so the emptiness
+convention lives here rather than being restated at each call site. Since
+'guardedScriptOutputs' is empty whenever no Plutus script runs, this
+subsumes 'requireScriptExecution' and no separate call is needed. Attacks
+that corrupt a redeemer of any running script (e.g.
+"Convex.ThreatModel.InvalidScriptPurpose", which targets a key output)
+still want the weaker, transaction-wide check.
+-}
+anyGuardedOutputSuchThat :: (Output -> Bool) -> ThreatModel Output
+anyGuardedOutputSuchThat p = do
+  outputs <- filter p <$> guardedScriptOutputs
+  threatPrecondition $ ensure (not $ null outputs)
+  pickAny outputs
+
+-- | Pick any output that 'guardedScriptOutputs' admits.
+anyGuardedOutput :: ThreatModel Output
+anyGuardedOutput = anyGuardedOutputSuchThat (const True)
+
+{- | Pick any output that 'guardedScriptOutputs' admits and that carries an
+inline datum, returning the output together with that datum.
+
+Every datum-mutating attack starts here, so the predicate and the
+extraction are one operation: splitting them left each call site with a
+@Nothing@ branch the predicate had already ruled out.
+-}
+anyGuardedOutputWithInlineDatum :: ThreatModel (Output, ScriptData)
+anyGuardedOutputWithInlineDatum = do
+  target <- anyGuardedOutputSuchThat hasInlineDatum
+  case getInlineDatum target of
+    Just datum -> pure (target, datum)
+    -- Unreachable: 'hasInlineDatum' is exactly the guard for this case.
+    Nothing -> failPrecondition "Script output missing inline datum"
+
+-- | Does this output carry an inline datum?
+hasInlineDatum :: Output -> Bool
+hasInlineDatum output =
+  case datumOfTxOut (outputTxOut output) of
+    TxOutDatumInline{} -> True
+    _ -> False
+
+-- | The output's inline datum, if it has one.
+getInlineDatum :: Output -> Maybe ScriptData
+getInlineDatum output =
+  case datumOfTxOut (outputTxOut output) of
+    TxOutDatumInline _ hashableData -> Just (getScriptData hashableData)
+    _ -> Nothing
+
+-- | Wrap a 'ScriptData' as an inline datum, for use with 'changeDatumOf'.
+toInlineDatum :: ScriptData -> Datum
+toInlineDatum sd =
+  TxOutDatumInline BabbageEraOnwardsConway (unsafeHashableScriptData sd)
 
 -- | Get the inputs from the original transaction.
 getTxInputs :: ThreatModel [Input]
 getTxInputs = do
   env <- getThreatModelEnv
-  let tx = currentTx env
-      UTxO utxos = currentUTxOs env
+  let UTxO utxos = currentUTxOs env
   pure
     [ Input txout i
-    | i <- txInputs tx
+    | i <- bodyContentInputs (currentTxBodyContent env)
     , Just txout <- [Map.lookup i utxos]
     ]
 
@@ -828,11 +974,10 @@ getTxInputs = do
 getTxReferenceInputs :: ThreatModel [Input]
 getTxReferenceInputs = do
   env <- getThreatModelEnv
-  let tx = currentTx env
-      UTxO utxos = currentUTxOs env
+  let UTxO utxos = currentUTxOs env
   pure
     [ Input txout i
-    | i <- txReferenceInputs tx
+    | i <- bodyContentReferenceInputs (currentTxBodyContent env)
     , Just txout <- [Map.lookup i utxos]
     ]
 
@@ -849,6 +994,13 @@ getTxRequiredSigners = TM.txRequiredSigners <$> originalTx
 -- | Generate a random value. Takes a QuickCheck generator and a `shrink` function.
 forAllTM :: (Show a) => Gen a -> (a -> [a]) -> ThreatModel a
 forAllTM g s = Generate g s pure
+
+{- | Shrink towards 1, never below it: the counts these attacks generate are
+sizes, and a size of zero is not a smaller failing case but a different
+(no-op) one.
+-}
+shrinkPositive :: Int -> [Int]
+shrinkPositive = filter (>= 1) . shrinkIntegral
 
 -- | Pick a random input
 anyInput :: ThreatModel Input

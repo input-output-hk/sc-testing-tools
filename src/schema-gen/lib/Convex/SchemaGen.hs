@@ -112,7 +112,19 @@ in both the run-level summary and the per-entry trace, which each say how their
 own @failed@\/@outcome@ is to be read.
 -}
 threatModelCategory :: Referenced Schema
-threatModelCategory = Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["claimed", "expected", "accepted"]
+threatModelCategory = Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["claimed", "expected", "accepted", "surveyed", "not_applicable"]
+
+{- | Schema of a 'Convex.Tasty.Streaming.TMSummary.Fault', which only a
+failing case carries.
+-}
+nullableFault :: Referenced Schema
+nullableFault =
+  Inline $
+    mempty
+      & anyOf
+        ?~ [ Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["contract", "declaration", "setup"]
+           , null
+           ]
 
 -- ============================================================
 -- ToSchema instances for convex-tasty-streaming types
@@ -180,6 +192,12 @@ instance ToSchema ThreatModelSummary where
               , ("skipped", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("skipped_phase1", Inline $ mempty & type_ ?~ OpenApiInteger)
               , ("errors", Inline $ mempty & type_ ?~ OpenApiInteger)
+              , -- Whose fault a failing case is, so a consumer can route a
+                -- contract regression apart from a declaration that needs
+                -- updating. A "surveyed" detection is "declaration": it
+                -- demands a triage decision. Absent (or null) only when the
+                -- case did not fail.
+                ("fault", nullableFault)
               ]
           & required .~ ["name", "category", "tested", "total", "passed", "failed", "skipped", "skipped_phase1", "errors"]
 
@@ -538,116 +556,72 @@ instance ToSchema Transition where
               ]
           & required .~ ["stepIndex", "action", "stateBefore", "stateAfter", "transaction", "result"]
 
+{- | One variant of a @status@-discriminated union: a @{"status": <st>}@
+object, plus one required string field per entry in @extraFields@ (the
+companion @reason@ / @message@ each variant carries). Shared by the
+'IterationStatus', 'ThreatModelTraceOutcome' and 'ThreatModelValidation'
+schemas below, so a new variant is one line rather than another nine-line
+copy that can drift from the JSON encoder.
+-}
+statusVariant :: Text -> [Text] -> Schema
+statusVariant st extraFields =
+  mempty
+    & type_ ?~ OpenApiObject
+    & properties
+      .~ InsOrdHashMap.fromList
+        ( ("status", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ [Aeson.String st])
+            : [(f, Inline $ mempty & type_ ?~ OpenApiString) | f <- extraFields]
+        )
+    & required .~ ("status" : extraFields)
+
 instance ToSchema IterationStatus where
-  declareNamedSchema _ = do
-    let success =
-          mempty
-            & type_ ?~ OpenApiObject
-            & properties
-              .~ InsOrdHashMap.fromList
-                [("status", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["success"])]
-            & required .~ ["status"]
-    let failure =
-          mempty
-            & type_ ?~ OpenApiObject
-            & properties
-              .~ InsOrdHashMap.fromList
-                [ ("status", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["failure"])
-                , ("message", Inline $ mempty & type_ ?~ OpenApiString)
-                ]
-            & required .~ ["status", "message"]
-    let discarded =
-          mempty
-            & type_ ?~ OpenApiObject
-            & properties
-              .~ InsOrdHashMap.fromList
-                [ ("status", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["discarded"])
-                , ("message", Inline $ mempty & type_ ?~ OpenApiString)
-                ]
-            & required .~ ["status", "message"]
+  declareNamedSchema _ =
     pure $
       NamedSchema (Just "IterationStatus") $
         mempty
-          & oneOf ?~ [Inline success, Inline failure, Inline discarded]
+          & oneOf
+            ?~ map
+              Inline
+              [ statusVariant "success" []
+              , statusVariant "failure" ["message"]
+              , statusVariant "discarded" ["message"]
+              ]
           & discriminator ?~ Discriminator "status" mempty
 
 instance ToSchema ThreatModelTraceOutcome where
-  declareNamedSchema _ = do
-    let passed =
-          mempty
-            & type_ ?~ OpenApiObject
-            & properties
-              .~ InsOrdHashMap.fromList
-                [("status", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["passed"])]
-            & required .~ ["status"]
-    let failed =
-          mempty
-            & type_ ?~ OpenApiObject
-            & properties
-              .~ InsOrdHashMap.fromList
-                [ ("status", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["failed"])
-                , ("reason", Inline $ mempty & type_ ?~ OpenApiString)
-                ]
-            & required .~ ["status", "reason"]
-    let skipped =
-          mempty
-            & type_ ?~ OpenApiObject
-            & properties
-              .~ InsOrdHashMap.fromList
-                [ ("status", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["skipped"])
-                , ("reason", Inline $ mempty & type_ ?~ OpenApiString)
-                ]
-            & required .~ ["status", "reason"]
-    let skippedPhase1 =
-          mempty
-            & type_ ?~ OpenApiObject
-            & properties
-              .~ InsOrdHashMap.fromList
-                [ ("status", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["skipped_phase1"])
-                , ("reason", Inline $ mempty & type_ ?~ OpenApiString)
-                ]
-            & required .~ ["status", "reason"]
-    let err =
-          mempty
-            & type_ ?~ OpenApiObject
-            & properties
-              .~ InsOrdHashMap.fromList
-                [ ("status", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ ["error"])
-                , ("message", Inline $ mempty & type_ ?~ OpenApiString)
-                ]
-            & required .~ ["status", "message"]
+  declareNamedSchema _ =
     pure $
       NamedSchema (Just "ThreatModelTraceOutcome") $
         mempty
-          & oneOf ?~ [Inline passed, Inline failed, Inline skipped, Inline skippedPhase1, Inline err]
+          & oneOf
+            ?~ map
+              Inline
+              [ statusVariant "passed" []
+              , statusVariant "failed" ["reason"]
+              , statusVariant "skipped" ["reason"]
+              , statusVariant "skipped_phase1" ["reason"]
+              , statusVariant "error" ["message"]
+              ]
           & discriminator ?~ Discriminator "status" mempty
 
 instance ToSchema ThreatModelValidation where
   declareNamedSchema _ = do
     let stringArray :: Referenced Schema
         stringArray = Inline $ mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject (Inline $ mempty & type_ ?~ OpenApiString)
-        statusOnly :: Text -> Schema
-        statusOnly st =
-          mempty
-            & type_ ?~ OpenApiObject
-            & properties
-              .~ InsOrdHashMap.fromList
-                [("status", Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ [Aeson.String st])]
-            & required .~ ["status"]
         withErrors :: Text -> Schema
         withErrors st =
-          statusOnly st
+          statusVariant st []
             & properties %~ InsOrdHashMap.insert "errors" stringArray
             & required .~ ["status", "errors"]
-        rebalanceFailed :: Schema
-        rebalanceFailed =
-          statusOnly "rebalance_failed"
-            & properties %~ InsOrdHashMap.insert "reason" (Inline $ mempty & type_ ?~ OpenApiString)
-            & required .~ ["status", "reason"]
     pure $
       NamedSchema (Just "ThreatModelValidation") $
         mempty
-          & oneOf ?~ [Inline (statusOnly "valid"), Inline (withErrors "phase1_invalid"), Inline (withErrors "phase2_invalid"), Inline rebalanceFailed]
+          & oneOf
+            ?~ [ Inline (statusVariant "valid" [])
+               , Inline (withErrors "phase1_invalid")
+               , Inline (withErrors "phase2_invalid")
+               , Inline (statusVariant "rebalance_failed" ["reason"])
+               ]
           & discriminator ?~ Discriminator "status" mempty
 
 instance ToSchema TxMod where

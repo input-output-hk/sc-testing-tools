@@ -203,9 +203,17 @@ class (Show state, Eq state) => TestingInterface state where
   monitoring :: state -> Action state -> Property -> Property
   monitoring _ _ = id
 
-  -- Threat model testing (covered in the next section)
-  threatModels :: [ThreatModel ()]
-  expectedVulnerabilities :: [ThreatModel ()]
+```
+
+Threat models are declared in a separate class, covered in the next section:
+
+```haskell
+class TestingInterface state => ThreatModelsFor state where
+  threatModels            :: [ThreatModel ()]
+  candidateModels         :: [ThreatModel ()]
+  expectedVulnerabilities :: [(ThreatModel (), String)]
+  acceptedFindings        :: [(ThreatModel (), String)]
+  notApplicable           :: [(ThreatModel (), String)]
 ```
 
 The `TestingMonadT` gives you access to `MonadBlockchain`,
@@ -444,19 +452,29 @@ transaction details.
 ### Expected Vulnerabilities
 
 For testing intentionally vulnerable contracts or documenting known issues, use
-`expectedVulnerabilities`:
+`expectedVulnerabilities`. Each entry carries the reason it is declared, which
+travels into the failure message and the streamed summary:
 
 ```haskell
-instance TestingInterface VulnerableEscrowState where
+instance ThreatModelsFor VulnerableEscrowState where
   -- ... other fields ...
 
-  expectedVulnerabilities = [timeBoundManipulation]
+  expectedVulnerabilities =
+    [ (timeBoundManipulation, "CTF exercise: ships with this bug deliberately")
+    ]
 ```
 
 This inverts the pass/fail semantics:
 
 - **Attack succeeds**: Test passes (vulnerability correctly detected)
-- **Attack fails**: Test fails (expected vulnerability not found)
+- **Attack fails**: Test fails as **RESOLVED** — the contract improved, so the
+  declaration is stale and should move to `threatModels` or be removed.
+
+If the attack lands but is a benign artifact of the design rather than an
+exploitable bug, use `acceptedFindings` instead. It is judged the same way -
+the finding must still be reproduced - but it reports the detection as
+accepted by design, where `expectedVulnerabilities` advertises the contract as
+vulnerable in every report.
 
 Unlike `threatModels`, expected vulnerabilities never early-stop -- they run
 against all transactions to ensure the vulnerability is consistently

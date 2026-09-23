@@ -60,7 +60,7 @@ import Convex.ThreatModel
 import Convex.ThreatModel.TxModifier (addPlutusScriptMint, alwaysSucceedsMintingPolicy)
 import Data.ByteString.Char8 qualified as BS
 import GHC.Exts (fromList)
-import Test.QuickCheck (Gen, choose, shrinkIntegral)
+import Test.QuickCheck (Gen, choose)
 
 {- | Default large-value attack. The number of junk tokens is drawn per
 transaction from a curated range, so QuickCheck explores the parameter space
@@ -87,19 +87,7 @@ largeValueAttackWithGen numTokensGen =
     -- Skip iterations where the draw is too small to be a meaningful attack.
     ensure (numTokens >= 1)
 
-    requireScriptInput
-
-    -- Get all outputs from the transaction
-    outputs <- getTxOutputs
-
-    -- Filter to script outputs (NOT key addresses)
-    let scriptOutputs = filter (not . isKeyAddressAny . addressOf) outputs
-
-    -- Precondition: there must be at least one script output
-    threatPrecondition $ ensure (not $ null scriptOutputs)
-
-    -- Pick a target script output
-    target <- pickAny scriptOutputs
+    target <- anyGuardedOutput
 
     -- Create junk tokens by minting with the always-succeeds policy
     let policyId = C.PolicyId $ hashScript (C.PlutusScript C.PlutusScriptV2 alwaysSucceedsMintingPolicy)
@@ -156,8 +144,6 @@ largeValueAttackWithGen numTokensGen =
 {- | Shrink a positive integer toward 1 (the smallest meaningful value),
 never reaching 0.
 -}
-shrinkPositive :: Int -> [Int]
-shrinkPositive = filter (>= 1) . shrinkIntegral
 
 -- | Coarse bucket for the parameter distribution report.
 bucket :: Int -> String

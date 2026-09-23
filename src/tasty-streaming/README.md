@@ -224,20 +224,40 @@ object to its `test_done` event:
 - `category` — which `ThreatModelsFor` list the model came from, and therefore
   how `failed` is to be read:
 
-| `category`   | Comes from                | `failed > 0` means                                          | Test case                                        |
-|--------------|---------------------------|-------------------------------------------------------------|--------------------------------------------------|
-| `"claimed"`  | `threatModels`            | a **vulnerability**: the contract is claimed to resist this | fails                                            |
-| `"expected"` | `expectedVulnerabilities` | the required outcome: a known vulnerability was reproduced  | passes; fails when `failed == 0` with `tested > 0` |
-| `"accepted"` | `acceptedFindings`        | a tolerated artifact of the design, not exploitable         | always passes                                    |
+| `category`         | Comes from                | `failed > 0` means                                          | Test case                                          |
+|--------------------|---------------------------|-------------------------------------------------------------|----------------------------------------------------|
+| `"claimed"`        | `threatModels`            | a **vulnerability**: the contract is claimed to resist this | fails                                              |
+| `"surveyed"`       | `candidateModels`         | a **vulnerability**, found by a model nobody triaged yet    | fails, worded as a prompt to triage                |
+| `"expected"`       | `expectedVulnerabilities` | the required outcome: a known vulnerability was reproduced  | passes; fails when `failed == 0` with `tested > 0` |
+| `"accepted"`       | `acceptedFindings`        | a tolerated artifact of the design, not exploitable         | passes; fails when `failed == 0` with `tested > 0` |
+| `"not_applicable"` | `notApplicable`           | the model applied at all, which the declaration denies      | fails whenever `tested > 0`                        |
+
+Every failing case carries `fault`, saying who has to act: `"contract"` (the
+script is at fault), `"declaration"` (the `ThreatModelsFor` instance is stale
+or incomplete — which is most red) or `"setup"` (the attack could not be
+carried out). It is `null` — present, but with no value — on a case that
+did not fail, so test for non-null rather than for the key's absence.
+
+A `"surveyed"` detection is `"declaration"`, not `"contract"`: whatever the
+triage concludes, the action the run demands is to put the model in a slot.
+A `"not_applicable"` detection *is* `"contract"`, because that slot records
+that the model could not apply here — so a detection means the contract
+both grew the surface and accepted the attack, which is what introducing a
+vulnerability looks like.
+
+So routing on `fault == "contract"` pages for contracts that broke a claim
+you made, or that regressed against a recorded non-applicability — and not
+for findings nobody has classified yet.
 
 Don't derive pass/fail from `failed` alone. A model that applied to nothing
 (`tested == 0`) is reported as vacuous: it fails the case when every iteration
 was a precondition miss — the suite advertises coverage it does not provide —
 and passes with a `SKIPPED` line when some iterations were environmental skips
-(`skipped_phase1`) or `errors`. Vacuity never fails an accepted finding, nor a
-`threatModels` list left at its default (that list means "run whatever
-applies"). Read `success` on the `test_done` event for the verdict; the counts
-explain it.
+(`skipped_phase1`) or `errors`. Vacuity fails an accepted finding just as it fails an expected one - an
+acceptance is a declaration too. It never fails a surveyed model (the survey
+means "run whatever applies"), and for `"not_applicable"` it is the
+confirming outcome. Read `success` on the
+`test_done` event for the verdict; the counts explain it.
 
 **Filter on `category` before alerting**: report a vulnerability only when
 `category == "claimed" && failed > 0`. Alerting on `failed > 0` alone flags

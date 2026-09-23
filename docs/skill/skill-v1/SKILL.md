@@ -417,7 +417,7 @@ include `Figure it out`.
 - `03-testing-interface-class.md` — class methods, superclass derivings, orphan guidance.
 - `04-helpers-cheatsheet.md` — `tryBalanceAndSubmit`, `TrailingChange`, imports, per-attack import gotcha.
 - `05-generators-and-implementation.md` — the triad, beam metaphor, eight-point checklist.
-- `06-threat-models.md` — 18 attacks + 8 variants, decision tree, wiring, `expectedVulnerabilities`.
+- `06-threat-models.md` — 18 attacks + 8 variants, decision tree, wiring, the triaged slots.
 
 ## 9. Out of scope
 

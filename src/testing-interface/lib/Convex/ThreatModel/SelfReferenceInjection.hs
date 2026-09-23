@@ -100,9 +100,8 @@ selfReferenceInjectionWith False -- Standard mode
 -}
 selfReferenceInjectionWith :: Bool -> ThreatModel ()
 selfReferenceInjectionWith verbose = Named "Self-Reference Injection" $ do
-  -- Get all inputs and outputs
+  -- Get all inputs
   inputs <- getTxInputs
-  outputs <- getTxOutputs
 
   -- Find script inputs (non-key address inputs)
   let scriptInputs = filter (not . isKeyAddressAny . addressOf) inputs
@@ -120,19 +119,8 @@ selfReferenceInjectionWith verbose = Named "Self-Reference Injection" $ do
     Nothing -> failPrecondition "Script output missing"
     Just credBytes' -> pure credBytes'
 
-  -- Filter to script outputs with inline datums (continuation outputs)
-  let continuationOutputs = filter isScriptOutputWithInlineDatum outputs
-
-  -- Precondition: there must be at least one continuation output
-  threatPrecondition $ ensure (not $ null continuationOutputs)
-
-  -- Pick a target output
-  target <- pickAny continuationOutputs
-
-  -- Extract the inline datum
-  originalDatum <- case getInlineDatum target of
-    Nothing -> failPrecondition "Script output missing inline datum"
-    Just originalDatum' -> pure originalDatum'
+  -- Pick a continuation output: a guarded script output with an inline datum
+  (target, originalDatum) <- anyGuardedOutputWithInlineDatum
 
   -- Build the script's credential as ScriptData
   -- ScriptCredential = Constr 1 [Bytes script_hash]
@@ -219,13 +207,6 @@ injectScriptCredential newCred = go
     ScriptDataMap [(go k, go v) | (k, v) <- entries]
   go other = other
 
-  -- Check if a ScriptData looks like a Plutus Credential
-  -- PubKeyCredential = Constr 0 [Bytes (28 bytes)]
-  -- ScriptCredential = Constr 1 [Bytes (28 bytes)]
-  isCredentialLike (ScriptDataConstructor n [ScriptDataBytes bs])
-    | n `elem` [0, 1] && BS.length bs == 28 = True
-  isCredentialLike _ = False
-
 {- | Check if a ScriptData structure looks like a Plutus Address.
 
 A Plutus Address is: @Constr 0 [credential, staking_credential]@
@@ -237,32 +218,14 @@ Where:
 isAddressLikeStructure :: ScriptData -> Bool
 isAddressLikeStructure (ScriptDataConstructor 0 [cred, _stakingCred]) =
   isCredentialLike cred
- where
-  isCredentialLike (ScriptDataConstructor n [ScriptDataBytes bs])
-    | n `elem` [0, 1] && BS.length bs == 28 = True
-  isCredentialLike _ = False
 isAddressLikeStructure _ = False
 
--- | Check if an output is a script output with an inline datum.
-isScriptOutputWithInlineDatum :: Output -> Bool
-isScriptOutputWithInlineDatum output =
-  not (isKeyAddressAny (addressOf output)) && hasInlineDatum output
+{- | Does this ScriptData look like a Plutus Credential?
 
--- | Check if an output has an inline datum.
-hasInlineDatum :: Output -> Bool
-hasInlineDatum output =
-  case datumOfTxOut (outputTxOut output) of
-    TxOutDatumInline{} -> True
-    _ -> False
-
--- | Extract the inline datum from an output if present.
-getInlineDatum :: Output -> Maybe ScriptData
-getInlineDatum output =
-  case datumOfTxOut (outputTxOut output) of
-    TxOutDatumInline _ hashableData -> Just (getScriptData hashableData)
-    _ -> Nothing
-
--- | Convert a @ScriptData@ to an inline @Datum@ (TxOutDatum CtxTx Era).
-toInlineDatum :: ScriptData -> Datum
-toInlineDatum sd =
-  TxOutDatumInline BabbageEraOnwardsConway (unsafeHashableScriptData sd)
+@PubKeyCredential = Constr 0 [Bytes (28 bytes)]@ and
+@ScriptCredential = Constr 1 [Bytes (28 bytes)]@.
+-}
+isCredentialLike :: ScriptData -> Bool
+isCredentialLike (ScriptDataConstructor n [ScriptDataBytes bs]) =
+  n `elem` [0, 1] && BS.length bs == 28
+isCredentialLike _ = False

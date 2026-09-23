@@ -85,10 +85,3 @@ outputDatumHashMissingAttackWith orphanHash = Named "Output Datum Hash Missing A
 
   -- This SHOULD fail. If it validates, the script is vulnerable.
   shouldNotValidate $ changeDatumOf target (TxOutDatumHash C.alonzoBasedEra orphanHash)
-
--- | True when an output uses inline datum.
-hasInlineDatum :: Output -> Bool
-hasInlineDatum output =
-  case datumOfTxOut (outputTxOut output) of
-    TxOutDatumInline{} -> True
-    _ -> False

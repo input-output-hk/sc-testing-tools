@@ -191,26 +191,46 @@ users toward either side beyond that.
 
 ```haskell
 class TestingInterface state => ThreatModelsFor state where
+  -- claim: must apply AND be resisted
   threatModels            :: [ThreatModel ()]
-  expectedVulnerabilities :: [ThreatModel ()]
+  threatModels            = []
+
+  -- survey: run, report, never fail for not applying
+  candidateModels         :: [ThreatModel ()]
+  candidateModels         = <every model not spoken for by another slot>
+
+  expectedVulnerabilities :: [(ThreatModel (), String)]
   expectedVulnerabilities = []
+
+  acceptedFindings        :: [(ThreatModel (), String)]
+  acceptedFindings        = []
+
+  notApplicable           :: [(ThreatModel (), String)]
+  notApplicable           = []
 ```
 
-`expectedVulnerabilities` has **inverted semantics**: a passing test
-means the model **did** detect the vulnerability. Default empty.
+Which slot you put a model in **is** the claim the suite makes about it:
 
-Until the positive/negative suite passes, you may write the instance
-with empty lists:
+| slot | claim | fails when |
+|---|---|---|
+| `threatModels` | the contract resists it | it is detected, **or** it never applies |
+| `candidateModels` | nothing — untriaged | it is detected (a prompt to triage) |
+| `expectedVulnerabilities` | the contract has it | it stops being detected (**resolved**) |
+| `acceptedFindings` | the attack lands, but harmlessly | it stops being detected |
+| `notApplicable` | it cannot apply here | it starts applying |
+
+The three triaged slots take a `String` reason, which travels into the
+failure message and the streamed summary. Write what a reader six months
+from now needs to tell a deliberate declaration from an unexamined one.
+
+An empty instance is the right starting point: every model runs as a
+survey, and you triage from the results.
 
 ```haskell
 instance ThreatModelsFor MyModel where
-  threatModels = []
-  expectedVulnerabilities = []
 ```
 
-Empty `threatModels` disables threat-model evaluation entirely; only
-positive and negative tests run. Pick models from
-`06-threat-models.md` once the suite is green.
+Set `candidateModels = []` to opt out of the survey entirely.
 
 Parameterised threat models (`largeDataAttack`, `largeValueAttack`, etc.) now follow a three-tier convention (`model` / `modelWith` / `modelWithGen`). The no-suffix form randomises parameters per transaction. See `06-threat-models.md §G` for the full convention.
 
@@ -241,9 +261,10 @@ tests :: TestTree
 tests = propRunActions @MyModel "My contract"
 ```
 
-Tree contains: `"Positive tests"`, `"Negative tests"`, one case per
-threat model (if any), one case per `expectedVulnerabilities` entry (if
-any).
+Tree contains `"Positive tests"`, `"Negative tests"`, and one group per
+non-empty slot — `"Threat models"`, `"Surveyed threat models"`,
+`"Expected vulnerabilities"`, `"Accepted findings"`, `"Not applicable"` —
+each with one case per entry.
 
 ## L. Required LANGUAGE pragmas
 
