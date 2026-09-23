@@ -149,12 +149,14 @@ test-suite convex-testing-interface-test
     PingPongSpec
     RebalanceSpec
     SampleSpec
+    ScriptDataSpec
     Scripts
     Scripts.Bounty
     Scripts.Bounty.Vulnerable.DoubleSatisfaction
     Scripts.PingPong
     Scripts.PingPong.Vulnerable
     Scripts.Sample
+    TestTx
 
   autogen-modules: Paths_convex_testing_interface
   build-depends:
