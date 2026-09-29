@@ -1073,7 +1073,11 @@ threatModelTestCase claim getTmResultsRef groupName (tm, _noReason) =
         ThreatModelSummary{tmsTotal = total, tmsPassed = numPassed} = summary
     step $ "Tested " <> show numPassed <> "/" <> show total <> " tests (" <> skipCounts summary <> ")"
     case [msg | TMFailed msg <- outcomes] of
-      [] -> pure ()
+      [] ->
+        -- The contract held, but a surveyed model claims nothing until it
+        -- is triaged: point at the slot that turns this run into a check.
+        when (claim == Surveyed) $
+          step "  Untriaged: the contract resisted it - move it to 'threatModels' to claim that resistance."
       (firstFailure : rest) ->
         failWithFault recorder key summary (if claim == Surveyed then Declaration else Contract) $
           [ if claim == Surveyed
@@ -1391,12 +1395,20 @@ zeroCoverageVerdict claim summary reasons = case claim of
   -- to this contract is reported, not failed; the other kinds still warn,
   -- since the user did not opt in and may not be able to lift a harness
   -- limitation.
+  --
+  -- Either way the model is still untriaged, so the status lines end with
+  -- where it should go next - the same nudge a surveyed detection gets.
   Surveyed
-    | PreconditionNeverMet <- kind -> Right [skippedMessage summary]
+    | PreconditionNeverMet <- kind ->
+        Right
+          [ skippedMessage summary
+          , "  Untriaged: move it to 'notApplicable' with a reason if it cannot apply to this contract, or make the positive tests generate transactions it applies to."
+          ]
     | otherwise ->
         Right $
           ("WARNING: zero attack coverage - " <> headline <> ".")
             : withReasons "  The model provides no evidence about this contract"
+              <> ["  Untriaged: " <> untriagedRemedy]
   -- Never applying is what this slot predicts, so only a precondition miss
   -- confirms it. An environmental skip proves the precondition held at least
   -- once, which falsifies the declaration; an error leaves it unverified.
@@ -1447,6 +1459,11 @@ zeroCoverageVerdict claim summary reasons = case claim of
     PreconditionNeverMet -> "Make the positive tests generate transactions it applies to"
     AttackNeverCarriedOut -> "Make the positive tests produce transactions the attack can be built on"
     ModelErrored -> "Fix the error so the model can run"
+  -- 'notApplicable' is deliberately not offered for an environmental skip:
+  -- the precondition held, so that declaration would fail as APPLIES NOW.
+  untriagedRemedy = case kind of
+    AttackNeverCarriedOut -> remedy <> ", then move it to 'threatModels' (not 'notApplicable': its precondition does hold)."
+    _ -> remedy <> "."
   -- Never leave the sentence hanging on a colon: a Phase 1 rejection can
   -- carry no error message at all.
   withReasons line

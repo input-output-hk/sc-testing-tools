@@ -499,7 +499,7 @@ runThreatModelM' quiet signingWallet = go False
         let (modifiedTx, modifiedUtxo) = applyTxModifier (currentTx env) (currentUTxOs env) mods
         -- Re-balance and re-sign the modified transaction
         params <- askNodeParams
-        rebalanceResult <- TM.rebalanceAndSign (currentChainState env) wallet modifiedTx modifiedUtxo
+        rebalanceResult <- TM.rebalanceAndSign (currentChainState env) wallet (currentTx env) modifiedTx modifiedUtxo
         case rebalanceResult of
           Left err ->
             -- Rebalancing failed: the modification cannot be realized as a
@@ -581,7 +581,7 @@ runThreatModelCheck signingWallet = go False False Nothing []
         let (modifiedTx, modifiedUtxo) = applyTxModifier (currentTx env) (currentUTxOs env) mods
         params <- askNodeParams
         -- Try rebalancing - failure means this modification can't be tested on this tx
-        rebalanceResult <- TM.rebalanceAndSign (currentChainState env) wallet modifiedTx modifiedUtxo
+        rebalanceResult <- TM.rebalanceAndSign (currentChainState env) wallet (currentTx env) modifiedTx modifiedUtxo
         case rebalanceResult of
           Left _err ->
             -- Rebalancing failed, skip to next tx. The True marks this as an
@@ -658,7 +658,7 @@ runThreatModelCheckTraced signingWallet = go False False Nothing [] [] 0
         let (modifiedTx, modifiedUtxo) = applyTxModifier (currentTx env) (currentUTxOs env) mods
         params <- askNodeParams
         -- Try rebalancing - failure means this modification can't be tested on this tx
-        rebalanceResult <- TM.rebalanceAndSign (currentChainState env) wallet modifiedTx modifiedUtxo
+        rebalanceResult <- TM.rebalanceAndSign (currentChainState env) wallet (currentTx env) modifiedTx modifiedUtxo
         case rebalanceResult of
           Left err -> do
             let entry =

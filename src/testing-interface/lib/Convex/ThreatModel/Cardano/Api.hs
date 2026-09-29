@@ -83,6 +83,7 @@ module Convex.ThreatModel.Cardano.Api (
   setTxOutputsList,
   mkSizedShelleyTxOut,
   adjustChangeOutput,
+  adjustOriginalChangeOutput,
   replaceAt,
 
   -- * Validity interval
@@ -705,7 +706,8 @@ After applying TxModifier operations, the transaction body changes which:
 This function:
 1. Recalculates execution units for all scripts
 2. Calculates the new required fee
-3. Adjusts the change output (last output to wallet address) to compensate
+3. Adjusts the change output (the original transaction's change output,
+   located in the modified one by 'adjustOriginalChangeOutput') to compensate
 4. Re-signs the transaction with the wallet's key
 
 A 'Left' means the modification cannot be realized as a well-formed
@@ -735,9 +737,14 @@ rebalanceAndSign
   -}
   -> Wallet
   -> Tx Era
+  {- ^ The original, unmodified transaction: its outputs identify which
+  wallet output is the change output (see 'adjustOriginalChangeOutput').
+  -}
+  -> Tx Era
+  -- ^ The modified transaction to rebalance
   -> UTxO Era
   -> m (Either String (Tx Era))
-rebalanceAndSign chainState wallet tx utxo = do
+rebalanceAndSign chainState wallet originalTx tx utxo = do
   pparams <- Convex.Class.queryProtocolParameters
   networkId <- Convex.Class.queryNetworkId
   systemStart <- Convex.Class.querySystemStart
@@ -864,7 +871,7 @@ rebalanceAndSign chainState wallet tx utxo = do
                       drepDeposits
                       utxo
                       body'
-             in adjustChangeOutput pparams walletAddr residual (txOutputs txWithFundedOutputs)
+             in adjustOriginalChangeOutput pparams walletAddr (txOutputs originalTx) residual (txOutputs txWithFundedOutputs)
 
           settle :: Int -> Coin -> Either String (Coin, [TxOut CtxTx Era])
           settle 0 _ = Left "Fee and change output failed to reach a fixed point"
@@ -1374,7 +1381,89 @@ setTxOutputsList newOuts (Tx (ShelleyTxBody era body scripts scriptData auxData 
       body' = body{Conway.ctbOutputs = newOutsSeq}
    in Tx (ShelleyTxBody era body' scripts scriptData auxData validity) wits
 
-{- | Adjust the last output going to wallet address by a value delta.
+{- | Adjust the change output by a value delta, identifying it through the
+original transaction: its change output is taken to be its last wallet
+output (see 'adjustChangeOutput'), and that output is then located in the
+modified outputs, trying in order:
+
+1. the original change output, still unchanged (the modifier may have
+   shifted it by removing an earlier output);
+2. whatever wallet output sits at the original change output's index (the
+   modifier rewrote the change output in place, e.g. with 'changeValueOf');
+3. the last wallet output left unchanged by the modifier (the change output
+   itself was removed);
+4. 'adjustChangeOutput''s choice, the last wallet output.
+
+Going straight to the last wallet output of the /modified/ transaction goes
+wrong whenever a 'TxModifier' adds an output to the wallet itself. Double
+satisfaction, for one, redirects a victim's output to the signer with
+'addOutput', which appends it after the real change output; that new output
+typically sits at its minimum ADA, so charging the fee to it fails with
+"Change output would fall below the minimum required ADA" even though the
+real change output could easily cover it. Conversely, looking only for
+unchanged wallet outputs goes wrong when the modifier rewrote the change
+output in place (as token forgery does): the fee would then be charged to an
+earlier wallet output, such as an exact payment the validator checks.
+-}
+adjustOriginalChangeOutput
+  :: LedgerProtocolParameters Era
+  -> AddressInEra Era
+  -- ^ Wallet address to find change output
+  -> [TxOut CtxTx Era]
+  -- ^ The original (unmodified) transaction's outputs
+  -> Value
+  -- ^ Value delta to apply to the change output
+  -> [TxOut CtxTx Era]
+  -- ^ Transaction outputs
+  -> Either String [TxOut CtxTx Era]
+adjustOriginalChangeOutput pparams walletAddr originalOutputs delta outputs =
+  case listToMaybe candidates of
+    Just i -> adjustOutputAt pparams i delta outputs
+    Nothing -> adjustChangeOutput pparams walletAddr delta outputs
+ where
+  isWallet (TxOut addr _ _ _) = addr == walletAddr
+  indexed = zip [0 ..] outputs
+  originalChange = listToMaybe (reverse [(i, o) | (i, o) <- zip [0 ..] originalOutputs, isWallet o])
+  candidates =
+    concat
+      [ [i | Just (_, change) <- [originalChange], (i, o) <- reverse indexed, o == change]
+      , [i | Just (i, _) <- [originalChange], Just o <- [lookup i indexed], isWallet o]
+      , reverse [i | (i, o) <- indexed, isWallet o, o `elem` originalOutputs]
+      ]
+
+{- | Adjust the last output going to wallet address by a value delta (see
+'adjustOutputAt').
+
+Taking the last wallet output as the change output is only a heuristic. It
+assumes the transaction was balanced with trailing change
+('Convex.CoinSelection.TrailingChange'; with @LeadingChange@ the change
+output comes first), and it goes wrong as soon as a 'TxModifier' appends an
+output to the wallet itself, since 'addOutput' puts it after the real change
+output. 'rebalanceAndSign' therefore uses 'adjustOriginalChangeOutput', which
+only falls back to this when it can't identify the change output from the
+original transaction.
+-}
+adjustChangeOutput
+  :: LedgerProtocolParameters Era
+  -> AddressInEra Era
+  -- ^ Wallet address to find change output
+  -> Value
+  -- ^ Value delta to apply to the change output
+  -> [TxOut CtxTx Era]
+  -- ^ Transaction outputs
+  -> Either String [TxOut CtxTx Era]
+adjustChangeOutput pparams walletAddr delta outputs = do
+  let indexed = zip [0 ..] outputs
+      walletOutputs =
+        [ (i, o)
+        | (i, o@(TxOut addr _ _ _)) <- indexed
+        , addr == walletAddr
+        ]
+  case listToMaybe (reverse walletOutputs) of
+    Nothing -> Left "No change output found to wallet address"
+    Just (idx, _) -> adjustOutputAt pparams idx delta outputs
+
+{- | Add a value delta to the change output, at the given index.
 
 The delta is added to the change output's value: a negative Lovelace (or
 other asset) component subtracts from it. This is used both to cover a plain
@@ -1389,26 +1478,16 @@ further adjustment of the change output, so applying it to the change output
 itself would just cancel back out. So the minimum-UTxO requirement is checked
 right here, on the one output this function is the last thing to touch.
 -}
-adjustChangeOutput
+adjustOutputAt
   :: LedgerProtocolParameters Era
-  -> AddressInEra Era
-  -- ^ Wallet address to find change output
+  -> Int
   -> Value
-  -- ^ Value delta to apply to the change output
   -> [TxOut CtxTx Era]
-  -- ^ Transaction outputs
   -> Either String [TxOut CtxTx Era]
-adjustChangeOutput pparams walletAddr delta outputs = do
-  -- Find last output to wallet address
-  let indexed = zip [0 ..] outputs
-      walletOutputs =
-        [ (i, o)
-        | (i, o@(TxOut addr _ _ _)) <- indexed
-        , addr == walletAddr
-        ]
-  case listToMaybe (reverse walletOutputs) of
-    Nothing -> Left "No change output found to wallet address"
-    Just (idx, TxOut addr val datum refScript) -> do
+adjustOutputAt pparams idx delta outputs =
+  case drop idx outputs of
+    [] -> Left "No change output found to wallet address"
+    TxOut addr val datum refScript : _ -> do
       let oldValue = txOutValueToValue val
           newValue = oldValue <> delta
           -- The components the change output would have to go negative in to

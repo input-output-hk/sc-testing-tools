@@ -78,13 +78,13 @@ zeroCoverageTests =
     "zero-coverage policy"
     [ testGroup
         "precondition never met"
-        [ reports "default list is only reported" Surveyed preconditionNeverMet [] ["SKIPPED: Precondition never met", "0/100 tests applicable"]
+        [ reports "default list is only reported" Surveyed preconditionNeverMet [] ["SKIPPED: Precondition never met", "0/100 tests applicable", "Untriaged: move it to 'notApplicable'"]
         , fails "explicit list fails" Claimed preconditionNeverMet [] ["Threat model never applied", "100 generated transactions", "'threatModels'"]
         , fails "expected vulnerability fails" Expected preconditionNeverMet [] ["Expected vulnerability never exercised", "'expectedVulnerabilities'"]
         ]
     , testGroup
         "attack never carried out"
-        [ reports "default list warns loudly, with reasons" Surveyed oneEnvironmentalSkip [rebalanceReason] ["WARNING: zero attack coverage", "1 phase 1/rebalance skipped", rebalanceReason]
+        [ reports "default list warns loudly, with reasons" Surveyed oneEnvironmentalSkip [rebalanceReason] ["WARNING: zero attack coverage", "1 phase 1/rebalance skipped", rebalanceReason, "Untriaged: Make the positive tests produce transactions", "not 'notApplicable'"]
         , fails "explicit list fails, with reasons" Claimed oneEnvironmentalSkip [rebalanceReason] ["Threat model never tested", "99 precondition skipped, 1 phase 1/rebalance skipped", rebalanceReason]
         , fails "expected vulnerability fails, with reasons" Expected oneEnvironmentalSkip [rebalanceReason] ["Expected vulnerability never tested", rebalanceReason]
         , fails "reasons are capped at five" Claimed oneEnvironmentalSkip (map (\i -> "reason " <> show i) [1 .. 7 :: Int]) ["reason 5", "... and 2 more"]
@@ -94,7 +94,7 @@ zeroCoverageTests =
         "model errored"
         [ fails "an all-error run names the error, not the precondition" Claimed allErrors ["No signing wallet found"] ["Threat model never tested", "errored before it could attack anything", "100 errors", "No signing wallet found"]
         , failsWithout "an all-error run does not blame the precondition" Claimed allErrors ["No signing wallet found"] ["precondition held"]
-        , reports "default list warns instead of failing" Surveyed allErrors ["No signing wallet found"] ["WARNING: zero attack coverage", "errored before it could attack anything"]
+        , reports "default list warns instead of failing" Surveyed allErrors ["No signing wallet found"] ["WARNING: zero attack coverage", "errored before it could attack anything", "Untriaged: Fix the error"]
         , fails "expected vulnerability fails too" Expected allErrors ["No signing wallet found"] ["Expected vulnerability never tested", "errored before it could attack anything"]
         ]
     , testGroup
