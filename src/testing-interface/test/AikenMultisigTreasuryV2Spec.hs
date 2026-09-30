@@ -75,7 +75,7 @@ import Convex.MockChain.Utils (mockchainSucceeds)
 import Convex.PlutusLedger.V1 (transAddressInEra)
 import Convex.TestingInterface (
   Options (Options, params),
-  RunOptions (disableNegativeTesting, mcOptions),
+  RunOptions (mcOptions),
   TestingInterface (..),
   ThreatModelsFor (..),
   autoRedeemerTag,
@@ -699,12 +699,12 @@ instance TestingInterface MultisigV2Model where
         QC.frequency
           [ (1, SignMultisigV2 <$> QC.elements [Signer1, Signer2]) -- Invalid: used
           , (1, pure UseMultisigV2) -- Invalid: used
-          , (1, pure ForgeTokenAndUse) -- Invalid: used
+          , (1, pure ForgeTokenAndUse) -- Valid: the attacker brings their own UTxO
           ]
     | length (mmv2SignedUsers model) < 2 =
         QC.frequency
           [ (70, SignMultisigV2 <$> pickUnsignedSigner model)
-          , (10, SignMultisigV2 <$> pickSignedSigner model) -- Invalid: already signed
+          , (10, SignMultisigV2 <$> pickSignedSigner model) -- Valid: Sign does not check for repeats
           , (10, pure UseMultisigV2) -- May succeed (1-of-N exploit)
           , (10, pure ForgeTokenAndUse) -- May succeed (forgery exploit)
           ]
@@ -712,7 +712,7 @@ instance TestingInterface MultisigV2Model where
         QC.frequency
           [ (40, pure UseMultisigV2)
           , (40, pure ForgeTokenAndUse)
-          , (20, SignMultisigV2 <$> QC.elements [Signer1, Signer2]) -- Invalid: both signed
+          , (20, SignMultisigV2 <$> QC.elements [Signer1, Signer2]) -- Valid: Sign does not check for repeats
           ]
    where
     pickUnsignedSigner m
@@ -724,12 +724,13 @@ instance TestingInterface MultisigV2Model where
       | walletPkhBytes Wallet.w2 `elem` mmv2SignedUsers m = pure Signer2
       | otherwise = QC.elements [Signer1, Signer2]
 
-  precondition model (SignMultisigV2 sc) =
-    walletPkhBytes (signerToWallet sc) `notElem` mmv2SignedUsers model && not (mmv2HasBeenUsed model)
+  -- Sign only checks that a required signer signed, so signing again is valid.
+  precondition model (SignMultisigV2 _) = not (mmv2HasBeenUsed model)
   precondition model UseMultisigV2 =
     not (null (mmv2SignedUsers model)) && not (mmv2HasBeenUsed model)
-  precondition model ForgeTokenAndUse =
-    not (mmv2HasBeenUsed model)
+  -- The attack creates and spends its own UTxO, so the treasury's state is
+  -- irrelevant to it.
+  precondition _ ForgeTokenAndUse = True
 
   perform model action = case action of
     SignMultisigV2 sc -> do
@@ -766,27 +767,9 @@ instance TestingInterface MultisigV2Model where
           { mmv2HasBeenUsed = True
           }
     ForgeTokenAndUse -> do
-      -- For the property test, we need a simplified approach.
-      -- The attacker will use w3 and create their own UTxO first.
-      -- But since we're in the model's perform, we simulate the attack differently:
-      --
-      -- Actually, the ForgeTokenAndUse in the property model needs to work on the
-      -- EXISTING UTxO. The attack is: if anyone can mint a token, and the existing
-      -- UTxO has ANY signed_user that the attacker can impersonate... wait, they can't.
-      --
-      -- The TRUE exploit requires the attacker to CREATE their own UTxO with their
-      -- own datum. But that's a separate action from using an existing one.
-      --
-      -- For simplicity in property tests, let's make ForgeTokenAndUse work when
-      -- the attacker (w3) creates a new UTxO and uses it in one go, destroying
-      -- any existing UTxOs as a side effect.
-      --
-      -- OR: we can just have this action fail if there's no signed_user the attacker
-      -- controls. But w3 isn't in the original signed_users.
-      --
-      -- Let's make this a 2-step process internally:
-      -- 1. Create attacker's UTxO
-      -- 2. Use it
+      -- The attacker (w3) cannot sign for the real treasury, so the exploit
+      -- locks funds under a datum listing w3 as a signer, then uses them with
+      -- a freely minted validation token. The treasury itself is not touched.
 
       -- First, create attacker's UTxO (w3)
       let createTxBody = execBuildTx $ createAttackerDatum @C.ConwayEra Defaults.networkId Wallet.w3 20_000_000
@@ -800,15 +783,8 @@ instance TestingInterface MultisigV2Model where
         ((txIn, value, _) : _) -> do
           let exploitTxBody = execBuildTx $ createFakeDatumAndUse @C.ConwayEra Defaults.networkId txIn value Wallet.w3
           void $ balanceAndSubmit mempty Wallet.w3 exploitTxBody TrailingChange []
-      -- Exploit drains the treasury
-      pure $
-        model
-          { mmv2Value = 0
-          , mmv2RequiredSigners = []
-          , mmv2SignedUsers = []
-          , mmv2ReleaseValue = 0
-          , mmv2HasBeenUsed = True
-          }
+      -- Only the attacker's own UTxO was spent: the treasury is untouched.
+      pure model
 
   validate _model = pure True
 
@@ -848,7 +824,7 @@ aikenMultisigTreasuryV2Tests runOpts =
         "property tests"
         [ propRunActionsWithOptions @MultisigV2Model
             "property-based testing"
-            runOpts{disableNegativeTesting = Just "CTF vulnerability: token forgery allows unauthorized treasury access without valid governance token"}
+            runOpts
         , QC.testProperty
             "vulnerable to token forgery"
             (propMultisigV2TokenForgeryExploit runOpts)
