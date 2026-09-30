@@ -7,6 +7,7 @@
 -- | Scripts used for testing
 module MultiPlayerPingPong.Scripts (
   multiPlayerPingPongValidatorScript,
+  multiPlayerPingPongCovIdx,
   saveMultiPlayerPingPongValidatorScript,
 ) where
 
@@ -15,6 +16,8 @@ import Convex.PlutusTx (compiledCodeToScript)
 import MultiPlayerPingPong.Validator qualified as MultiPlayerPingPong
 import PlutusTx (BuiltinData, CompiledCode)
 import PlutusTx qualified
+import PlutusTx.Code (getCovIdx)
+import PlutusTx.Coverage (CoverageIndex)
 import PlutusTx.Prelude (BuiltinUnit)
 
 -- | Compiling a validator for 'Scripts.MultiPlayerPingPong.multiPlayerPingPongValidator'
@@ -24,6 +27,15 @@ multiPlayerPingPongValidatorCompiled = $$(PlutusTx.compile [||MultiPlayerPingPon
 -- | Serialized validator for 'Scripts.MultiPlayerPingPong.multiPlayerPingPongValidator'
 multiPlayerPingPongValidatorScript :: C.PlutusScript C.PlutusScriptV3
 multiPlayerPingPongValidatorScript = compiledCodeToScript multiPlayerPingPongValidatorCompiled
+
+{- | Coverage annotations baked into the compiled validator.
+
+Empty unless the script was compiled with
+@-fplugin-opt PlutusTx.Plugin:coverage-all@, so this doubles as the runtime
+answer to \"was coverage enabled for this build?\".
+-}
+multiPlayerPingPongCovIdx :: CoverageIndex
+multiPlayerPingPongCovIdx = getCovIdx multiPlayerPingPongValidatorCompiled
 
 -- | Save a validator script to a file
 saveMultiPlayerPingPongValidatorScript :: FilePath -> IO ()

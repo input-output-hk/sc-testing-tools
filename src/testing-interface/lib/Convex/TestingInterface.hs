@@ -108,6 +108,7 @@ import Convex.MonadLog (MonadLog)
 import Convex.NodeParams (NodeParams (..))
 import Convex.Tasty.Streaming.SrcLoc (SrcLocRange (..), withSrcLoc)
 import Convex.Tasty.Streaming.TMSummary (CoverageIndexStorage (..), TMRecorder, ThreatModelCategory (..), ThreatModelSummary (..), TraceRecorder (..), threatModelGroupName, tmRecord)
+import Convex.Tasty.Streaming.Types (withMaxTxSizeHint)
 import Convex.TestingInterface.Options (defaultMainTestingInterface)
 import Convex.TestingInterface.Trace (
   AddressLabeler (..),
@@ -1430,7 +1431,7 @@ filtering out coverage annotation noise (CoverLocation/CoverBool).
 -}
 formatBalanceTxError :: BalanceTxError C.ConwayEra -> T.Text
 formatBalanceTxError (ABalancingError (ScriptExecutionErr errs)) =
-  T.intercalate "; " $ map formatScriptErr errs
+  withMaxTxSizeHint $ T.intercalate "; " $ map formatScriptErr errs
  where
   formatScriptErr (_witness, errMsg, logs) =
     let
@@ -1445,7 +1446,7 @@ formatBalanceTxError (ABalancingError (ScriptExecutionErr errs)) =
   isCoverageAnnotation msg =
     "CoverLocation (" `T.isPrefixOf` msg
       || "CoverBool (" `T.isPrefixOf` msg
-formatBalanceTxError err = T.pack (show err)
+formatBalanceTxError err = withMaxTxSizeHint $ T.pack (show err)
 
 -- | Initialize the blockchain and validate the model state
 runInitialization
@@ -1711,7 +1712,7 @@ mockchainSucceedsWithOptions Options{params, coverageRef} action =
         Right _ -> pure ()
         Left err -> do
           for_ coverageRef $ \ref -> modifyIORef ref (<> coverageFromBalanceTxError err)
-          fail $ show err
+          fail $ T.unpack $ withMaxTxSizeHint $ T.pack $ show err
 
 {- | Run the 'TestingMonadT' action with the given options, fail if it
     succeeds, and handle the error appropriately.
