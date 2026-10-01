@@ -100,8 +100,8 @@
         },
         "role": {
           "type": "string",
-          "enum": ["positive", "negative", "threat-models-group", "expected-vulnerabilities-group", "threat-model"],
-          "description": "Semantic role of a node within a TestingInterface subtree, for the extension to label/icon. positive = the \"Positive tests\" leaf; negative = the \"Negative tests\" leaf; threat-models-group = the \"Threat models\" group; expected-vulnerabilities-group = the \"Expected vulnerabilities\" group; threat-model = the individual leaves under BOTH groups (expected-vulnerability leaves are structurally identical to threat-model leaves, so they share role=threat-model; the parent group's role carries the distinction). Omitted on nodes without a special role."
+          "enum": ["positive", "negative", "threat-models-group", "surveyed-threat-models-group", "expected-vulnerabilities-group", "accepted-findings-group", "not-applicable-group", "threat-model"],
+          "description": "Semantic role of a node within a TestingInterface subtree, for the extension to label/icon. positive = the \"Positive tests\" leaf; negative = the \"Negative tests\" leaf; threat-models-group = the \"Threat models\" group; surveyed-threat-models-group = the \"Surveyed threat models\" group; expected-vulnerabilities-group = the \"Expected vulnerabilities\" group; accepted-findings-group = the \"Accepted findings\" group; not-applicable-group = the \"Not applicable\" group; threat-model = the individual leaves under ALL of those groups (expected-vulnerability leaves are structurally identical to threat-model leaves, so they share role=threat-model; the parent group's role carries the distinction). Omitted on nodes without a special role."
         },
         "pendingExpansion": {
           "type": "boolean",

@@ -8,6 +8,7 @@
 -- | Scripts used for testing
 module RewardWithdrawal.Scripts (
   rewardWithdrawalValidatorScript,
+  rewardWithdrawalCovIdx,
   RewardWithdrawal.RewardWithdrawalParams (..),
   saveRewardWithdrawalValidatorScript,
 ) where
@@ -16,13 +17,19 @@ import Cardano.Api qualified as C
 import Convex.PlutusTx (compiledCodeToScript)
 import PlutusTx (BuiltinData, CompiledCode)
 import PlutusTx qualified
+import PlutusTx.Code (getCovIdx)
+import PlutusTx.Coverage (CoverageIndex)
 import PlutusTx.Prelude (BuiltinUnit)
 import RewardWithdrawal.Validator qualified as RewardWithdrawal
+
+-- | The unapplied 'RewardWithdrawal.Validator.validator', before any parameters are baked in
+rewardWithdrawalValidatorUnapplied :: CompiledCode (RewardWithdrawal.RewardWithdrawalParams -> BuiltinData -> BuiltinUnit)
+rewardWithdrawalValidatorUnapplied = $$(PlutusTx.compile [||RewardWithdrawal.validator||])
 
 -- | Compiling a parameterized validator for 'RewardWithdrawal.Validator.validator'
 rewardWithdrawalValidatorCompiled :: RewardWithdrawal.RewardWithdrawalParams -> CompiledCode (BuiltinData -> BuiltinUnit)
 rewardWithdrawalValidatorCompiled params =
-  case $$(PlutusTx.compile [||RewardWithdrawal.validator||])
+  case rewardWithdrawalValidatorUnapplied
     `PlutusTx.applyCode` PlutusTx.liftCodeDef params of
     Left err -> error err
     Right cc -> cc
@@ -30,6 +37,15 @@ rewardWithdrawalValidatorCompiled params =
 -- | Serialized validator for 'RewardWithdrawal.Validator.validator'
 rewardWithdrawalValidatorScript :: RewardWithdrawal.RewardWithdrawalParams -> C.PlutusScript C.PlutusScriptV3
 rewardWithdrawalValidatorScript = compiledCodeToScript . rewardWithdrawalValidatorCompiled
+
+{- | Coverage annotations baked into the compiled validator.
+
+Empty unless the script was compiled with
+@-fplugin-opt PlutusTx.Plugin:coverage-all@, so this doubles as the runtime
+answer to \"was coverage enabled for this build?\".
+-}
+rewardWithdrawalCovIdx :: CoverageIndex
+rewardWithdrawalCovIdx = getCovIdx rewardWithdrawalValidatorUnapplied
 
 -- | Save the validator script to a file
 saveRewardWithdrawalValidatorScript :: RewardWithdrawal.RewardWithdrawalParams -> FilePath -> IO ()

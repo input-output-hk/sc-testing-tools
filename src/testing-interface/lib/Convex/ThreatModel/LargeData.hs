@@ -70,7 +70,7 @@ import Data.ByteString qualified as BS
 import Data.List (minimumBy)
 import Data.Maybe (mapMaybe)
 import Data.Ord (comparing)
-import Test.QuickCheck (Gen, choose, shrinkIntegral)
+import Test.QuickCheck (Gen, choose)
 
 {- | Default large-data attack. The number of injected fields is drawn per
 transaction from a curated range, so QuickCheck explores the parameter space
@@ -97,24 +97,7 @@ largeDataAttackWithGen fieldsGen =
     -- Skip iterations where the draw is too small to be a meaningful attack.
     ensure (n >= 1)
 
-    requireScriptInput
-
-    -- Get all outputs from the transaction
-    outputs <- getTxOutputs
-
-    -- Filter to script outputs with inline datums
-    let scriptOutputsWithDatum = filter isScriptOutputWithInlineDatum outputs
-
-    -- Precondition: there must be at least one script output with inline datum
-    threatPrecondition $ ensure (not $ null scriptOutputsWithDatum)
-
-    -- Pick a target output
-    target <- pickAny scriptOutputsWithDatum
-
-    -- Extract the inline datum (we know it exists due to the filter)
-    originalDatum <- case getInlineDatum target of
-      Nothing -> failPrecondition "Script output missing inline datum"
-      Just originalDatum' -> pure originalDatum'
+    (target, originalDatum) <- anyGuardedOutputWithInlineDatum
 
     let bloatedDatum = bloatData n originalDatum
 
@@ -151,8 +134,6 @@ largeDataAttackWithGen fieldsGen =
 {- | Shrink a positive integer toward 1 (the smallest meaningful value),
 never reaching 0.
 -}
-shrinkPositive :: Int -> [Int]
-shrinkPositive = filter (>= 1) . shrinkIntegral
 
 -- | Coarse bucket for the parameter distribution report.
 bucket :: Int -> String
@@ -241,10 +222,11 @@ Two refinements on "copy a member":
 junkMemberLike :: [ScriptData] -> ScriptData
 junkMemberLike [] = ScriptDataNumber 42
 junkMemberLike xs
-  | dataSize smallest <= junkSizeBudget = smallest
+  | smallestSize <= junkSizeBudget = smallest
   | otherwise = shrink smallest
  where
-  smallest = minimumBy (comparing dataSize) xs
+  -- Decorated, so each member is walked once rather than once per comparison.
+  (smallestSize, smallest) = minimumBy (comparing fst) [(dataSize x, x) | x <- xs]
   shrink (ScriptDataBytes bs) = ScriptDataBytes (BS.take junkSizeBudget bs)
   shrink (ScriptDataNumber _) = ScriptDataNumber 42
   shrink other = other
@@ -302,12 +284,14 @@ junkEntriesFor kvs = map (\k -> (k, junkValue)) freshKeys
         Nothing -> []
         Just _ -> mapMaybe (\i -> perturb i template) [0 ..]
 
+  bytesPad = BS.replicate (maxBytesLen + 1) 0
   perturb i = replaceFirstLeaf $ \leaf -> case leaf of
-    ScriptDataBytes _ -> ScriptDataBytes (BS.replicate (maxBytesLen + 1) 0 <> word32BE i)
+    ScriptDataBytes _ -> ScriptDataBytes (bytesPad <> word32BE i)
     _ -> ScriptDataNumber (maxNumber + 1 + toInteger i)
 
-  maxNumber = maximum (0 : [i | k <- keys, ScriptDataNumber i <- leaves k])
-  maxBytesLen = maximum (0 : [BS.length bs | k <- keys, ScriptDataBytes bs <- leaves k])
+  keyLeaves = concatMap leaves keys
+  maxNumber = maximum (0 : [i | ScriptDataNumber i <- keyLeaves])
+  maxBytesLen = maximum (0 : [BS.length bs | ScriptDataBytes bs <- keyLeaves])
 
 {- | Apply a function to the first number or byte-string leaf of a datum, in
 left-to-right order, keeping the surrounding structure. 'Nothing' when the
@@ -356,27 +340,3 @@ datumShape sd = case sd of
   ScriptDataMap{} -> "Map"
   ScriptDataNumber{} -> "Number"
   ScriptDataBytes{} -> "Bytes"
-
--- | Check if an output is a script output with an inline datum.
-isScriptOutputWithInlineDatum :: Output -> Bool
-isScriptOutputWithInlineDatum output =
-  not (isKeyAddressAny (addressOf output)) && hasInlineDatum output
-
--- | Check if an output has an inline datum.
-hasInlineDatum :: Output -> Bool
-hasInlineDatum output =
-  case datumOfTxOut (outputTxOut output) of
-    TxOutDatumInline{} -> True
-    _ -> False
-
--- | Extract the inline datum from an output if present.
-getInlineDatum :: Output -> Maybe ScriptData
-getInlineDatum output =
-  case datumOfTxOut (outputTxOut output) of
-    TxOutDatumInline _ hashableData -> Just (getScriptData hashableData)
-    _ -> Nothing
-
--- | Convert a @ScriptData@ to an inline @Datum@ (TxOutDatum CtxTx Era).
-toInlineDatum :: ScriptData -> Datum
-toInlineDatum sd =
-  TxOutDatumInline BabbageEraOnwardsConway (unsafeHashableScriptData sd)
