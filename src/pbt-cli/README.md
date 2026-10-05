@@ -27,9 +27,10 @@ Download the asset for your platform from the
 and mark it executable:
 
 ```sh
-# pick one: linux-x64, linux-arm64, darwin-arm64
+VERSION=0.1.0.0
+TARGET=linux-x64   # pick one: linux-x64, linux-arm64, darwin-arm64
 curl -L -o pbt-cli \
-  https://github.com/input-output-hk/sc-testing-tools/releases/latest/download/pbt-cli-0.1.0.0-linux-x64
+  "https://github.com/input-output-hk/sc-testing-tools/releases/download/pbt-cli-v${VERSION}/pbt-cli-${VERSION}-${TARGET}"
 chmod +x pbt-cli
 ./pbt-cli --version
 ```
@@ -427,7 +428,7 @@ git push origin pbt-cli-v0.1.0.0
 ```
 
 That triggers [`.github/workflows/pbt-cli-release.yaml`](../../.github/workflows/pbt-cli-release.yaml),
-which creates the release, builds `exe:pbt-cli` for the four targets in
+which creates the release, builds `exe:pbt-cli` for the three targets in
 parallel (`fail-fast: false`, so one bad leg still ships the rest), uploads each
 as `pbt-cli-<version>-<target>`, and finally promotes the release to `latest` —
 but only if at least one asset was uploaded, so an all-legs-failed run never
