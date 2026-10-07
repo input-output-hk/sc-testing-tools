@@ -8,6 +8,8 @@ module Convex.Tasty.Streaming.TMSummary (
   Fault (..),
   faultLabel,
   threatModelGroupName,
+  positivePropertyName,
+  negativePropertyName,
   TMStore,
   TMRecorder (..),
   TMStoreOption (..),
@@ -78,6 +80,14 @@ threatModelGroupName = \case
   NotApplicable -> "Not applicable"
   Expected -> "Expected vulnerabilities"
   Accepted -> "Accepted findings"
+
+{- | The names of a suite's two properties. Shared like 'threatModelGroupName':
+the test tree is built with them, and @--test-id@ finds a per-model case's
+prerequisite by the first.
+-}
+positivePropertyName, negativePropertyName :: String
+positivePropertyName = "Positive tests"
+negativePropertyName = "Negative tests"
 
 {- | Whose fault a failing threat-model test case is.
 
@@ -215,9 +225,9 @@ lookupThreatModelSummary (TMStore ref) key =
 {- | Callback for recording iteration traces as pre-serialized JSON.
 Default is a no-op (zero overhead when streaming is not active).
 
-A test body names the test it records for by the path of the group holding
-that test, which it reads from 'Convex.Tasty.Streaming.TreeMap.GroupPathOpt',
-and the test's name in that group.
+A test body names the test it records for by that test's full path: the
+names of its groups, outermost first (read from
+'Convex.Tasty.Streaming.TreeMap.GroupPathOpt'), then its own name.
 
 When 'trEnabled' returns 'True', test bodies use the expensive traced code
 path (building 'IterationTrace' values with UTxO snapshots, transaction
@@ -232,16 +242,16 @@ data TraceRecorder = TraceRecorder
   { trEnabled :: IO Bool
   -- ^ Whether test bodies should collect detailed traces.
   , recordIteration :: [String] -> String -> [SrcLocRange] -> Value -> IO ()
-  {- ^ Emit a single iteration trace event. Arguments: the path of the group
-  holding the property, its category (@"positive"@ or @"negative"@, which
-  names the property), the covered source ranges, the pre-serialized trace JSON.
+  {- ^ Emit a single iteration trace event. Arguments: the full path of the
+  property's test, its category (@"positive"@ or @"negative"@), the covered
+  source ranges, the pre-serialized trace JSON.
   -}
-  , findTestIdIO :: [String] -> String -> IO (Maybe Int)
-  -- ^ The id of the test with the given name in the group at the given path, if it runs.
+  , findTestIdIO :: [String] -> IO (Maybe Int)
+  -- ^ The id of the test at the given full path, if it runs.
   }
 
 instance IsOption TraceRecorder where
-  defaultValue = TraceRecorder (pure False) (\_ _ _ _ -> pure ()) (\_ _ -> pure Nothing)
+  defaultValue = TraceRecorder (pure False) (\_ _ _ _ -> pure ()) (\_ -> pure Nothing)
   parseValue = const Nothing
   optionName = Tagged "trace-recorder"
   optionHelp = Tagged "internal: iteration trace recorder"

@@ -56,21 +56,20 @@ mkFold remapId counterRef =
         k (error "Convex.Tasty.Streaming.TreeMap: resource not available during fold")
     }
 
-{- | The id of the test called @name@ directly inside the group at
-@groupPath@ (spelled like 'tiPath': outermost group first), if the map has
-one. A test that @--test-id@ filtered out is not in the map.
+{- | The id of the test at the given full path (see 'testPath'), if the map
+has one. A test that @--test-id@ filtered out is not in the map.
 
 The whole path has to match: tests in different groups can share both their
 own name and their group's name (most @propRunActions@ suites call theirs
 \"property-based testing\").
 -}
-findTestId :: IntMap TestInfo -> [String] -> String -> Maybe Int
-findTestId testMap groupPath name =
-  fst <$> find matches (IntMap.toAscList testMap)
- where
-  path = map Text.pack groupPath
-  name' = Text.pack name
-  matches (_, ti) = tiPath ti == path && tiName ti == name'
+findTestId :: IntMap TestInfo -> [String] -> Maybe Int
+findTestId testMap path = case reverse (map Text.pack path) of
+  [] -> Nothing
+  name : groupsReversed ->
+    let groups = reverse groupsReversed
+        matches (_, ti) = tiName ti == name && tiPath ti == groups
+     in fst <$> find matches (IntMap.toAscList testMap)
 
 {- | A test's full path: the names of its groups, outermost first, then its
 own name. What a test case records its threat-model summary under.

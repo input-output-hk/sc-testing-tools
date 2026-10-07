@@ -3,8 +3,9 @@ events in: a test's @test_started@ once, before anything else about it.
 -}
 module Convex.Tasty.EventSinkSpec (tests) where
 
-import Convex.Tasty.HUnit (Assertion, testCase, (@?=))
-import Convex.Tasty.Streaming.EventSink (emitTo, newEventSink)
+import Control.Exception (ErrorCall (..), try)
+import Convex.Tasty.HUnit (Assertion, assertFailure, testCase, (@?=))
+import Convex.Tasty.Streaming.EventSink (EventSink, emitTo, newEventSink)
 import Convex.Tasty.Streaming.Types (Event (..), TestOutcome (..))
 import Data.Aeson qualified as Aeson
 import Data.Foldable (traverse_)
@@ -18,15 +19,23 @@ tests =
     [ testCase "a trace that gets ahead of the reporter announces its test" traceAnnouncesItsTest
     , testCase "test_started goes out once per test" startedGoesOutOnce
     , testCase "a trace with no test announces nothing" unresolvedTraceAnnouncesNothing
+    , testCase "an event that fails to encode writes nothing" failedEncodingWritesNothing
     ]
+
+-- | A sink, and the events it has written so far, decoded back from its lines.
+recordingSink :: IO (EventSink, IO [Event])
+recordingSink = do
+  out <- newIORef []
+  sink <- newEventSink (\line -> modifyIORef' out (line :))
+  let decoded = traverse (either fail pure . Aeson.eitherDecodeStrict) . reverse =<< readIORef out
+  pure (sink, decoded)
 
 -- | What a sink writes, given the events emitted to it, in order.
 written :: [Event] -> IO [Event]
 written evts = do
-  out <- newIORef []
-  sink <- newEventSink (\e -> modifyIORef' out (e :))
+  (sink, out) <- recordingSink
   traverse_ (emitTo sink) evts
-  reverse <$> readIORef out
+  out
 
 trace :: Int -> Event
 trace i = TestTrace{ettTestId = i, ettCategory = "positive", ettCovered = [], ettTrace = Aeson.Null}
@@ -61,3 +70,17 @@ unresolvedTraceAnnouncesNothing :: Assertion
 unresolvedTraceAnnouncesNothing = do
   out <- written [trace (-1), TestStarted 0, trace (-1)]
   out @?= [trace (-1), TestStarted 0, trace (-1)]
+
+{- | Encoding forces a trace's payload, which can throw. Then nothing may be
+written for it, or the reporter's own test_started would follow a stray one.
+-}
+failedEncodingWritesNothing :: Assertion
+failedEncodingWritesNothing = do
+  (sink, out) <- recordingSink
+  result <- try (emitTo sink (trace 5){ettTrace = Aeson.toJSON [error "boom" :: Int]})
+  case result of
+    Left (ErrorCall _) -> pure ()
+    Right () -> assertFailure "expected the encoding error to reach the caller"
+  out >>= (@?= [])
+  emitTo sink (TestStarted 5)
+  out >>= (@?= [TestStarted 5])

@@ -9,7 +9,7 @@ module Convex.Tasty.Streaming (
 import Control.Concurrent.Async (forConcurrently_)
 import Control.Concurrent.STM
 import Control.Monad (unless, when)
-import Convex.Tasty.Streaming.EventSink (EventSink, emitTo, newEventSink)
+import Convex.Tasty.Streaming.EventSink (EventSink, emitTo, encodeLine, newEventSink)
 import Convex.Tasty.Streaming.QCStats (
   QCStatsRecorder,
   QCStatsStoreOption (..),
@@ -26,15 +26,14 @@ import Convex.Tasty.Streaming.TMSummary (
   TraceRecorder (..),
   lookupThreatModelSummary,
   newTMStore,
+  positivePropertyName,
   storeRecorder,
   threatModelGroupName,
  )
 import Convex.Tasty.Streaming.TreeMap (annotateGroupPaths, buildTestMap, findTestId, testPath)
 import Convex.Tasty.Streaming.Types
-import Data.Aeson (encode)
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as BL
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, atomicWriteIORef, newIORef, readIORef, writeIORef)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet qualified as IntSet
@@ -203,15 +202,6 @@ streamingJsonReporter = TestReporter
             StreamingEnabledRef mEnabledRef = lookupOption opts
             CoverageIndexStorage coverageIndex = lookupOption opts
 
-        -- Signal that streaming is active so the TraceRecorder callback
-        -- (which checks the same IORef) actually emits events.
-        -- When --no-trace is passed, leave the ref as False so that both
-        -- trEnabled and recordIteration remain no-ops.
-        let NoTrace noTrace = lookupOption opts
-        case mEnabledRef of
-          Just ref -> writeIORef ref (not noTrace)
-          Nothing -> pure ()
-
         -- Set line buffering for streaming
         hSetBuffering stdout LineBuffering
 
@@ -219,7 +209,7 @@ streamingJsonReporter = TestReporter
         -- (backward compatibility when the reporter is used without
         -- defaultMainStreaming).
         let EventSinkRef mSharedSink = lookupOption opts
-        sink <- maybe (newEventSink emitEvent) pure mSharedSink
+        sink <- maybe (newEventSink writeLine) pure mSharedSink
         let emit = emitTo sink
 
         -- Build the test index -> metadata map
@@ -241,6 +231,20 @@ streamingJsonReporter = TestReporter
         -- Emit suite_started with full test list
         let testInfos = snd <$> IntMap.toAscList testMap
         emit $ SuiteStarted mPkgRoot testInfos coverageIndex
+
+        -- Signal that streaming is active so the TraceRecorder callback
+        -- (which checks the same IORef) actually emits events.
+        -- When --no-trace is passed, leave the ref as False so that both
+        -- trEnabled and recordIteration remain no-ops.
+        --
+        -- Only now: tasty starts the tests before it calls this reporter, so
+        -- tracing any earlier would stream traces ahead of suite_started, with
+        -- ids from a test map not yet published. Iterations that run before
+        -- this point take the untraced path.
+        let NoTrace noTrace = lookupOption opts
+        case mEnabledRef of
+          Just ref -> atomicWriteIORef ref (not noTrace)
+          Nothing -> pure ()
 
         -- Track results for final summary
         resultsVar <- newTVarIO ([] :: [Result])
@@ -326,10 +330,14 @@ streamingJsonReporter = TestReporter
 
 -- | Emit a single NDJSON event line to stdout.
 emitEvent :: Event -> IO ()
-emitEvent evt = do
+emitEvent = writeLine . encodeLine
+
+-- | Write one encoded NDJSON line to stdout.
+writeLine :: BS.ByteString -> IO ()
+writeLine line = do
   -- This was changed from the original code to print the complete JSON line in one
   -- write to stdout, avoiding interleaving/mixing of event output when running in parallel.
-  BS.hPut stdout (BL.toStrict (encode evt) <> "\n")
+  BS.hPut stdout line
   hFlush stdout
 
 -- | Check if a Result is a success
@@ -344,13 +352,6 @@ showFailureReason TestFailed = "TestFailed"
 showFailureReason (TestThrewException e) = "TestThrewException: " ++ show e
 showFailureReason (TestTimedOut n) = "TestTimedOut: " ++ show n ++ "μs"
 showFailureReason TestDepFailed = "TestDepFailed"
-
--- | The name of the property whose iterations a trace category records.
-categoryTestName :: String -> String
-categoryTestName category = case category of
-  "positive" -> "Positive tests"
-  "negative" -> "Negative tests"
-  other -> other
 
 {- | Ingredient that lists the test tree as JSON and exits without running tests.
 
@@ -440,7 +441,7 @@ expandSelectedTestIds testMap selectedIds =
       [] -> Nothing
       groupPath
         | last groupPath `Set.member` perModelGroups ->
-            Map.lookup (init groupPath <> [Text.pack "Positive tests"]) pathToId
+            Map.lookup (init groupPath <> [Text.pack positivePropertyName]) pathToId
         | otherwise -> Nothing
 
 {- | Drop-in replacement for 'defaultMain' that supports @--streaming-json@.
@@ -485,8 +486,8 @@ additional ingredients (e.g. package-specific CLI option managers).
 
 The same internal streaming wiring is always installed (threat-model
 summary store, trace recorder, group paths for the recorder to name tests
-by, shared output lock, and package root capture from call-site), then
-Tasty runs with:
+by, the event sink the reporter and the recorder share, and package root
+capture from call-site), then Tasty runs with:
 
 @extraIngredients <> streamingIngredients@
 -}
@@ -507,7 +508,7 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
   -- Create a single shared event sink used by both the streaming reporter
   -- and the TraceRecorder so their NDJSON lines never interleave, and a
   -- test's test_started precedes its traces (see 'EventSink').
-  sink <- newEventSink emitEvent
+  sink <- newEventSink writeLine
   -- Create a trace recorder that emits TestTrace events as NDJSON to stdout.
   -- The recorder reads the shared testMapRef (populated by the reporter at
   -- startup) to resolve the numeric Tasty test ID for each trace event, from
@@ -520,11 +521,11 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
   let traceRec =
         TraceRecorder
           { trEnabled = readIORef enabledRef
-          , recordIteration = \groupPath category covered iterationJson -> do
+          , recordIteration = \path category covered iterationJson -> do
               enabled <- readIORef enabledRef
               when enabled $ do
                 testMap <- readIORef testMapRef
-                let testId = findTestId testMap groupPath (categoryTestName category)
+                let testId = findTestId testMap path
                 emitTo sink $
                   TestTrace
                     { ettTestId = fromMaybe (-1) testId
@@ -532,9 +533,9 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
                     , ettTrace = iterationJson
                     , ettCovered = covered
                     }
-          , findTestIdIO = \groupPath name -> do
+          , findTestIdIO = \path -> do
               testMap <- readIORef testMapRef
-              pure $ findTestId testMap groupPath name
+              pure $ findTestId testMap path
           }
   let baseTree =
         localOption pkgRootOpt $
