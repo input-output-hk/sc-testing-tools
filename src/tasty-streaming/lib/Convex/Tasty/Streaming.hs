@@ -38,6 +38,7 @@ import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet qualified as IntSet
+import Data.List (isPrefixOf)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Proxy (Proxy (..))
@@ -349,13 +350,13 @@ showFailureReason (TestThrewException e) = "TestThrewException: " ++ show e
 showFailureReason (TestTimedOut n) = "TestTimedOut: " ++ show n ++ "μs"
 showFailureReason TestDepFailed = "TestDepFailed"
 
-{- | Find the Tasty test ID for a test identified by group name and category.
-Searches the test map for a 'TestInfo' whose path contains the group name
-and whose name matches the category (e.g. \"Positive tests\", \"Negative tests\").
+{- | Find the Tasty test ID for a test identified by group path and category.
+Searches the test map for a 'TestInfo' somewhere under the group path
+whose name matches the category (e.g. \"Positive tests\", \"Negative tests\").
 Returns @Nothing@ when the test is not found.
 -}
-findTestId :: IntMap TestInfo -> String -> String -> Maybe Int
-findTestId testMap group category =
+findTestId :: IntMap TestInfo -> [String] -> String -> Maybe Int
+findTestId testMap groupPath category =
   let categoryName = case category of
         "positive" -> "Positive tests"
         "negative" -> "Negative tests"
@@ -364,7 +365,7 @@ findTestId testMap group category =
         IntMap.toList $
           IntMap.filter
             ( \ti ->
-                Text.pack group `elem` tiPath ti
+                map Text.pack groupPath `isPrefixOf` tiPath ti
                   && tiName ti == Text.pack categoryName
             )
             testMap
@@ -408,6 +409,21 @@ testIdFilterIngredient =
 -- | Default ingredients with streaming reporter added
 streamingIngredients :: [Ingredient]
 streamingIngredients = [listingTests, testIdFilterIngredient, listTestsJsonIngredient, streamingJsonReporter, consoleTestReporter]
+
+{- | Give every part of the tree the 'TraceRecorder' for the path of the
+group it sits in.
+-}
+scopeTraceRecorders :: ([String] -> TraceRecorder) -> TestTree -> TestTree
+scopeTraceRecorders recorderFor = go []
+ where
+  go path = localOption (recorderFor path) . walk path
+  walk path tree = case tree of
+    TestGroup name children -> TestGroup name (map (go (path <> [name])) children)
+    PlusTestOptions f subtree -> PlusTestOptions f (walk path subtree)
+    WithResource spec mkTree -> WithResource spec (walk path . mkTree)
+    AskOptions k -> AskOptions (walk path . k)
+    After dep expr subtree -> After dep expr (walk path subtree)
+    SingleTest{} -> tree
 
 filterTreeByPaths :: Set [String] -> TestTree -> Maybe TestTree
 filterTreeByPaths selected = go []
@@ -533,14 +549,18 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
   -- so when --streaming-json is NOT passed (or --no-trace is passed) the
   -- ref stays False: test bodies take the fast path and no NDJSON lines
   -- go to stdout.
-  let traceRec =
+  --
+  -- Each group gets its own recorder (see 'scopeTraceRecorders'), so that a
+  -- group name passed to it is resolved under that group only: group names
+  -- repeat across a suite.
+  let traceRec scope =
         TraceRecorder
           { trEnabled = readIORef enabledRef
           , recordIteration = \group category covered iterationJson -> do
               enabled <- readIORef enabledRef
               when enabled $ do
                 testMap <- readIORef testMapRef
-                let testId = findTestId testMap group category
+                let testId = findTestId testMap (scope <> [group]) category
                 withMVar outputLock $ \_ ->
                   emitEvent $
                     TestTrace
@@ -551,7 +571,7 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
                       }
           , findTestIdIO = \group category -> do
               testMap <- readIORef testMapRef
-              pure $ findTestId testMap group category
+              pure $ findTestId testMap (scope <> [group]) category
           }
   let baseTree =
         localOption pkgRootOpt $
@@ -562,7 +582,7 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
                   localOption (TestMapRef (Just testMapRef)) $
                     localOption (StreamingEnabledRef (Just enabledRef)) $
                       localOption (OutputLockRef (Just outputLock)) $
-                        localOption traceRec tree
+                        scopeTraceRecorders traceRec tree
 
   opts <- parseOptions (extraIngredients <> streamingIngredients) baseTree
   let TestIdFilter requested = lookupOption opts
