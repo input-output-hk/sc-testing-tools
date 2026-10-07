@@ -29,7 +29,7 @@ import Convex.Tasty.Streaming.TMSummary (
   storeRecorder,
   threatModelGroupName,
  )
-import Convex.Tasty.Streaming.TreeMap (annotateGroupPaths, buildTestMap, findTestId)
+import Convex.Tasty.Streaming.TreeMap (annotateGroupPaths, buildTestMap, findTestId, testPath)
 import Convex.Tasty.Streaming.Types
 import Data.Aeson (encode)
 import Data.ByteString qualified as BS
@@ -285,17 +285,12 @@ streamingJsonReporter = TestReporter
           -- Record result
           atomically $ modifyTVar' resultsVar (result :)
 
-          -- Look up structured threat-model summary by "<group>/<name>" key
+          -- Look up the structured threat-model summary the test recorded
+          -- under its full path
           let testInfo = IntMap.lookup idx testMap
-              key = case testInfo of
-                Just ti
-                  | (parent : _) <- reverse (tiPath ti) ->
-                      Text.unpack parent <> "/" <> Text.unpack (tiName ti)
-                Just ti -> Text.unpack (tiName ti)
-                Nothing -> ""
-          mSummary <- case mStore of
-            Just store -> lookupThreatModelSummary store key
-            Nothing -> pure Nothing
+          mSummary <- case (mStore, testInfo) of
+            (Just store, Just ti) -> lookupThreatModelSummary store (testPath ti)
+            _ -> pure Nothing
           mMonitoring <- case (mQCStatsStore, testInfo) of
             (Just store, Just ti) -> lookupQCStatsByTestInfo store ti
             _ -> pure Nothing
@@ -452,9 +447,10 @@ expandSelectedTestIds testMap selectedIds =
 
 If you bypass this entry point and wire 'streamingIngredients' manually,
 threat-model summaries will not appear in the JSON output unless you
-also call
-@'localOption' ('TMStoreOption' (Just store)) . 'localOption' ('storeRecorder' store)@
-on your tree (with a freshly-allocated store from 'newTMStore').
+also apply
+@'annotateGroupPaths' . 'localOption' ('TMStoreOption' (Just store)) . 'localOption' ('storeRecorder' store)@
+to your tree (with a freshly-allocated store from 'newTMStore'): test cases
+record their summaries under the group paths 'annotateGroupPaths' provides.
 
 == Package root capture
 
