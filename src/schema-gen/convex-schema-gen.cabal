@@ -17,6 +17,8 @@ common lang
     ScopedTypeVariables
     TypeApplications
 
+  ghc-options:        -Werror=missing-fields
+
 library
   import:          lang
   hs-source-dirs:  lib

@@ -2,8 +2,8 @@
 
 module Main where
 
-import Escrow.Spec.Prop (propBasedTests)
 import Convex.Tasty.Streaming (defaultMainStreaming)
+import Escrow.Spec.Prop (propBasedTests)
 import Escrow.Spec.Unit (unitTests)
 import Test.Tasty (TestTree, testGroup)
 

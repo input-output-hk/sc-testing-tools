@@ -76,7 +76,7 @@ module Convex.ThreatModel.DatumBloat (
 
 import Convex.ThreatModel
 import Data.ByteString qualified as BS
-import Test.QuickCheck (Gen, choose, shrinkIntegral)
+import Test.QuickCheck (Gen, choose)
 
 {- | Default datum-list-bloat attack. The number of items and item size are
 drawn per transaction from curated ranges, so QuickCheck explores the
@@ -104,24 +104,7 @@ datumListBloatAttackWithGen gen =
     -- Skip iterations where the draw is too small to be a meaningful attack.
     ensure (numItems >= 1 && itemSize >= 1)
 
-    requireScriptInput
-
-    -- Get all outputs from the transaction
-    outputs <- getTxOutputs
-
-    -- Filter to script outputs with inline datums
-    let scriptOutputsWithDatum = filter isScriptOutputWithInlineDatum outputs
-
-    -- Precondition: there must be at least one script output with inline datum
-    threatPrecondition $ ensure (not $ null scriptOutputsWithDatum)
-
-    -- Pick a target output
-    target <- pickAny scriptOutputsWithDatum
-
-    -- Extract the inline datum (we know it exists due to the filter)
-    originalDatum <- case getInlineDatum target of
-      Nothing -> failPrecondition "Script output missing inline datum"
-      Just originalDatum' -> pure originalDatum'
+    (target, originalDatum) <- anyGuardedOutputWithInlineDatum
 
     -- Check if the datum contains any lists to bloat
     unless (containsList originalDatum) $
@@ -215,30 +198,6 @@ containsList (ScriptDataList _) = True
 containsList (ScriptDataMap entries) = any (\(k, v) -> containsList k || containsList v) entries
 containsList _ = False
 
--- | Check if an output is a script output with an inline datum.
-isScriptOutputWithInlineDatum :: Output -> Bool
-isScriptOutputWithInlineDatum output =
-  not (isKeyAddressAny (addressOf output)) && hasInlineDatum output
-
--- | Check if an output has an inline datum.
-hasInlineDatum :: Output -> Bool
-hasInlineDatum output =
-  case datumOfTxOut (outputTxOut output) of
-    TxOutDatumInline{} -> True
-    _ -> False
-
--- | Extract the inline datum from an output if present.
-getInlineDatum :: Output -> Maybe ScriptData
-getInlineDatum output =
-  case datumOfTxOut (outputTxOut output) of
-    TxOutDatumInline _ hashableData -> Just (getScriptData hashableData)
-    _ -> Nothing
-
--- | Convert a @ScriptData@ to an inline @Datum@ (TxOutDatum CtxTx Era).
-toInlineDatum :: ScriptData -> Datum
-toInlineDatum sd =
-  TxOutDatumInline BabbageEraOnwardsConway (unsafeHashableScriptData sd)
-
 -- ----------------------------------------------------------------------------
 -- ByteString Inflation Attack
 -- ----------------------------------------------------------------------------
@@ -267,16 +226,7 @@ datumByteBloatAttackWithGen gen =
     -- Skip iterations where the draw is too small to be a meaningful attack.
     ensure (inflatedSize >= 1)
 
-    requireScriptInput
-
-    outputs <- getTxOutputs
-    let scriptOutputsWithDatum = filter isScriptOutputWithInlineDatum outputs
-    threatPrecondition $ ensure (not $ null scriptOutputsWithDatum)
-    target <- pickAny scriptOutputsWithDatum
-
-    originalDatum <- case getInlineDatum target of
-      Nothing -> failPrecondition "Script output missing inline datum"
-      Just originalDatum' -> pure originalDatum'
+    (target, originalDatum) <- anyGuardedOutputWithInlineDatum
 
     let bloatedDatum = inflateFirstListItem inflatedSize originalDatum
 
@@ -305,8 +255,6 @@ datumByteBloatAttackWithGen gen =
 {- | Shrink a positive integer toward 1 (the smallest meaningful value),
 never reaching 0.
 -}
-shrinkPositive :: Int -> [Int]
-shrinkPositive = filter (>= 1) . shrinkIntegral
 
 -- | Coarse bucket for the inflation-size distribution report.
 bucket :: Int -> String

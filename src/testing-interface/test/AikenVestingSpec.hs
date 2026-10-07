@@ -519,6 +519,12 @@ instance TestingInterface VestingModel where
   monitoring _state _action prop = prop
 
 instance ThreatModelsFor VestingModel where
+  {- These are harness fixtures, not contracts under review: the CTF
+  exercises are deliberately vulnerable, so surveying every model finds
+  real bugs that are beside the point. The models each fixture exercises
+  are declared explicitly below. -}
+  candidateModels = []
+
   -- Threat models are empty because vesting is a one-shot spend contract:
   -- - Lock: Creates script output with inline datum
   -- - Unlock: Spends script output, funds go to beneficiary (NO continuation)
@@ -535,7 +541,7 @@ instance ThreatModelsFor VestingModel where
 
   -- timeBoundManipulation is a KNOWN vulnerability in this contract.
   -- It's run as an expected vulnerability (inverted pass/fail).
-  expectedVulnerabilities = [timeBoundManipulation]
+  expectedVulnerabilities = [(timeBoundManipulation, "CTF exercise: the contract ships with this vulnerability deliberately")]
 
 -- ----------------------------------------------------------------------------
 -- Test tree

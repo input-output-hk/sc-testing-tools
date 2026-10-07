@@ -4,8 +4,8 @@
 {- | Tests for "Convex.ThreatModel.LargeData".
 
 The interesting property is what the attack does with a datum it cannot
-bloat. 'bloatData' grows the two container shapes a generated @FromData@
-parser produces (@Constr@ and @List@) and returns everything else unchanged;
+bloat. 'bloatData' grows the container shapes a generated @FromData@ parser
+produces (@Constr@, @List@ and @Map@) and returns everything else unchanged;
 an unchanged datum makes @changeDatumOf@ a no-op, and asserting
 'Convex.ThreatModel.shouldNotValidate' on an unmodified transaction would
 report a "vulnerability" for a transaction the attack never touched. The

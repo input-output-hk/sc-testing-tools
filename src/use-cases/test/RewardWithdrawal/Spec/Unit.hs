@@ -4,8 +4,9 @@ import Cardano.Api qualified as C
 import Control.Monad.Except (MonadError)
 import Convex.Class (MonadMockchain)
 import Convex.CoinSelection (BalanceTxError)
-import Convex.MockChain.Utils (mockchainFails, mockchainSucceeds)
+import Convex.MockChain.Utils (mockchainFailsWith, mockchainSucceedsWith)
 import Convex.Tasty.HUnit (testCase)
+import Convex.TestingInterface (Options (params))
 import Convex.Utils (failOnError)
 import Convex.Wallet (Wallet)
 import Convex.Wallet.MockWallet qualified as MockWallet
@@ -22,8 +23,8 @@ import Test.Tasty (TestTree, testGroup)
 -- rewarding script vets outputs paid to its own payment address.
 -------------------------------------------------------------------------------
 
-unitTests :: TestTree
-unitTests =
+unitTests :: Options C.ConwayEra -> TestTree
+unitTests opts =
   testGroup
     "unit tests"
     [ testCase
@@ -39,6 +40,9 @@ unitTests =
         "Fail: lock datum amount does not match the output's value"
         (mockchainFails (failOnError (ownerLocks 10_000_000 9_000_000)) (\_ -> pure ()))
     ]
+ where
+  mockchainSucceeds action = mockchainSucceedsWith (params opts) action
+  mockchainFails action handleError = mockchainFailsWith (params opts) action handleError
 
 {- | The shared scenario: the owner's script-guarded stake credential is
 registered, then a zero-lovelace withdrawal triggering the script is signed

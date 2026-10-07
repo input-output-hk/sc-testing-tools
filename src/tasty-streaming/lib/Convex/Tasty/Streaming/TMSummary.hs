@@ -5,6 +5,8 @@
 module Convex.Tasty.Streaming.TMSummary (
   ThreatModelSummary (..),
   ThreatModelCategory (..),
+  Fault (..),
+  faultLabel,
   threatModelGroupName,
   TMStore,
   TMRecorder (..),
@@ -17,7 +19,7 @@ module Convex.Tasty.Streaming.TMSummary (
 ) where
 
 import Convex.Tasty.Streaming.SrcLoc (SrcLocRange)
-import Data.Aeson (FromJSON (..), ToJSON (..), Value, object, withObject, withText, (.:), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), Value, object, withObject, withText, (.:), (.:?), (.=))
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -38,8 +40,12 @@ data ThreatModelCategory
     Claimed
   | -- | From @expectedVulnerabilities@: the contract is known vulnerable; no detection fails the test.
     Expected
-  | -- | From @acceptedFindings@: detections are reported for visibility and never fail the test.
+  | -- | From @acceptedFindings@: the finding is a known benign artifact. Judged like @Expected@ - a detection is the required outcome.
     Accepted
+  | -- | From @candidateModels@: run for information. Reported, but never failed for not applying.
+    Surveyed
+  | -- | From @notApplicable@: reviewed as not applying here; it applying at all fails the test.
+    NotApplicable
   deriving (Show, Eq, Ord, Enum, Bounded, Generic)
 
 instance ToJSON ThreatModelCategory where
@@ -47,12 +53,16 @@ instance ToJSON ThreatModelCategory where
     Claimed -> "claimed"
     Expected -> "expected"
     Accepted -> "accepted"
+    Surveyed -> "surveyed"
+    NotApplicable -> "not_applicable"
 
 instance FromJSON ThreatModelCategory where
   parseJSON = withText "ThreatModelCategory" $ \case
     "claimed" -> pure Claimed
     "expected" -> pure Expected
     "accepted" -> pure Accepted
+    "surveyed" -> pure Surveyed
+    "not_applicable" -> pure NotApplicable
     other -> fail ("Unknown threat model category: " <> show other)
 
 {- | The Tasty group that a category's per-model test cases live under. The
@@ -64,8 +74,46 @@ reporter does not recognise (@--test-id@ resolves a per-model test's
 threatModelGroupName :: ThreatModelCategory -> String
 threatModelGroupName = \case
   Claimed -> "Threat models"
+  Surveyed -> "Surveyed threat models"
+  NotApplicable -> "Not applicable"
   Expected -> "Expected vulnerabilities"
   Accepted -> "Accepted findings"
+
+{- | Whose fault a failing threat-model test case is.
+
+Only one cell of the slot-by-outcome matrix is the contract's fault; most
+red is a stale declaration. Saying which lets a reader — or a dashboard —
+tell "the contract regressed" from "somebody needs to update the instance",
+and stops a resolved vulnerability from reading as a broken contract.
+-}
+data Fault
+  = -- | The script is at fault: fix the contract.
+    Contract
+  | -- | The @ThreatModelsFor@ instance is stale or wrong: edit the declaration.
+    Declaration
+  | -- | The attack could not be carried out: fix the generator, or accept a harness limit.
+    Setup
+  deriving (Show, Eq, Ord, Enum, Bounded, Generic)
+
+instance ToJSON Fault where
+  toJSON = \case
+    Contract -> "contract"
+    Declaration -> "declaration"
+    Setup -> "setup"
+
+instance FromJSON Fault where
+  parseJSON = withText "Fault" $ \case
+    "contract" -> pure Contract
+    "declaration" -> pure Declaration
+    "setup" -> pure Setup
+    other -> fail ("Unknown fault: " <> show other)
+
+-- | The prefix a failure message leads with, so the fault is greppable.
+faultLabel :: Fault -> String
+faultLabel = \case
+  Contract -> "CONTRACT"
+  Declaration -> "DECLARATION"
+  Setup -> "SETUP"
 
 -- | Structured summary of a threat-model test case.
 data ThreatModelSummary = ThreatModelSummary
@@ -78,6 +126,8 @@ data ThreatModelSummary = ThreatModelSummary
   , tmsSkipped :: !Int
   , tmsSkippedPhase1 :: !Int
   , tmsErrors :: !Int
+  , tmsFault :: !(Maybe Fault)
+  -- ^ Set only when the case failed, saying whose fault it is.
   }
   deriving (Show, Eq, Generic)
 
@@ -93,6 +143,7 @@ instance ToJSON ThreatModelSummary where
       , "skipped" .= tmsSkipped s
       , "skipped_phase1" .= tmsSkippedPhase1 s
       , "errors" .= tmsErrors s
+      , "fault" .= tmsFault s
       ]
 
 instance FromJSON ThreatModelSummary where
@@ -109,6 +160,8 @@ instance FromJSON ThreatModelSummary where
       <*> o .: "skipped"
       <*> o .: "skipped_phase1"
       <*> o .: "errors"
+      -- Optional: only a failing case has a fault.
+      <*> o .:? "fault"
 
 -- | Mutable storage for threat-model summaries, owned by the reporter.
 newtype TMStore = TMStore (IORef (Map String ThreatModelSummary))

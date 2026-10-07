@@ -829,12 +829,18 @@ instance TestingInterface KingModel where
       )
 
 instance ThreatModelsFor KingModel where
+  {- These are harness fixtures, not contracts under review: the CTF
+  exercises are deliberately vulnerable, so surveying every model finds
+  real bugs that are beside the point. The models each fixture exercises
+  are declared explicitly below. -}
+  candidateModels = []
+
   -- Threat models: OverthrowKing creates a continuation output
   threatModels = [unprotectedScriptOutput, largeDataAttackWith 10]
 
   -- selfReferenceInjection is a KNOWN vulnerability in this contract.
   -- It's run as an expected vulnerability (inverted pass/fail).
-  expectedVulnerabilities = [selfReferenceInjection]
+  expectedVulnerabilities = [(selfReferenceInjection, "CTF exercise: the contract ships with this vulnerability deliberately")]
 
 -- ----------------------------------------------------------------------------
 -- Test tree

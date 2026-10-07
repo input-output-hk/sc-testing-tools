@@ -853,12 +853,21 @@ instance TestingInterface MultisigV3Model where
       <> autoRedeemerTag (Proxy @ValidationMintRedeemerV3)
 
 instance ThreatModelsFor MultisigV3Model where
+  {- These are harness fixtures, not contracts under review: the CTF
+  exercises are deliberately vulnerable, so surveying every model finds
+  real bugs that are beside the point. The models each fixture exercises
+  are declared explicitly below. -}
+  candidateModels = []
+
   -- Note: threatModels empty for same reasons as v1/v2
   threatModels = []
 
   -- Expected vulnerabilities: these threat models SHOULD find issues
   -- (inverted pass/fail, quiet output)
-  expectedVulnerabilities = [unprotectedScriptOutput, duplicateListEntryAttack]
+  expectedVulnerabilities =
+    [ (unprotectedScriptOutput, "CTF exercise: the contract ships with this vulnerability deliberately")
+    , (duplicateListEntryAttack, "CTF exercise: the contract ships with this vulnerability deliberately")
+    ]
 
 -- ----------------------------------------------------------------------------
 -- Test tree
