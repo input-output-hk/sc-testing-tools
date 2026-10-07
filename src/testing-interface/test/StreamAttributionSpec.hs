@@ -18,13 +18,15 @@ import Convex.Tasty.Streaming.TMSummary (
   ThreatModelSummary (..),
   TraceRecorder (..),
   lookupThreatModelSummary,
+  negativePropertyName,
   newTMStore,
+  positivePropertyName,
   storeRecorder,
   threatModelGroupName,
  )
 import Convex.Tasty.Streaming.TreeMap (annotateGroupPaths, buildTestMap, findTestId, testPath)
 import Convex.Tasty.Streaming.Types (TestInfo (..))
-import Convex.TestingInterface (RunOptions, propRunActionsWithOptions)
+import Convex.TestingInterface (RunOptions (threatModelFilter), propRunActionsWithOptions)
 import Data.Foldable (for_, traverse_)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.IntMap.Strict qualified as IntMap
@@ -45,12 +47,17 @@ streamAttributionTests runOpts =
     , testCase "same-named suites record their own threat-model summaries" (summariesNameTheirTests runOpts)
     ]
 
--- | Two copies of a suite, with the same group name, in different groups.
+{- | Two copies of a suite, with the same group name, in different groups.
+Every PingPong model runs, whatever @--threat-model-name@ selects for the
+suites around them.
+-}
 sameNamedSuites :: RunOptions -> TestTree
 sameNamedSuites runOpts =
   testGroup
     "contracts"
-    [testGroup c [propRunActionsWithOptions @PingPongModel "property-based testing" runOpts] | c <- ["a", "b"]]
+    [testGroup c [propRunActionsWithOptions @PingPongModel "property-based testing" allModels] | c <- ["a", "b"]]
+ where
+  allModels = runOpts{threatModelFilter = []}
 
 suitePaths :: [[String]]
 suitePaths = [["contracts", c, "property-based testing"] | c <- ["a", "b"]]
@@ -64,29 +71,26 @@ tracesNameTheirTests runOpts = do
         TraceRecorder
           { trEnabled = pure True
           , recordIteration = \path category _ _ -> insert iterations (path, category)
-          , findTestIdIO = \path name -> Nothing <$ insert modelLookups (path, name)
+          , findTestIdIO = \path -> Nothing <$ insert modelLookups path
           }
       tree = annotateGroupPaths . localOption recorder . localOption (QuickCheckTests 2) $ sameNamedSuites runOpts
   testMap <- buildTestMap mempty id tree
   runQuietly tree
 
   recorded <- readIORef iterations
-  recorded @?= Set.fromList [(path, category) | path <- suitePaths, category <- ["positive", "negative"]]
-  for_ recorded $ \(path, category) ->
-    assertBool
-      ("no " <> category <> " property at " <> show path)
-      (isJust (findTestId testMap path (propertyName category)))
+  recorded
+    @?= Set.fromList
+      [ (path <> [property], category)
+      | path <- suitePaths
+      , (property, category) <- [(positivePropertyName, "positive"), (negativePropertyName, "negative")]
+      ]
+  for_ recorded $ \(path, _) ->
+    assertBool ("no property at " <> show path) (isJust (findTestId testMap path))
 
   looked <- readIORef modelLookups
-  Set.map (take 3 . fst) looked @?= Set.fromList suitePaths
-  for_ looked $ \(path, name) ->
-    assertBool
-      ("no test case for threat model " <> show name <> " at " <> show path)
-      (isJust (findTestId testMap path name))
- where
-  propertyName = \case
-    "positive" -> "Positive tests"
-    _ -> "Negative tests"
+  Set.map (take 3) looked @?= Set.fromList suitePaths
+  for_ looked $ \path ->
+    assertBool ("no threat-model test case at " <> show path) (isJust (findTestId testMap path))
 
 {- | Each per-model case records its summary where the reporter looks it up
 for that case, instead of where its namesake in the other suite records too.

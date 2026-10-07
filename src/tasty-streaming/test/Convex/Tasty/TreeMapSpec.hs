@@ -57,15 +57,16 @@ findTestIdMatchesWholePath = do
   let suite = testGroup "property-based testing" [HUnit.testCase "Positive tests" (pure ()), HUnit.testCase "Negative tests" (pure ())]
       tree = testGroup "root" [testGroup "hello world" [suite], testGroup "tip-jar" [suite]]
   testMap <- buildTestMap mempty id tree
-  findTestId testMap ["root", "hello world", "property-based testing"] "Positive tests" @?= Just 0
-  findTestId testMap ["root", "tip-jar", "property-based testing"] "Positive tests" @?= Just 2
-  findTestId testMap ["root", "tip-jar", "property-based testing"] "Negative tests" @?= Just 3
-  findTestId testMap ["property-based testing"] "Positive tests" @?= Nothing
-  findTestId testMap ["root", "tip-jar"] "Positive tests" @?= Nothing
+  findTestId testMap ["root", "hello world", "property-based testing", "Positive tests"] @?= Just 0
+  findTestId testMap ["root", "tip-jar", "property-based testing", "Positive tests"] @?= Just 2
+  findTestId testMap ["root", "tip-jar", "property-based testing", "Negative tests"] @?= Just 3
+  findTestId testMap ["property-based testing", "Positive tests"] @?= Nothing
+  findTestId testMap ["root", "tip-jar", "Positive tests"] @?= Nothing
+  findTestId testMap [] @?= Nothing
 
 -- | With @--test-id@ the map is keyed by the original ids, so those are what it resolves to.
 findTestIdKeepsRemappedIds :: Assertion
 findTestIdKeepsRemappedIds = do
   let tree = testGroup "root" [testGroup "a" [HUnit.testCase "Positive tests" (pure ())], testGroup "b" [HUnit.testCase "Positive tests" (pure ())]]
   testMap <- buildTestMap mempty (IntMap.fromList [(0, 7), (1, 9)] IntMap.!) tree
-  findTestId testMap ["root", "b"] "Positive tests" @?= Just 9
+  findTestId testMap ["root", "b", "Positive tests"] @?= Just 9

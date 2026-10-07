@@ -114,7 +114,7 @@ import Convex.MockChain.Defaults qualified as Defaults
 import Convex.MonadLog (MonadLog)
 import Convex.NodeParams (NodeParams (..))
 import Convex.Tasty.Streaming.SrcLoc (SrcLocRange (..), withSrcLoc)
-import Convex.Tasty.Streaming.TMSummary (CoverageIndexStorage (..), Fault (..), TMRecorder, ThreatModelCategory (..), ThreatModelSummary (..), TraceRecorder (..), faultLabel, threatModelGroupName, tmRecord)
+import Convex.Tasty.Streaming.TMSummary (CoverageIndexStorage (..), Fault (..), TMRecorder, ThreatModelCategory (..), ThreatModelSummary (..), TraceRecorder (..), faultLabel, negativePropertyName, positivePropertyName, threatModelGroupName, tmRecord)
 import Convex.Tasty.Streaming.TreeMap (GroupPathOpt (..))
 import Convex.Tasty.Streaming.Types (withMaxTxSizeHint)
 import Convex.TestingInterface.Options (defaultMainTestingInterface)
@@ -619,15 +619,15 @@ propRunActionsWithOptions groupName opts =
   positiveTestTree recorder mGetTmResultsRef tms getPosRef =
     withFrozenCallStack $
       askOption $ \(GroupPathOpt suitePath) ->
-        testProperty "Positive tests" (positiveTest @state opts suitePath mGetTmResultsRef tms recorder getPosRef)
+        testProperty positivePropertyName (positiveTest @state opts suitePath mGetTmResultsRef tms recorder getPosRef)
 
   negativeTestTree :: (HasCallStack) => TraceRecorder -> IO (IORef Int) -> TestTree
   negativeTestTree recorder getNegRef =
     withFrozenCallStack $
       askOption $ \(GroupPathOpt suitePath) ->
         case disableNegativeTesting opts of
-          Nothing -> testProperty "Negative tests" (negativeTest @state opts suitePath recorder getNegRef)
-          Just reason -> ignoreTestBecause reason $ testProperty "Negative tests" (negativeTest @state opts suitePath recorder getNegRef)
+          Nothing -> testProperty negativePropertyName (negativeTest @state opts suitePath recorder getNegRef)
+          Just reason -> ignoreTestBecause reason $ testProperty negativePropertyName (negativeTest @state opts suitePath recorder getNegRef)
 
   -- One per-model group per non-empty category, each reporting its own
   -- models' outcomes once the positive tests have recorded them.
@@ -696,6 +696,8 @@ negativeTestTraced
   -> PropertyM IO Property
 negativeTestTraced opts suitePath recorder iterIdx = do
   let RunOptions{mcOptions = Options{coverageRef, params}} = opts
+      -- The full path of this property's test, which its traces name it by
+      propertyPath = suitePath <> [negativePropertyName]
   -- Phase 1: Run the valid prefix, capturing the final mockchain state
   (prefixResult, prefixState) <- runTestingMonadT params $ do
     initialState <- runInitialization @state opts
@@ -722,7 +724,7 @@ negativeTestTraced opts suitePath recorder iterIdx = do
               , itTransitions = []
               , itThreatModels = []
               }
-      run $ recordIteration recorder suitePath "negative" [] (toJSON trace)
+      run $ recordIteration recorder propertyPath "negative" [] (toJSON trace)
       pure (property False)
     Right ((badAction, finalState), transitions) -> do
       let monadAction = runExceptT $ unTestingMonadT $ perform finalState badAction
@@ -750,7 +752,7 @@ negativeTestTraced opts suitePath recorder iterIdx = do
                   , itTransitions = transitions <> [badTransition (TransitionFailure (T.pack (show ex)))]
                   , itThreatModels = []
                   }
-          run $ recordIteration recorder suitePath "negative" [] (toJSON trace)
+          run $ recordIteration recorder propertyPath "negative" [] (toJSON trace)
           discard
         Left ex -> do
           let trace =
@@ -760,7 +762,7 @@ negativeTestTraced opts suitePath recorder iterIdx = do
                   , itTransitions = transitions <> [badTransition (TransitionFailure (T.pack (show ex)))]
                   , itThreatModels = []
                   }
-          run $ recordIteration recorder suitePath "negative" [] (toJSON trace)
+          run $ recordIteration recorder propertyPath "negative" [] (toJSON trace)
           pure (property True)
         Right result ->
           case result of
@@ -775,7 +777,7 @@ negativeTestTraced opts suitePath recorder iterIdx = do
                       , itTransitions = transitions <> [badTransition (TransitionFailure (formatBalanceTxError err))]
                       , itThreatModels = []
                       }
-              run $ recordIteration recorder suitePath "negative" (covDataToSrcLocRanges covData) (toJSON trace)
+              run $ recordIteration recorder propertyPath "negative" (covDataToSrcLocRanges covData) (toJSON trace)
               pure (property True)
             (Right _, MockChainState{mcsCoverageData = covData}) -> do
               -- Bad: the invalid action succeeded — contract is too permissive
@@ -788,7 +790,7 @@ negativeTestTraced opts suitePath recorder iterIdx = do
                       , itTransitions = transitions <> [badTransition (TransitionSuccess T.empty)]
                       , itThreatModels = []
                       }
-              run $ recordIteration recorder suitePath "negative" (covDataToSrcLocRanges covData) (toJSON trace)
+              run $ recordIteration recorder propertyPath "negative" (covDataToSrcLocRanges covData) (toJSON trace)
               pure (property False)
 
 -- | Fast path for negative tests: runs 'runActions' (no tracing overhead).
@@ -881,6 +883,8 @@ positiveTestTraced
   -> PropertyM IO Property
 positiveTestTraced opts suitePath mGetTmResultsRef tms recorder iterIdx = do
   let RunOptions{mcOptions = Options{coverageRef, params}} = opts
+      -- The full path of this property's test, which its traces name it by
+      propertyPath = suitePath <> [positivePropertyName]
   result <- runTestingMonadT params $ do
     initialState <- runInitialization @state opts
     initTxs <- getTxs
@@ -924,7 +928,7 @@ positiveTestTraced opts suitePath mGetTmResultsRef tms recorder iterIdx = do
               , itTransitions = []
               , itThreatModels = []
               }
-      run $ recordIteration recorder suitePath "positive" (covDataToSrcLocRanges covData) (toJSON trace)
+      run $ recordIteration recorder propertyPath "positive" (covDataToSrcLocRanges covData) (toJSON trace)
       pure (property False)
     (Right (finalState, transitions, tmResultsWithCov), MockChainState{mcsCoverageData}) -> do
       let covData = mcsCoverageData <> mconcat [cov | (_, _, _, _, cov, _) <- tmResultsWithCov]
@@ -942,7 +946,7 @@ positiveTestTraced opts suitePath mGetTmResultsRef tms recorder iterIdx = do
         Nothing -> pure ()
       -- A model's own test case sits in its category's group of this suite
       -- (see 'perCategoryGroups' in 'propRunActionsWithOptions').
-      let findTmTestId category = findTestIdIO recorder (suitePath <> [threatModelGroupName category])
+      let findTmTestId category name = findTestIdIO recorder (suitePath <> [threatModelGroupName category, name])
       tmTraces <- liftIO $ toThreatModelTraces findTmTestId (redeemerTagger @state) (addressLabeler @state) [(tmiName n, cat, o, e, c) | (n, cat, o, e, c, _) <- tmResultsWithCov]
       let trace =
             IterationTrace
@@ -951,7 +955,7 @@ positiveTestTraced opts suitePath mGetTmResultsRef tms recorder iterIdx = do
               , itTransitions = transitions
               , itThreatModels = tmTraces
               }
-      run $ recordIteration recorder suitePath "positive" (covDataToSrcLocRanges mcsCoverageData) (toJSON trace)
+      run $ recordIteration recorder propertyPath "positive" (covDataToSrcLocRanges mcsCoverageData) (toJSON trace)
       let allMonitors = foldr (.) id [m | (_, _, _, _, _, m) <- tmResultsWithCov]
       monitor allMonitors
       pure (property True)
