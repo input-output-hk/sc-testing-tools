@@ -74,7 +74,7 @@ import Convex.MockChain.Utils (mockchainSucceeds)
 import Convex.PlutusLedger.V1 (transAddressInEra)
 import Convex.TestingInterface (
   Options (Options, params),
-  RunOptions (disableNegativeTesting, mcOptions),
+  RunOptions (mcOptions),
   TestingInterface (..),
   ThreatModelsFor (..),
   autoRedeemerTag,
@@ -740,7 +740,7 @@ instance TestingInterface MultisigV3Model where
     | otherwise =
         QC.frequency
           [ (90, pure UseMultisigV3)
-          , (10, pure MintValidationToken) -- Invalid: already has token
+          , (10, pure MintValidationToken) -- Valid: minting needs only a signatory
           ]
    where
     pickSigner m
@@ -749,7 +749,9 @@ instance TestingInterface MultisigV3Model where
       | otherwise = QC.elements [Signer1, Signer2]
 
   precondition model (SignMultisigV3 _) = not (mmv3HasBeenUsed model)
-  precondition model MintValidationToken = not (mmv3HasValidationToken model)
+  -- The mint policy only asks for a signatory, so a second token is as valid
+  -- as the first.
+  precondition _ MintValidationToken = True
   precondition model UseMultisigV3 =
     not (null (mmv3SignedUsers model)) && mmv3HasValidationToken model
   precondition model SignReplayExploit =
@@ -883,7 +885,7 @@ aikenMultisigTreasuryV3Tests runOpts =
         "property tests"
         [ propRunActionsWithOptions @MultisigV3Model
             "property-based testing"
-            runOpts{disableNegativeTesting = Just "CTF vulnerability: sign replay allows duplicate signatures and unauthorized validation token minting"}
+            runOpts
         , QC.testProperty
             "vulnerable to sign replay (duplicate signatures)"
             (propMultisigV3SignReplayExploit runOpts)

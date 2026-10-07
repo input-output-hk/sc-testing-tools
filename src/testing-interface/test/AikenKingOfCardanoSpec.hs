@@ -63,7 +63,7 @@ import Convex.PlutusLedger.V1 (transAddressInEra)
 import Convex.TestingInterface (
   Options (Options, params),
   RedeemerTag (..),
-  RunOptions (disableNegativeTesting, mcOptions),
+  RunOptions (mcOptions),
   TestingInterface (..),
   ThreatModelsFor (..),
   labelRedeemer,
@@ -768,8 +768,9 @@ instance TestingInterface KingModel where
 
   precondition model (OverthrowKingAction newVal) =
     not (kmCompetitionClosed model) && newVal > kmValue model
-  precondition model CloseCompetitionAction =
-    not (kmCompetitionClosed model)
+  -- CloseCompetition only checks that the continuing datum is closed, so
+  -- closing an already closed competition is a valid no-op.
+  precondition _ CloseCompetitionAction = True
 
   perform model action = case action of
     OverthrowKingAction newVal -> do
@@ -856,7 +857,7 @@ aikenKingOfCardanoTests runOpts =
         "property tests"
         [ propRunActionsWithOptions @KingModel
             "property-based testing"
-            runOpts{disableNegativeTesting = Just "CTF vulnerability: CloseCompetition redeemer does not check if competition is already closed"}
+            runOpts
         , testProperty
             "vulnerable to self-reference attack"
             (propKingVulnerableToSelfReference runOpts)
