@@ -36,7 +36,7 @@ common lang
   ghc-options:
     -Wall -Wnoncanonical-monad-instances -Wunused-packages
     -Wincomplete-uni-patterns -Wincomplete-record-updates
-    -Wredundant-constraints -Widentities
+    -Wredundant-constraints -Widentities -Werror=missing-fields
 
 library
   import:          lang

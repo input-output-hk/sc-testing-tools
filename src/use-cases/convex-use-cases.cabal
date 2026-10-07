@@ -35,7 +35,7 @@ common lang
   ghc-options:
     -Wall -Wnoncanonical-monad-instances -Wunused-packages
     -Wincomplete-uni-patterns -Wincomplete-record-updates
-    -Wredundant-constraints -Widentities
+    -Wredundant-constraints -Widentities -Werror=missing-fields
 
 library
   import:          lang
@@ -249,6 +249,7 @@ test-suite convex-rewardwithdrawal-test
   main-is:        RewardWithdrawal/Spec/Spec.hs
   other-modules:
     RewardWithdrawal.Scripts
+    RewardWithdrawal.Spec.Common
     RewardWithdrawal.Spec.Prop
     RewardWithdrawal.Spec.Unit
     RewardWithdrawal.Validator
