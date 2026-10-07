@@ -44,6 +44,7 @@ import SampleSpec (sampleScriptTest)
 import ScriptDataSpec (scriptDataTests)
 import Scripts (pingPongCovIdx)
 import Scripts qualified
+import StreamAttributionSpec (streamAttributionTests)
 import ZeroCoverageSpec (zeroCoverageTests)
 
 main :: IO ()
@@ -84,6 +85,7 @@ tests opts runOpts =
     , scriptDataTests
     , runningScriptsTests
     , largeDataTests
+    , streamAttributionTests runOpts
     , aikenTests opts
     , aikenBankTests runOpts
     , aikenHelloWorldTests runOpts

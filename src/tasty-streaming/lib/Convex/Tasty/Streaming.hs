@@ -7,9 +7,9 @@ module Convex.Tasty.Streaming (
 ) where
 
 import Control.Concurrent.Async (forConcurrently_)
-import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Concurrent.STM
 import Control.Monad (unless, when)
+import Convex.Tasty.Streaming.EventSink (EventSink, emitTo, encodeLine, newEventSink)
 import Convex.Tasty.Streaming.QCStats (
   QCStatsRecorder,
   QCStatsStoreOption (..),
@@ -26,19 +26,17 @@ import Convex.Tasty.Streaming.TMSummary (
   TraceRecorder (..),
   lookupThreatModelSummary,
   newTMStore,
+  positivePropertyName,
   storeRecorder,
   threatModelGroupName,
  )
-import Convex.Tasty.Streaming.TreeMap (buildTestMap)
+import Convex.Tasty.Streaming.TreeMap (annotateGroupPaths, buildTestMap, findTestId, testPath)
 import Convex.Tasty.Streaming.Types
-import Data.Aeson (encode)
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as BL
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet qualified as IntSet
-import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Proxy (Proxy (..))
 import Data.Set (Set)
@@ -55,11 +53,13 @@ import Test.Tasty.Ingredients.ConsoleReporter (consoleTestReporter)
 import Test.Tasty.Options (IsOption (..), OptionDescription (..), lookupOption, mkFlagCLParser, safeRead)
 import Test.Tasty.Runners (
   FailureReason (..),
+  NumThreads,
   Outcome (..),
   Progress (..),
   Result (..),
   Status (..),
   TestTree (..),
+  launchTestTree,
   listingTests,
   parseOptions,
  )
@@ -148,16 +148,17 @@ instance IsOption StreamingEnabledRef where
   optionName = Tagged "streaming-enabled-ref"
   optionHelp = Tagged "internal: streaming enabled flag"
 
-{- | Internal option carrying a shared 'MVar ()' so the reporter and the
-'TraceRecorder' use the same output lock, preventing interleaved NDJSON lines.
+{- | Internal option carrying a shared 'EventSink' so the reporter and the
+'TraceRecorder' write through the same one: their NDJSON lines never
+interleave, and a test's first trace cannot get ahead of its @test_started@.
 -}
-newtype OutputLockRef = OutputLockRef (Maybe (MVar ()))
+newtype EventSinkRef = EventSinkRef (Maybe EventSink)
 
-instance IsOption OutputLockRef where
-  defaultValue = OutputLockRef Nothing
+instance IsOption EventSinkRef where
+  defaultValue = EventSinkRef Nothing
   parseValue = const Nothing
-  optionName = Tagged "output-lock-ref"
-  optionHelp = Tagged "internal: shared output lock"
+  optionName = Tagged "event-sink-ref"
+  optionHelp = Tagged "internal: shared NDJSON event sink"
 
 {- | Internal option carrying a shared 'IORef' so the reporter can publish the
 test map and the 'TraceRecorder' can read it back to resolve test IDs.
@@ -174,10 +175,15 @@ instance IsOption TestMapRef where
 
 When activated via @--streaming-json@, replaces console output with
 newline-delimited JSON events streamed to stdout.
+
+It launches the tests itself, as tasty does for a 'TestReporter', so that its
+setup runs before any test does: a test that streams a trace finds the test
+map published and @suite_started@ already out.
 -}
 streamingJsonReporter :: Ingredient
-streamingJsonReporter = TestReporter
-  [ Option (Proxy :: Proxy StreamingJson)
+streamingJsonReporter = TestManager
+  [ Option (Proxy :: Proxy NumThreads)
+  , Option (Proxy :: Proxy StreamingJson)
   , Option (Proxy :: Proxy NoTrace)
   , Option (Proxy :: Proxy QCStatsStoreOption)
   , Option (Proxy :: Proxy QCStatsRecorder)
@@ -188,38 +194,29 @@ streamingJsonReporter = TestReporter
   , Option (Proxy :: Proxy CoverageIndexStorage)
   , Option (Proxy :: Proxy TestMapRef)
   , Option (Proxy :: Proxy StreamingEnabledRef)
-  , Option (Proxy :: Proxy OutputLockRef)
+  , Option (Proxy :: Proxy EventSinkRef)
   , Option (Proxy :: Proxy PackageRootOpt)
   ]
   $ \opts tree -> do
     let StreamingJson enabled = lookupOption opts
     if not enabled
       then Nothing
-      else Just $ \statusMap -> do
+      else Just $ do
         let TMStoreOption mStore = lookupOption opts
             QCStatsStoreOption mQCStatsStore = lookupOption opts
             TestMapRef mTestMapRef = lookupOption opts
             StreamingEnabledRef mEnabledRef = lookupOption opts
             CoverageIndexStorage coverageIndex = lookupOption opts
 
-        -- Signal that streaming is active so the TraceRecorder callback
-        -- (which checks the same IORef) actually emits events.
-        -- When --no-trace is passed, leave the ref as False so that both
-        -- trEnabled and recordIteration remain no-ops.
-        let NoTrace noTrace = lookupOption opts
-        case mEnabledRef of
-          Just ref -> writeIORef ref (not noTrace)
-          Nothing -> pure ()
-
         -- Set line buffering for streaming
         hSetBuffering stdout LineBuffering
 
-        -- Use the shared output lock if provided, otherwise create a new one
+        -- Use the shared event sink if provided, otherwise create a new one
         -- (backward compatibility when the reporter is used without
         -- defaultMainStreaming).
-        let OutputLockRef mSharedLock = lookupOption opts
-        outputLock <- maybe (newMVar ()) pure mSharedLock
-        let emit evt = withMVar outputLock $ \_ -> emitEvent evt
+        let EventSinkRef mSharedSink = lookupOption opts
+        sink <- maybe (newEventSink writeLine) pure mSharedSink
+        let emit = emitTo sink
 
         -- Build the test index -> metadata map
         let TestIdRemap mRemap = lookupOption opts
@@ -241,99 +238,108 @@ streamingJsonReporter = TestReporter
         let testInfos = snd <$> IntMap.toAscList testMap
         emit $ SuiteStarted mPkgRoot testInfos coverageIndex
 
-        -- Track results for final summary
-        resultsVar <- newTVarIO ([] :: [Result])
+        -- Signal that streaming is active so the TraceRecorder callback
+        -- (which checks the same IORef) actually emits events.
+        -- When --no-trace is passed, leave the ref as False so that both
+        -- trEnabled and recordIteration remain no-ops.
+        let NoTrace noTrace = lookupOption opts
+        case mEnabledRef of
+          Just ref -> writeIORef ref (not noTrace)
+          Nothing -> pure ()
 
-        -- Watch each test concurrently
-        forConcurrently_ (IntMap.toAscList statusMap) $ \(idx', statusTVar) -> do
-          let idx = remapId idx'
-          -- Wait until the test starts
-          atomically $ do
-            status <- readTVar statusTVar
-            case status of
-              NotStarted -> retry
-              _ -> pure ()
+        launchTestTree opts tree $ \statusMap -> do
+          -- Track results for final summary
+          resultsVar <- newTVarIO ([] :: [Result])
 
-          -- Emit test_started
-          emit $ TestStarted idx
+          -- Watch each test concurrently
+          forConcurrently_ (IntMap.toAscList statusMap) $ \(idx', statusTVar) -> do
+            let idx = remapId idx'
+            -- Wait until the test starts
+            atomically $ do
+              status <- readTVar statusTVar
+              case status of
+                NotStarted -> retry
+                _ -> pure ()
 
-          -- Wait for completion, emitting progress events along the way
-          let waitLoop lastSeen = do
-                next <- atomically $ do
-                  status <- readTVar statusTVar
-                  case status of
-                    NotStarted -> retry
-                    Executing p ->
-                      let cur = (progressText p, progressPercent p)
-                       in if Just cur == lastSeen
-                            then retry
-                            else pure (Left p)
-                    Done r -> pure (Right r)
-                case next of
-                  Left p -> do
-                    emit $
-                      TestProgress
-                        { epId = idx
-                        , epMessage = Text.pack (progressText p)
-                        , epPercent = progressPercent p
+            -- Emit test_started, unless the test's first trace already did
+            emit $ TestStarted idx
+
+            -- Wait for completion, emitting progress events along the way
+            let waitLoop lastSeen = do
+                  next <- atomically $ do
+                    status <- readTVar statusTVar
+                    case status of
+                      NotStarted -> retry
+                      Executing p ->
+                        let cur = (progressText p, progressPercent p)
+                         in if Just cur == lastSeen
+                              then retry
+                              else pure (Left p)
+                      Done r -> pure (Right r)
+                  case next of
+                    Left p -> do
+                      emit $
+                        TestProgress
+                          { epId = idx
+                          , epMessage = Text.pack (progressText p)
+                          , epPercent = progressPercent p
+                          }
+                      waitLoop (Just (progressText p, progressPercent p))
+                    Right r -> pure r
+            result <- waitLoop Nothing
+
+            -- Record result
+            atomically $ modifyTVar' resultsVar (result :)
+
+            -- Look up the structured threat-model summary the test recorded
+            -- under its full path
+            let testInfo = IntMap.lookup idx testMap
+            mSummary <- case (mStore, testInfo) of
+              (Just store, Just ti) -> lookupThreatModelSummary store (testPath ti)
+              _ -> pure Nothing
+            mMonitoring <- case (mQCStatsStore, testInfo) of
+              (Just store, Just ti) -> lookupQCStatsByTestInfo store ti
+              _ -> pure Nothing
+
+            -- Emit test_done
+            let outcome = case resultOutcome result of
+                  Success -> TestSuccess
+                  Failure reason ->
+                    TestFailure $
+                      FailureInfo
+                        { fiReason = withMaxTxSizeHint $ Text.pack $ showFailureReason reason
+                        , fiMessage = withMaxTxSizeHint $ Text.pack (resultDescription result)
                         }
-                    waitLoop (Just (progressText p, progressPercent p))
-                  Right r -> pure r
-          result <- waitLoop Nothing
+            emit $
+              TestDone
+                { edId = idx
+                , edOutcome = outcome
+                , edDuration = resultTime result
+                , edDescription = Text.pack (resultDescription result)
+                , edThreatModel = mSummary
+                , edMonitoringStats = mMonitoring
+                }
 
-          -- Record result
-          atomically $ modifyTVar' resultsVar (result :)
+          -- Emit suite_done summary
+          allResults <- readTVarIO resultsVar
+          let passed = length [() | r <- allResults, isSuccess r]
+          let failed = length allResults - passed
 
-          -- Look up structured threat-model summary by "<group>/<name>" key
-          let testInfo = IntMap.lookup idx testMap
-              key = case testInfo of
-                Just ti
-                  | (parent : _) <- reverse (tiPath ti) ->
-                      Text.unpack parent <> "/" <> Text.unpack (tiName ti)
-                Just ti -> Text.unpack (tiName ti)
-                Nothing -> ""
-          mSummary <- case mStore of
-            Just store -> lookupThreatModelSummary store key
-            Nothing -> pure Nothing
-          mMonitoring <- case (mQCStatsStore, testInfo) of
-            (Just store, Just ti) -> lookupQCStatsByTestInfo store ti
-            _ -> pure Nothing
-
-          -- Emit test_done
-          let outcome = case resultOutcome result of
-                Success -> TestSuccess
-                Failure reason ->
-                  TestFailure $
-                    FailureInfo
-                      { fiReason = withMaxTxSizeHint $ Text.pack $ showFailureReason reason
-                      , fiMessage = withMaxTxSizeHint $ Text.pack (resultDescription result)
-                      }
-          emit $
-            TestDone
-              { edId = idx
-              , edOutcome = outcome
-              , edDuration = resultTime result
-              , edDescription = Text.pack (resultDescription result)
-              , edThreatModel = mSummary
-              , edMonitoringStats = mMonitoring
-              }
-
-        -- Emit suite_done summary
-        allResults <- readTVarIO resultsVar
-        let passed = length [() | r <- allResults, isSuccess r]
-        let failed = length allResults - passed
-
-        -- Return the "finalize" callback
-        pure $ \totalTime -> do
-          emit $ SuiteDone passed failed totalTime
-          pure (failed == 0)
+          -- Return the "finalize" callback
+          pure $ \totalTime -> do
+            emit $ SuiteDone passed failed totalTime
+            pure (failed == 0)
 
 -- | Emit a single NDJSON event line to stdout.
 emitEvent :: Event -> IO ()
-emitEvent evt = do
+emitEvent = writeLine . encodeLine
+
+-- | Write one encoded NDJSON line to stdout.
+writeLine :: BS.ByteString -> IO ()
+writeLine line = do
   -- This was changed from the original code to print the complete JSON line in one
   -- write to stdout, avoiding interleaving/mixing of event output when running in parallel.
-  BS.hPut stdout (BL.toStrict (encode evt) <> "\n")
+  BS.hPut stdout line
   hFlush stdout
 
 -- | Check if a Result is a success
@@ -348,29 +354,6 @@ showFailureReason TestFailed = "TestFailed"
 showFailureReason (TestThrewException e) = "TestThrewException: " ++ show e
 showFailureReason (TestTimedOut n) = "TestTimedOut: " ++ show n ++ "μs"
 showFailureReason TestDepFailed = "TestDepFailed"
-
-{- | Find the Tasty test ID for a test identified by group name and category.
-Searches the test map for a 'TestInfo' whose path contains the group name
-and whose name matches the category (e.g. \"Positive tests\", \"Negative tests\").
-Returns @Nothing@ when the test is not found.
--}
-findTestId :: IntMap TestInfo -> String -> String -> Maybe Int
-findTestId testMap group category =
-  let categoryName = case category of
-        "positive" -> "Positive tests"
-        "negative" -> "Negative tests"
-        other -> other
-      matches =
-        IntMap.toList $
-          IntMap.filter
-            ( \ti ->
-                Text.pack group `elem` tiPath ti
-                  && tiName ti == Text.pack categoryName
-            )
-            testMap
-   in case matches of
-        ((testId, _) : _) -> Just testId
-        [] -> Nothing
 
 {- | Ingredient that lists the test tree as JSON and exits without running tests.
 
@@ -437,11 +420,6 @@ expandSelectedTestIds :: IntMap TestInfo -> IntSet.IntSet -> IntSet.IntSet
 expandSelectedTestIds testMap selectedIds =
   IntSet.union selectedIds prerequisiteIds
  where
-  pathToId =
-    Map.fromList
-      [ (tiPath ti <> [tiName ti], tiId ti)
-      | ti <- IntMap.elems testMap
-      ]
   prerequisiteIds =
     IntSet.fromList
       [ positiveId
@@ -460,16 +438,17 @@ expandSelectedTestIds testMap selectedIds =
       [] -> Nothing
       groupPath
         | last groupPath `Set.member` perModelGroups ->
-            Map.lookup (init groupPath <> [Text.pack "Positive tests"]) pathToId
+            findTestId testMap (map Text.unpack (init groupPath) <> [positivePropertyName])
         | otherwise -> Nothing
 
 {- | Drop-in replacement for 'defaultMain' that supports @--streaming-json@.
 
 If you bypass this entry point and wire 'streamingIngredients' manually,
 threat-model summaries will not appear in the JSON output unless you
-also call
-@'localOption' ('TMStoreOption' (Just store)) . 'localOption' ('storeRecorder' store)@
-on your tree (with a freshly-allocated store from 'newTMStore').
+also apply
+@'annotateGroupPaths' . 'localOption' ('TMStoreOption' (Just store)) . 'localOption' ('storeRecorder' store)@
+to your tree (with a freshly-allocated store from 'newTMStore'): test cases
+record their summaries under the group paths 'annotateGroupPaths' provides.
 
 == Package root capture
 
@@ -503,7 +482,8 @@ defaultMainStreaming = defaultMainStreamingWithIngredients []
 additional ingredients (e.g. package-specific CLI option managers).
 
 The same internal streaming wiring is always installed (threat-model
-summary store, trace recorder, shared output lock, and package root
+summary store, trace recorder, group paths for the recorder to name tests
+by, the event sink the reporter and the recorder share, and package root
 capture from call-site), then Tasty runs with:
 
 @extraIngredients <> streamingIngredients@
@@ -522,12 +502,14 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
   testMapRef <- newIORef IntMap.empty
   testIdRemapRef <- newIORef IntMap.empty
   enabledRef <- newIORef False -- set to True by the reporter when --streaming-json is active
-  -- Create a single shared output lock used by both the streaming reporter
-  -- and the TraceRecorder so their NDJSON lines never interleave.
-  outputLock <- newMVar ()
+  -- Create a single shared event sink used by both the streaming reporter
+  -- and the TraceRecorder so their NDJSON lines never interleave, and a
+  -- test's test_started precedes its traces (see 'EventSink').
+  sink <- newEventSink writeLine
   -- Create a trace recorder that emits TestTrace events as NDJSON to stdout.
   -- The recorder reads the shared testMapRef (populated by the reporter at
-  -- startup) to resolve the numeric Tasty test ID for each trace event.
+  -- startup) to resolve the numeric Tasty test ID for each trace event, from
+  -- the group path the test body read off the tree ('annotateGroupPaths').
   --
   -- Both 'trEnabled' and 'recordIteration' read the shared 'enabledRef',
   -- so when --streaming-json is NOT passed (or --no-trace is passed) the
@@ -536,22 +518,21 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
   let traceRec =
         TraceRecorder
           { trEnabled = readIORef enabledRef
-          , recordIteration = \group category covered iterationJson -> do
+          , recordIteration = \path category covered iterationJson -> do
               enabled <- readIORef enabledRef
               when enabled $ do
                 testMap <- readIORef testMapRef
-                let testId = findTestId testMap group category
-                withMVar outputLock $ \_ ->
-                  emitEvent $
-                    TestTrace
-                      { ettTestId = fromMaybe (-1) testId
-                      , ettCategory = Text.pack category
-                      , ettTrace = iterationJson
-                      , ettCovered = covered
-                      }
-          , findTestIdIO = \group category -> do
+                let testId = findTestId testMap path
+                emitTo sink $
+                  TestTrace
+                    { ettTestId = fromMaybe (-1) testId
+                    , ettCategory = Text.pack category
+                    , ettTrace = iterationJson
+                    , ettCovered = covered
+                    }
+          , findTestIdIO = \path -> do
               testMap <- readIORef testMapRef
-              pure $ findTestId testMap group category
+              pure $ findTestId testMap path
           }
   let baseTree =
         localOption pkgRootOpt $
@@ -561,8 +542,8 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
                 localOption (storeRecorder store) $
                   localOption (TestMapRef (Just testMapRef)) $
                     localOption (StreamingEnabledRef (Just enabledRef)) $
-                      localOption (OutputLockRef (Just outputLock)) $
-                        localOption traceRec tree
+                      localOption (EventSinkRef (Just sink)) $
+                        localOption traceRec (annotateGroupPaths tree)
 
   opts <- parseOptions (extraIngredients <> streamingIngredients) baseTree
   let TestIdFilter requested = lookupOption opts
@@ -582,11 +563,7 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
         let selectedIdSet = expandSelectedTestIds fullMap requestedIdSet
             selectedIds = IntSet.toAscList selectedIdSet
             selectedInfos = map (fullMap IntMap.!) selectedIds
-            selectedPaths =
-              Set.fromList
-                [ map Text.unpack (tiPath ti <> [tiName ti])
-                | ti <- selectedInfos
-                ]
+            selectedPaths = Set.fromList (map testPath selectedInfos)
             remap = IntMap.fromAscList (zip [0 ..] selectedIds)
 
         writeIORef testIdRemapRef remap

@@ -41,6 +41,7 @@ library
     Convex.Tasty.HUnit
     Convex.Tasty.QuickCheck
     Convex.Tasty.Streaming
+    Convex.Tasty.Streaming.EventSink
     Convex.Tasty.Streaming.QCStats
     Convex.Tasty.Streaming.SrcLoc
     Convex.Tasty.Streaming.TMSummary
@@ -69,7 +70,11 @@ test-suite convex-tasty-streaming-test
   type:           exitcode-stdio-1.0
   hs-source-dirs: test
   main-is:        Spec.hs
-  other-modules:  Convex.Tasty.SrcLocSpec
+  other-modules:
+    Convex.Tasty.EventSinkSpec
+    Convex.Tasty.SrcLocSpec
+    Convex.Tasty.TreeMapSpec
+
   build-depends:
     , aeson
     , base                    >=4.14.0

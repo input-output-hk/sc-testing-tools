@@ -157,6 +157,7 @@ test-suite convex-testing-interface-test
     Scripts.PingPong
     Scripts.PingPong.Vulnerable
     Scripts.Sample
+    StreamAttributionSpec
     TestTx
     ZeroCoverageSpec
 
@@ -187,6 +188,7 @@ test-suite convex-testing-interface-test
     , pretty-show
     , prettyprinter
     , QuickCheck
+    , stm
     , tasty
     , tasty-expected-failure
     , tasty-hunit
