@@ -158,6 +158,7 @@ test-suite convex-testing-interface-test
     Scripts.PingPong.Vulnerable
     Scripts.Sample
     TestTx
+    TraceAttributionSpec
     ZeroCoverageSpec
 
   autogen-modules: Paths_convex_testing_interface
@@ -187,6 +188,7 @@ test-suite convex-testing-interface-test
     , pretty-show
     , prettyprinter
     , QuickCheck
+    , stm
     , tasty
     , tasty-expected-failure
     , tasty-hunit

@@ -115,6 +115,7 @@ import Convex.MonadLog (MonadLog)
 import Convex.NodeParams (NodeParams (..))
 import Convex.Tasty.Streaming.SrcLoc (SrcLocRange (..), withSrcLoc)
 import Convex.Tasty.Streaming.TMSummary (CoverageIndexStorage (..), Fault (..), TMRecorder, ThreatModelCategory (..), ThreatModelSummary (..), TraceRecorder (..), faultLabel, threatModelGroupName, tmRecord)
+import Convex.Tasty.Streaming.TreeMap (GroupPathOpt (..))
 import Convex.Tasty.Streaming.Types (withMaxTxSizeHint)
 import Convex.TestingInterface.Options (defaultMainTestingInterface)
 import Convex.TestingInterface.Trace (
@@ -587,7 +588,7 @@ propRunActionsWithOptions groupName opts =
                   withResource (newIORef (0 :: Int)) (\_ -> pure ()) $ \getNegRef ->
                     testGroup
                       groupName
-                      [ testProperty "Positive tests" (positiveTest @state opts groupName Nothing [] recorder getPosRef)
+                      [ positiveTestTree recorder Nothing [] getPosRef
                       , negativeTestTree recorder getNegRef
                       ]
               else
@@ -600,17 +601,33 @@ propRunActionsWithOptions groupName opts =
                           -- claimed models stop early on a detection, expected
                           -- vulnerabilities and accepted findings always run,
                           -- quietly. They differ only in reporting, below.
-                          testProperty "Positive tests" (positiveTest @state opts groupName (Just getTmResultsRef) modelsToRun recorder getPosRef)
+                          positiveTestTree recorder (Just getTmResultsRef) modelsToRun getPosRef
                         , negativeTestTree recorder getNegRef
                         ]
                           <> perCategoryGroups categorized getTmResultsRef
  where
+  {- Both properties read the path of the group they sit in, to name their own
+  test in the traces they stream: 'groupName' alone does not identify it,
+  as other suites can use the same one. -}
+  positiveTestTree
+    :: (HasCallStack)
+    => TraceRecorder
+    -> Maybe (IO (IORef ThreatModelResults))
+    -> [(ThreatModelCategory, ThreatModel ())]
+    -> IO (IORef Int)
+    -> TestTree
+  positiveTestTree recorder mGetTmResultsRef tms getPosRef =
+    withFrozenCallStack $
+      askOption $ \(GroupPathOpt suitePath) ->
+        testProperty "Positive tests" (positiveTest @state opts suitePath mGetTmResultsRef tms recorder getPosRef)
+
   negativeTestTree :: (HasCallStack) => TraceRecorder -> IO (IORef Int) -> TestTree
   negativeTestTree recorder getNegRef =
     withFrozenCallStack $
-      case disableNegativeTesting opts of
-        Nothing -> testProperty "Negative tests" (negativeTest @state opts groupName recorder getNegRef)
-        Just reason -> ignoreTestBecause reason $ testProperty "Negative tests" (negativeTest @state opts groupName recorder getNegRef)
+      askOption $ \(GroupPathOpt suitePath) ->
+        case disableNegativeTesting opts of
+          Nothing -> testProperty "Negative tests" (negativeTest @state opts suitePath recorder getNegRef)
+          Just reason -> ignoreTestBecause reason $ testProperty "Negative tests" (negativeTest @state opts suitePath recorder getNegRef)
 
   -- One per-model group per non-empty category, each reporting its own
   -- models' outcomes once the positive tests have recorded them.
@@ -650,14 +667,14 @@ negativeTest
   :: forall state
    . (TestingInterface state)
   => RunOptions
-  -> String
-  -- ^ Group name for test ID resolution
+  -> [String]
+  -- ^ Path of the group holding the test, naming it in the traces
   -> TraceRecorder
   -- ^ Callback for recording iteration traces
   -> IO (IORef Int)
   -- ^ Iteration counter accessor
   -> Property
-negativeTest opts groupName recorder getIterRef = monadicIO $ do
+negativeTest opts suitePath recorder getIterRef = monadicIO $ do
   -- Bump and read iteration index
   iterIdx <- run $ do
     iterRef <- getIterRef
@@ -666,7 +683,7 @@ negativeTest opts groupName recorder getIterRef = monadicIO $ do
     pure idx
   enabled <- run $ trEnabled recorder
   if enabled
-    then negativeTestTraced @state opts groupName recorder iterIdx
+    then negativeTestTraced @state opts suitePath recorder iterIdx
     else negativeTestFast @state opts
 
 -- | Traced path for negative tests: runs 'runActionsTraced', builds traces.
@@ -674,11 +691,11 @@ negativeTestTraced
   :: forall state
    . (TestingInterface state)
   => RunOptions
-  -> String
+  -> [String]
   -> TraceRecorder
   -> Int
   -> PropertyM IO Property
-negativeTestTraced opts groupName recorder iterIdx = do
+negativeTestTraced opts suitePath recorder iterIdx = do
   let RunOptions{mcOptions = Options{coverageRef, params}} = opts
   -- Phase 1: Run the valid prefix, capturing the final mockchain state
   (prefixResult, prefixState) <- runTestingMonadT params $ do
@@ -706,7 +723,7 @@ negativeTestTraced opts groupName recorder iterIdx = do
               , itTransitions = []
               , itThreatModels = []
               }
-      run $ recordIteration recorder groupName "negative" [] (toJSON trace)
+      run $ recordIteration recorder suitePath "negative" [] (toJSON trace)
       pure (property False)
     Right ((badAction, finalState), transitions) -> do
       let monadAction = runExceptT $ unTestingMonadT $ perform finalState badAction
@@ -734,7 +751,7 @@ negativeTestTraced opts groupName recorder iterIdx = do
                   , itTransitions = transitions <> [badTransition (TransitionFailure (T.pack (show ex)))]
                   , itThreatModels = []
                   }
-          run $ recordIteration recorder groupName "negative" [] (toJSON trace)
+          run $ recordIteration recorder suitePath "negative" [] (toJSON trace)
           discard
         Left ex -> do
           let trace =
@@ -744,7 +761,7 @@ negativeTestTraced opts groupName recorder iterIdx = do
                   , itTransitions = transitions <> [badTransition (TransitionFailure (T.pack (show ex)))]
                   , itThreatModels = []
                   }
-          run $ recordIteration recorder groupName "negative" [] (toJSON trace)
+          run $ recordIteration recorder suitePath "negative" [] (toJSON trace)
           pure (property True)
         Right result ->
           case result of
@@ -759,7 +776,7 @@ negativeTestTraced opts groupName recorder iterIdx = do
                       , itTransitions = transitions <> [badTransition (TransitionFailure (formatBalanceTxError err))]
                       , itThreatModels = []
                       }
-              run $ recordIteration recorder groupName "negative" (covDataToSrcLocRanges covData) (toJSON trace)
+              run $ recordIteration recorder suitePath "negative" (covDataToSrcLocRanges covData) (toJSON trace)
               pure (property True)
             (Right _, MockChainState{mcsCoverageData = covData}) -> do
               -- Bad: the invalid action succeeded — contract is too permissive
@@ -772,7 +789,7 @@ negativeTestTraced opts groupName recorder iterIdx = do
                       , itTransitions = transitions <> [badTransition (TransitionSuccess T.empty)]
                       , itThreatModels = []
                       }
-              run $ recordIteration recorder groupName "negative" (covDataToSrcLocRanges covData) (toJSON trace)
+              run $ recordIteration recorder suitePath "negative" (covDataToSrcLocRanges covData) (toJSON trace)
               pure (property False)
 
 -- | Fast path for negative tests: runs 'runActions' (no tracing overhead).
@@ -826,8 +843,8 @@ positiveTest
   :: forall state
    . (TestingInterface state)
   => RunOptions
-  -> String
-  -- ^ Group name for test ID resolution
+  -> [String]
+  -- ^ Path of the group holding the test, naming it in the traces
   -> Maybe (IO (IORef ThreatModelResults))
   -- ^ IORef for collecting results (Nothing = no threat models, don't collect)
   -> [(ThreatModelCategory, ThreatModel ())]
@@ -840,7 +857,7 @@ positiveTest
   -> IO (IORef Int)
   -- ^ Iteration counter accessor (bumped each QuickCheck iteration)
   -> Property
-positiveTest opts groupName mGetTmResultsRef tms recorder getIterRef = monadicIO $ do
+positiveTest opts suitePath mGetTmResultsRef tms recorder getIterRef = monadicIO $ do
   -- Bump and read iteration index
   iterIdx <- run $ do
     iterRef <- getIterRef
@@ -849,7 +866,7 @@ positiveTest opts groupName mGetTmResultsRef tms recorder getIterRef = monadicIO
     pure idx
   enabled <- run $ trEnabled recorder
   if enabled
-    then positiveTestTraced @state opts groupName mGetTmResultsRef tms recorder iterIdx
+    then positiveTestTraced @state opts suitePath mGetTmResultsRef tms recorder iterIdx
     else positiveTestFast @state opts mGetTmResultsRef tms
 
 -- | Traced path: runs 'runActionsTraced', builds 'IterationTrace', records it.
@@ -857,13 +874,13 @@ positiveTestTraced
   :: forall state
    . (TestingInterface state)
   => RunOptions
-  -> String
+  -> [String]
   -> Maybe (IO (IORef ThreatModelResults))
   -> [(ThreatModelCategory, ThreatModel ())]
   -> TraceRecorder
   -> Int
   -> PropertyM IO Property
-positiveTestTraced opts groupName mGetTmResultsRef tms recorder iterIdx = do
+positiveTestTraced opts suitePath mGetTmResultsRef tms recorder iterIdx = do
   let RunOptions{mcOptions = Options{coverageRef, params}} = opts
   result <- runTestingMonadT params $ do
     initialState <- runInitialization @state opts
@@ -908,7 +925,7 @@ positiveTestTraced opts groupName mGetTmResultsRef tms recorder iterIdx = do
               , itTransitions = []
               , itThreatModels = []
               }
-      run $ recordIteration recorder groupName "positive" (covDataToSrcLocRanges covData) (toJSON trace)
+      run $ recordIteration recorder suitePath "positive" (covDataToSrcLocRanges covData) (toJSON trace)
       pure (property False)
     (Right (finalState, transitions, tmResultsWithCov), MockChainState{mcsCoverageData}) -> do
       let covData = mcsCoverageData <> mconcat [cov | (_, _, _, _, cov, _) <- tmResultsWithCov]
@@ -924,7 +941,10 @@ positiveTestTraced opts groupName mGetTmResultsRef tms recorder iterIdx = do
               existing
               tmResults
         Nothing -> pure ()
-      tmTraces <- liftIO $ toThreatModelTraces (findTestIdIO recorder groupName) (redeemerTagger @state) (addressLabeler @state) [(tmiName n, cat, o, e, c) | (n, cat, o, e, c, _) <- tmResultsWithCov]
+      -- A model's own test case sits in its category's group of this suite
+      -- (see 'perCategoryGroups' in 'propRunActionsWithOptions').
+      let findTmTestId category = findTestIdIO recorder (suitePath <> [threatModelGroupName category])
+      tmTraces <- liftIO $ toThreatModelTraces findTmTestId (redeemerTagger @state) (addressLabeler @state) [(tmiName n, cat, o, e, c) | (n, cat, o, e, c, _) <- tmResultsWithCov]
       let trace =
             IterationTrace
               { itIndex = iterIdx
@@ -932,7 +952,7 @@ positiveTestTraced opts groupName mGetTmResultsRef tms recorder iterIdx = do
               , itTransitions = transitions
               , itThreatModels = tmTraces
               }
-      run $ recordIteration recorder groupName "positive" (covDataToSrcLocRanges mcsCoverageData) (toJSON trace)
+      run $ recordIteration recorder suitePath "positive" (covDataToSrcLocRanges mcsCoverageData) (toJSON trace)
       let allMonitors = foldr (.) id [m | (_, _, _, _, _, m) <- tmResultsWithCov]
       monitor allMonitors
       pure (property True)
@@ -1637,7 +1657,8 @@ Each 'ThreatModelCheckEntry' (one per 'Validate' call) produces a
 transactions, and outcome.
 -}
 toThreatModelTraces
-  :: (String -> IO (Maybe Int))
+  :: (ThreatModelCategory -> String -> IO (Maybe Int))
+  -- ^ The id of a model's test case, from its category and name
   -> RedeemerTagger
   -> AddressLabeler
   -> [(String, ThreatModelCategory, ThreatModelOutcome, [ThreatModelCheckEntry], CoverageData)]
@@ -1645,7 +1666,7 @@ toThreatModelTraces
 toThreatModelTraces findTestId tagger labeler results = concat <$> traverse go results
  where
   go (name, category, outcome, [], covData) = do
-    mtestId <- findTestId name
+    mtestId <- findTestId category name
     -- No Validate calls: emit a single lightweight trace with just the outcome
     pure
       [ ThreatModelTrace
@@ -1663,7 +1684,7 @@ toThreatModelTraces findTestId tagger labeler results = concat <$> traverse go r
       | Just testId <- [mtestId] -- when no test id is found, the test is filtered out and we also don't want to output a trace.
       ]
   go (name, category, outcome, entries, covData) = do
-    mtestId <- findTestId name
+    mtestId <- findTestId category name
     -- One ThreatModelTrace per Validate call
     pure
       [ ThreatModelTrace
