@@ -7,9 +7,9 @@ module Convex.Tasty.Streaming (
 ) where
 
 import Control.Concurrent.Async (forConcurrently_)
-import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Concurrent.STM
 import Control.Monad (unless, when)
+import Convex.Tasty.Streaming.EventSink (EventSink, emitTo, newEventSink)
 import Convex.Tasty.Streaming.QCStats (
   QCStatsRecorder,
   QCStatsStoreOption (..),
@@ -148,16 +148,17 @@ instance IsOption StreamingEnabledRef where
   optionName = Tagged "streaming-enabled-ref"
   optionHelp = Tagged "internal: streaming enabled flag"
 
-{- | Internal option carrying a shared 'MVar ()' so the reporter and the
-'TraceRecorder' use the same output lock, preventing interleaved NDJSON lines.
+{- | Internal option carrying a shared 'EventSink' so the reporter and the
+'TraceRecorder' write through the same one: their NDJSON lines never
+interleave, and a test's first trace cannot get ahead of its @test_started@.
 -}
-newtype OutputLockRef = OutputLockRef (Maybe (MVar ()))
+newtype EventSinkRef = EventSinkRef (Maybe EventSink)
 
-instance IsOption OutputLockRef where
-  defaultValue = OutputLockRef Nothing
+instance IsOption EventSinkRef where
+  defaultValue = EventSinkRef Nothing
   parseValue = const Nothing
-  optionName = Tagged "output-lock-ref"
-  optionHelp = Tagged "internal: shared output lock"
+  optionName = Tagged "event-sink-ref"
+  optionHelp = Tagged "internal: shared NDJSON event sink"
 
 {- | Internal option carrying a shared 'IORef' so the reporter can publish the
 test map and the 'TraceRecorder' can read it back to resolve test IDs.
@@ -188,7 +189,7 @@ streamingJsonReporter = TestReporter
   , Option (Proxy :: Proxy CoverageIndexStorage)
   , Option (Proxy :: Proxy TestMapRef)
   , Option (Proxy :: Proxy StreamingEnabledRef)
-  , Option (Proxy :: Proxy OutputLockRef)
+  , Option (Proxy :: Proxy EventSinkRef)
   , Option (Proxy :: Proxy PackageRootOpt)
   ]
   $ \opts tree -> do
@@ -214,12 +215,12 @@ streamingJsonReporter = TestReporter
         -- Set line buffering for streaming
         hSetBuffering stdout LineBuffering
 
-        -- Use the shared output lock if provided, otherwise create a new one
+        -- Use the shared event sink if provided, otherwise create a new one
         -- (backward compatibility when the reporter is used without
         -- defaultMainStreaming).
-        let OutputLockRef mSharedLock = lookupOption opts
-        outputLock <- maybe (newMVar ()) pure mSharedLock
-        let emit evt = withMVar outputLock $ \_ -> emitEvent evt
+        let EventSinkRef mSharedSink = lookupOption opts
+        sink <- maybe (newEventSink emitEvent) pure mSharedSink
+        let emit = emitTo sink
 
         -- Build the test index -> metadata map
         let TestIdRemap mRemap = lookupOption opts
@@ -254,7 +255,7 @@ streamingJsonReporter = TestReporter
               NotStarted -> retry
               _ -> pure ()
 
-          -- Emit test_started
+          -- Emit test_started, unless the test's first trace already did
           emit $ TestStarted idx
 
           -- Wait for completion, emitting progress events along the way
@@ -507,9 +508,10 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
   testMapRef <- newIORef IntMap.empty
   testIdRemapRef <- newIORef IntMap.empty
   enabledRef <- newIORef False -- set to True by the reporter when --streaming-json is active
-  -- Create a single shared output lock used by both the streaming reporter
-  -- and the TraceRecorder so their NDJSON lines never interleave.
-  outputLock <- newMVar ()
+  -- Create a single shared event sink used by both the streaming reporter
+  -- and the TraceRecorder so their NDJSON lines never interleave, and a
+  -- test's test_started precedes its traces (see 'EventSink').
+  sink <- newEventSink emitEvent
   -- Create a trace recorder that emits TestTrace events as NDJSON to stdout.
   -- The recorder reads the shared testMapRef (populated by the reporter at
   -- startup) to resolve the numeric Tasty test ID for each trace event, from
@@ -527,14 +529,13 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
               when enabled $ do
                 testMap <- readIORef testMapRef
                 let testId = findTestId testMap groupPath (categoryTestName category)
-                withMVar outputLock $ \_ ->
-                  emitEvent $
-                    TestTrace
-                      { ettTestId = fromMaybe (-1) testId
-                      , ettCategory = Text.pack category
-                      , ettTrace = iterationJson
-                      , ettCovered = covered
-                      }
+                emitTo sink $
+                  TestTrace
+                    { ettTestId = fromMaybe (-1) testId
+                    , ettCategory = Text.pack category
+                    , ettTrace = iterationJson
+                    , ettCovered = covered
+                    }
           , findTestIdIO = \groupPath name -> do
               testMap <- readIORef testMapRef
               pure $ findTestId testMap groupPath name
@@ -547,7 +548,7 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
                 localOption (storeRecorder store) $
                   localOption (TestMapRef (Just testMapRef)) $
                     localOption (StreamingEnabledRef (Just enabledRef)) $
-                      localOption (OutputLockRef (Just outputLock)) $
+                      localOption (EventSinkRef (Just sink)) $
                         localOption traceRec (annotateGroupPaths tree)
 
   opts <- parseOptions (extraIngredients <> streamingIngredients) baseTree

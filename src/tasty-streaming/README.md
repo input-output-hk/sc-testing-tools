@@ -140,6 +140,8 @@ Each line of output is a self-contained JSON object with an `event` field. Event
 | `test_done`      | A test completes               | `id`, `success`, `duration`, `description`; optional: `failure` (only when failed), `threat_model` (only per-model tests), `monitoring_stats` |
 | `suite_done`     | After all tests finish         | `passed`, `failed`, `duration`                                  |
 
+For each test, `test_started` is its first event and `test_done` its last, with its `test_progress` and `test_trace` events in between. Events of different tests can interleave: tests can overlap in the stream (with `-j`, but also briefly when they run one at a time).
+
 ### `suite_started`
 
 ```json
