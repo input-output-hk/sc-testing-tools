@@ -206,8 +206,11 @@ lookupThreatModelSummary (TMStore ref) key =
   Map.lookup key <$> readIORef ref
 
 {- | Callback for recording iteration traces as pre-serialized JSON.
-Arguments: group name, category ("positive"\/"negative"), pre-serialized trace JSON.
 Default is a no-op (zero overhead when streaming is not active).
+
+A test body names the test it records for by the path of the group holding
+that test, which it reads from 'Convex.Tasty.Streaming.TreeMap.GroupPathOpt',
+and the test's name in that group.
 
 When 'trEnabled' returns 'True', test bodies use the expensive traced code
 path (building 'IterationTrace' values with UTxO snapshots, transaction
@@ -221,9 +224,13 @@ streaming reporter has parsed @--no-trace@ and written the shared 'IORef'.
 data TraceRecorder = TraceRecorder
   { trEnabled :: IO Bool
   -- ^ Whether test bodies should collect detailed traces.
-  , recordIteration :: String -> String -> [SrcLocRange] -> Value -> IO ()
-  -- ^ Emit a single iteration trace event.
-  , findTestIdIO :: String -> String -> IO (Maybe Int)
+  , recordIteration :: [String] -> String -> [SrcLocRange] -> Value -> IO ()
+  {- ^ Emit a single iteration trace event. Arguments: the path of the group
+  holding the property, its category (@"positive"@ or @"negative"@, which
+  names the property), the covered source ranges, the pre-serialized trace JSON.
+  -}
+  , findTestIdIO :: [String] -> String -> IO (Maybe Int)
+  -- ^ The id of the test with the given name in the group at the given path, if it runs.
   }
 
 instance IsOption TraceRecorder where

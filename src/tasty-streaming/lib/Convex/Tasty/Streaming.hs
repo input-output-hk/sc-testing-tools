@@ -29,7 +29,7 @@ import Convex.Tasty.Streaming.TMSummary (
   storeRecorder,
   threatModelGroupName,
  )
-import Convex.Tasty.Streaming.TreeMap (buildTestMap)
+import Convex.Tasty.Streaming.TreeMap (annotateGroupPaths, buildTestMap, findTestId)
 import Convex.Tasty.Streaming.Types
 import Data.Aeson (encode)
 import Data.ByteString qualified as BS
@@ -349,28 +349,12 @@ showFailureReason (TestThrewException e) = "TestThrewException: " ++ show e
 showFailureReason (TestTimedOut n) = "TestTimedOut: " ++ show n ++ "μs"
 showFailureReason TestDepFailed = "TestDepFailed"
 
-{- | Find the Tasty test ID for a test identified by group name and category.
-Searches the test map for a 'TestInfo' whose path contains the group name
-and whose name matches the category (e.g. \"Positive tests\", \"Negative tests\").
-Returns @Nothing@ when the test is not found.
--}
-findTestId :: IntMap TestInfo -> String -> String -> Maybe Int
-findTestId testMap group category =
-  let categoryName = case category of
-        "positive" -> "Positive tests"
-        "negative" -> "Negative tests"
-        other -> other
-      matches =
-        IntMap.toList $
-          IntMap.filter
-            ( \ti ->
-                Text.pack group `elem` tiPath ti
-                  && tiName ti == Text.pack categoryName
-            )
-            testMap
-   in case matches of
-        ((testId, _) : _) -> Just testId
-        [] -> Nothing
+-- | The name of the property whose iterations a trace category records.
+categoryTestName :: String -> String
+categoryTestName category = case category of
+  "positive" -> "Positive tests"
+  "negative" -> "Negative tests"
+  other -> other
 
 {- | Ingredient that lists the test tree as JSON and exits without running tests.
 
@@ -503,8 +487,9 @@ defaultMainStreaming = defaultMainStreamingWithIngredients []
 additional ingredients (e.g. package-specific CLI option managers).
 
 The same internal streaming wiring is always installed (threat-model
-summary store, trace recorder, shared output lock, and package root
-capture from call-site), then Tasty runs with:
+summary store, trace recorder, group paths for the recorder to name tests
+by, shared output lock, and package root capture from call-site), then
+Tasty runs with:
 
 @extraIngredients <> streamingIngredients@
 -}
@@ -527,7 +512,8 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
   outputLock <- newMVar ()
   -- Create a trace recorder that emits TestTrace events as NDJSON to stdout.
   -- The recorder reads the shared testMapRef (populated by the reporter at
-  -- startup) to resolve the numeric Tasty test ID for each trace event.
+  -- startup) to resolve the numeric Tasty test ID for each trace event, from
+  -- the group path the test body read off the tree ('annotateGroupPaths').
   --
   -- Both 'trEnabled' and 'recordIteration' read the shared 'enabledRef',
   -- so when --streaming-json is NOT passed (or --no-trace is passed) the
@@ -536,11 +522,11 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
   let traceRec =
         TraceRecorder
           { trEnabled = readIORef enabledRef
-          , recordIteration = \group category covered iterationJson -> do
+          , recordIteration = \groupPath category covered iterationJson -> do
               enabled <- readIORef enabledRef
               when enabled $ do
                 testMap <- readIORef testMapRef
-                let testId = findTestId testMap group category
+                let testId = findTestId testMap groupPath (categoryTestName category)
                 withMVar outputLock $ \_ ->
                   emitEvent $
                     TestTrace
@@ -549,9 +535,9 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
                       , ettTrace = iterationJson
                       , ettCovered = covered
                       }
-          , findTestIdIO = \group category -> do
+          , findTestIdIO = \groupPath name -> do
               testMap <- readIORef testMapRef
-              pure $ findTestId testMap group category
+              pure $ findTestId testMap groupPath name
           }
   let baseTree =
         localOption pkgRootOpt $
@@ -562,7 +548,7 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
                   localOption (TestMapRef (Just testMapRef)) $
                     localOption (StreamingEnabledRef (Just enabledRef)) $
                       localOption (OutputLockRef (Just outputLock)) $
-                        localOption traceRec tree
+                        localOption traceRec (annotateGroupPaths tree)
 
   opts <- parseOptions (extraIngredients <> streamingIngredients) baseTree
   let TestIdFilter requested = lookupOption opts

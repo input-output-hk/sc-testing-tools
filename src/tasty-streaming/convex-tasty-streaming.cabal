@@ -69,7 +69,10 @@ test-suite convex-tasty-streaming-test
   type:           exitcode-stdio-1.0
   hs-source-dirs: test
   main-is:        Spec.hs
-  other-modules:  Convex.Tasty.SrcLocSpec
+  other-modules:
+    Convex.Tasty.SrcLocSpec
+    Convex.Tasty.TreeMapSpec
+
   build-depends:
     , aeson
     , base                    >=4.14.0
