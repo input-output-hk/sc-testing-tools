@@ -33,11 +33,10 @@ import Convex.Tasty.Streaming.TMSummary (
 import Convex.Tasty.Streaming.TreeMap (annotateGroupPaths, buildTestMap, findTestId, testPath)
 import Convex.Tasty.Streaming.Types
 import Data.ByteString qualified as BS
-import Data.IORef (IORef, atomicWriteIORef, newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet qualified as IntSet
-import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Proxy (Proxy (..))
 import Data.Set (Set)
@@ -54,11 +53,13 @@ import Test.Tasty.Ingredients.ConsoleReporter (consoleTestReporter)
 import Test.Tasty.Options (IsOption (..), OptionDescription (..), lookupOption, mkFlagCLParser, safeRead)
 import Test.Tasty.Runners (
   FailureReason (..),
+  NumThreads,
   Outcome (..),
   Progress (..),
   Result (..),
   Status (..),
   TestTree (..),
+  launchTestTree,
   listingTests,
   parseOptions,
  )
@@ -174,10 +175,15 @@ instance IsOption TestMapRef where
 
 When activated via @--streaming-json@, replaces console output with
 newline-delimited JSON events streamed to stdout.
+
+It launches the tests itself, as tasty does for a 'TestReporter', so that its
+setup runs before any test does: a test that streams a trace finds the test
+map published and @suite_started@ already out.
 -}
 streamingJsonReporter :: Ingredient
-streamingJsonReporter = TestReporter
-  [ Option (Proxy :: Proxy StreamingJson)
+streamingJsonReporter = TestManager
+  [ Option (Proxy :: Proxy NumThreads)
+  , Option (Proxy :: Proxy StreamingJson)
   , Option (Proxy :: Proxy NoTrace)
   , Option (Proxy :: Proxy QCStatsStoreOption)
   , Option (Proxy :: Proxy QCStatsRecorder)
@@ -195,7 +201,7 @@ streamingJsonReporter = TestReporter
     let StreamingJson enabled = lookupOption opts
     if not enabled
       then Nothing
-      else Just $ \statusMap -> do
+      else Just $ do
         let TMStoreOption mStore = lookupOption opts
             QCStatsStoreOption mQCStatsStore = lookupOption opts
             TestMapRef mTestMapRef = lookupOption opts
@@ -236,97 +242,93 @@ streamingJsonReporter = TestReporter
         -- (which checks the same IORef) actually emits events.
         -- When --no-trace is passed, leave the ref as False so that both
         -- trEnabled and recordIteration remain no-ops.
-        --
-        -- Only now: tasty starts the tests before it calls this reporter, so
-        -- tracing any earlier would stream traces ahead of suite_started, with
-        -- ids from a test map not yet published. Iterations that run before
-        -- this point take the untraced path.
         let NoTrace noTrace = lookupOption opts
         case mEnabledRef of
-          Just ref -> atomicWriteIORef ref (not noTrace)
+          Just ref -> writeIORef ref (not noTrace)
           Nothing -> pure ()
 
-        -- Track results for final summary
-        resultsVar <- newTVarIO ([] :: [Result])
+        launchTestTree opts tree $ \statusMap -> do
+          -- Track results for final summary
+          resultsVar <- newTVarIO ([] :: [Result])
 
-        -- Watch each test concurrently
-        forConcurrently_ (IntMap.toAscList statusMap) $ \(idx', statusTVar) -> do
-          let idx = remapId idx'
-          -- Wait until the test starts
-          atomically $ do
-            status <- readTVar statusTVar
-            case status of
-              NotStarted -> retry
-              _ -> pure ()
+          -- Watch each test concurrently
+          forConcurrently_ (IntMap.toAscList statusMap) $ \(idx', statusTVar) -> do
+            let idx = remapId idx'
+            -- Wait until the test starts
+            atomically $ do
+              status <- readTVar statusTVar
+              case status of
+                NotStarted -> retry
+                _ -> pure ()
 
-          -- Emit test_started, unless the test's first trace already did
-          emit $ TestStarted idx
+            -- Emit test_started, unless the test's first trace already did
+            emit $ TestStarted idx
 
-          -- Wait for completion, emitting progress events along the way
-          let waitLoop lastSeen = do
-                next <- atomically $ do
-                  status <- readTVar statusTVar
-                  case status of
-                    NotStarted -> retry
-                    Executing p ->
-                      let cur = (progressText p, progressPercent p)
-                       in if Just cur == lastSeen
-                            then retry
-                            else pure (Left p)
-                    Done r -> pure (Right r)
-                case next of
-                  Left p -> do
-                    emit $
-                      TestProgress
-                        { epId = idx
-                        , epMessage = Text.pack (progressText p)
-                        , epPercent = progressPercent p
+            -- Wait for completion, emitting progress events along the way
+            let waitLoop lastSeen = do
+                  next <- atomically $ do
+                    status <- readTVar statusTVar
+                    case status of
+                      NotStarted -> retry
+                      Executing p ->
+                        let cur = (progressText p, progressPercent p)
+                         in if Just cur == lastSeen
+                              then retry
+                              else pure (Left p)
+                      Done r -> pure (Right r)
+                  case next of
+                    Left p -> do
+                      emit $
+                        TestProgress
+                          { epId = idx
+                          , epMessage = Text.pack (progressText p)
+                          , epPercent = progressPercent p
+                          }
+                      waitLoop (Just (progressText p, progressPercent p))
+                    Right r -> pure r
+            result <- waitLoop Nothing
+
+            -- Record result
+            atomically $ modifyTVar' resultsVar (result :)
+
+            -- Look up the structured threat-model summary the test recorded
+            -- under its full path
+            let testInfo = IntMap.lookup idx testMap
+            mSummary <- case (mStore, testInfo) of
+              (Just store, Just ti) -> lookupThreatModelSummary store (testPath ti)
+              _ -> pure Nothing
+            mMonitoring <- case (mQCStatsStore, testInfo) of
+              (Just store, Just ti) -> lookupQCStatsByTestInfo store ti
+              _ -> pure Nothing
+
+            -- Emit test_done
+            let outcome = case resultOutcome result of
+                  Success -> TestSuccess
+                  Failure reason ->
+                    TestFailure $
+                      FailureInfo
+                        { fiReason = withMaxTxSizeHint $ Text.pack $ showFailureReason reason
+                        , fiMessage = withMaxTxSizeHint $ Text.pack (resultDescription result)
                         }
-                    waitLoop (Just (progressText p, progressPercent p))
-                  Right r -> pure r
-          result <- waitLoop Nothing
+            emit $
+              TestDone
+                { edId = idx
+                , edOutcome = outcome
+                , edDuration = resultTime result
+                , edDescription = Text.pack (resultDescription result)
+                , edThreatModel = mSummary
+                , edMonitoringStats = mMonitoring
+                }
 
-          -- Record result
-          atomically $ modifyTVar' resultsVar (result :)
+          -- Emit suite_done summary
+          allResults <- readTVarIO resultsVar
+          let passed = length [() | r <- allResults, isSuccess r]
+          let failed = length allResults - passed
 
-          -- Look up the structured threat-model summary the test recorded
-          -- under its full path
-          let testInfo = IntMap.lookup idx testMap
-          mSummary <- case (mStore, testInfo) of
-            (Just store, Just ti) -> lookupThreatModelSummary store (testPath ti)
-            _ -> pure Nothing
-          mMonitoring <- case (mQCStatsStore, testInfo) of
-            (Just store, Just ti) -> lookupQCStatsByTestInfo store ti
-            _ -> pure Nothing
-
-          -- Emit test_done
-          let outcome = case resultOutcome result of
-                Success -> TestSuccess
-                Failure reason ->
-                  TestFailure $
-                    FailureInfo
-                      { fiReason = withMaxTxSizeHint $ Text.pack $ showFailureReason reason
-                      , fiMessage = withMaxTxSizeHint $ Text.pack (resultDescription result)
-                      }
-          emit $
-            TestDone
-              { edId = idx
-              , edOutcome = outcome
-              , edDuration = resultTime result
-              , edDescription = Text.pack (resultDescription result)
-              , edThreatModel = mSummary
-              , edMonitoringStats = mMonitoring
-              }
-
-        -- Emit suite_done summary
-        allResults <- readTVarIO resultsVar
-        let passed = length [() | r <- allResults, isSuccess r]
-        let failed = length allResults - passed
-
-        -- Return the "finalize" callback
-        pure $ \totalTime -> do
-          emit $ SuiteDone passed failed totalTime
-          pure (failed == 0)
+          -- Return the "finalize" callback
+          pure $ \totalTime -> do
+            emit $ SuiteDone passed failed totalTime
+            pure (failed == 0)
 
 -- | Emit a single NDJSON event line to stdout.
 emitEvent :: Event -> IO ()
@@ -418,11 +420,6 @@ expandSelectedTestIds :: IntMap TestInfo -> IntSet.IntSet -> IntSet.IntSet
 expandSelectedTestIds testMap selectedIds =
   IntSet.union selectedIds prerequisiteIds
  where
-  pathToId =
-    Map.fromList
-      [ (tiPath ti <> [tiName ti], tiId ti)
-      | ti <- IntMap.elems testMap
-      ]
   prerequisiteIds =
     IntSet.fromList
       [ positiveId
@@ -441,7 +438,7 @@ expandSelectedTestIds testMap selectedIds =
       [] -> Nothing
       groupPath
         | last groupPath `Set.member` perModelGroups ->
-            Map.lookup (init groupPath <> [Text.pack positivePropertyName]) pathToId
+            findTestId testMap (map Text.unpack (init groupPath) <> [positivePropertyName])
         | otherwise -> Nothing
 
 {- | Drop-in replacement for 'defaultMain' that supports @--streaming-json@.
@@ -566,11 +563,7 @@ defaultMainStreamingWithIngredients extraIngredients tree = do
         let selectedIdSet = expandSelectedTestIds fullMap requestedIdSet
             selectedIds = IntSet.toAscList selectedIdSet
             selectedInfos = map (fullMap IntMap.!) selectedIds
-            selectedPaths =
-              Set.fromList
-                [ map Text.unpack (tiPath ti <> [tiName ti])
-                | ti <- selectedInfos
-                ]
+            selectedPaths = Set.fromList (map testPath selectedInfos)
             remap = IntMap.fromAscList (zip [0 ..] selectedIds)
 
         writeIORef testIdRemapRef remap

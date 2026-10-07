@@ -625,9 +625,8 @@ propRunActionsWithOptions groupName opts =
   negativeTestTree recorder getNegRef =
     withFrozenCallStack $
       askOption $ \(GroupPathOpt suitePath) ->
-        case disableNegativeTesting opts of
-          Nothing -> testProperty negativePropertyName (negativeTest @state opts suitePath recorder getNegRef)
-          Just reason -> ignoreTestBecause reason $ testProperty negativePropertyName (negativeTest @state opts suitePath recorder getNegRef)
+        maybe id ignoreTestBecause (disableNegativeTesting opts) $
+          testProperty negativePropertyName (negativeTest @state opts suitePath recorder getNegRef)
 
   -- One per-model group per non-empty category, each reporting its own
   -- models' outcomes once the positive tests have recorded them.
@@ -696,8 +695,8 @@ negativeTestTraced
   -> PropertyM IO Property
 negativeTestTraced opts suitePath recorder iterIdx = do
   let RunOptions{mcOptions = Options{coverageRef, params}} = opts
-      -- The full path of this property's test, which its traces name it by
-      propertyPath = suitePath <> [negativePropertyName]
+      -- Stream an iteration's trace, under this property's own test
+      recordTrace covered iteration = run $ recordIteration recorder (suitePath <> [negativePropertyName]) "negative" covered (toJSON iteration)
   -- Phase 1: Run the valid prefix, capturing the final mockchain state
   (prefixResult, prefixState) <- runTestingMonadT params $ do
     initialState <- runInitialization @state opts
@@ -724,7 +723,7 @@ negativeTestTraced opts suitePath recorder iterIdx = do
               , itTransitions = []
               , itThreatModels = []
               }
-      run $ recordIteration recorder propertyPath "negative" [] (toJSON trace)
+      recordTrace [] trace
       pure (property False)
     Right ((badAction, finalState), transitions) -> do
       let monadAction = runExceptT $ unTestingMonadT $ perform finalState badAction
@@ -752,7 +751,7 @@ negativeTestTraced opts suitePath recorder iterIdx = do
                   , itTransitions = transitions <> [badTransition (TransitionFailure (T.pack (show ex)))]
                   , itThreatModels = []
                   }
-          run $ recordIteration recorder propertyPath "negative" [] (toJSON trace)
+          recordTrace [] trace
           discard
         Left ex -> do
           let trace =
@@ -762,7 +761,7 @@ negativeTestTraced opts suitePath recorder iterIdx = do
                   , itTransitions = transitions <> [badTransition (TransitionFailure (T.pack (show ex)))]
                   , itThreatModels = []
                   }
-          run $ recordIteration recorder propertyPath "negative" [] (toJSON trace)
+          recordTrace [] trace
           pure (property True)
         Right result ->
           case result of
@@ -777,7 +776,7 @@ negativeTestTraced opts suitePath recorder iterIdx = do
                       , itTransitions = transitions <> [badTransition (TransitionFailure (formatBalanceTxError err))]
                       , itThreatModels = []
                       }
-              run $ recordIteration recorder propertyPath "negative" (covDataToSrcLocRanges covData) (toJSON trace)
+              recordTrace (covDataToSrcLocRanges covData) trace
               pure (property True)
             (Right _, MockChainState{mcsCoverageData = covData}) -> do
               -- Bad: the invalid action succeeded — contract is too permissive
@@ -790,7 +789,7 @@ negativeTestTraced opts suitePath recorder iterIdx = do
                       , itTransitions = transitions <> [badTransition (TransitionSuccess T.empty)]
                       , itThreatModels = []
                       }
-              run $ recordIteration recorder propertyPath "negative" (covDataToSrcLocRanges covData) (toJSON trace)
+              recordTrace (covDataToSrcLocRanges covData) trace
               pure (property False)
 
 -- | Fast path for negative tests: runs 'runActions' (no tracing overhead).
@@ -883,8 +882,8 @@ positiveTestTraced
   -> PropertyM IO Property
 positiveTestTraced opts suitePath mGetTmResultsRef tms recorder iterIdx = do
   let RunOptions{mcOptions = Options{coverageRef, params}} = opts
-      -- The full path of this property's test, which its traces name it by
-      propertyPath = suitePath <> [positivePropertyName]
+      -- Stream an iteration's trace, under this property's own test
+      recordTrace covered iteration = run $ recordIteration recorder (suitePath <> [positivePropertyName]) "positive" covered (toJSON iteration)
   result <- runTestingMonadT params $ do
     initialState <- runInitialization @state opts
     initTxs <- getTxs
@@ -928,7 +927,7 @@ positiveTestTraced opts suitePath mGetTmResultsRef tms recorder iterIdx = do
               , itTransitions = []
               , itThreatModels = []
               }
-      run $ recordIteration recorder propertyPath "positive" (covDataToSrcLocRanges covData) (toJSON trace)
+      recordTrace (covDataToSrcLocRanges covData) trace
       pure (property False)
     (Right (finalState, transitions, tmResultsWithCov), MockChainState{mcsCoverageData}) -> do
       let covData = mcsCoverageData <> mconcat [cov | (_, _, _, _, cov, _) <- tmResultsWithCov]
@@ -955,7 +954,7 @@ positiveTestTraced opts suitePath mGetTmResultsRef tms recorder iterIdx = do
               , itTransitions = transitions
               , itThreatModels = tmTraces
               }
-      run $ recordIteration recorder propertyPath "positive" (covDataToSrcLocRanges mcsCoverageData) (toJSON trace)
+      recordTrace (covDataToSrcLocRanges mcsCoverageData) trace
       let allMonitors = foldr (.) id [m | (_, _, _, _, _, m) <- tmResultsWithCov]
       monitor allMonitors
       pure (property True)
@@ -1048,7 +1047,7 @@ perModelCase
   :: ThreatModelCategory
   -> IO (IORef ThreatModelResults)
   -> ThreatModel ()
-  -> ((String -> IO ()) -> TMRecorder -> [String] -> ThreatModelSummary -> [(ThreatModelOutcome, [String])] -> IO ())
+  -> ((String -> IO ()) -> (ThreatModelSummary -> IO ()) -> ThreatModelSummary -> [(ThreatModelOutcome, [String])] -> IO ())
   -- ^ What to do when the model was actually tested
   -> TestTree
 perModelCase claim getTmResultsRef tm onTested =
@@ -1059,7 +1058,7 @@ perModelCase claim getTmResultsRef tm onTested =
             -- The summary goes under the case's full path, which is what the
             -- reporter looks it up by: other suites' same-named cases sit in
             -- same-named groups.
-            let key = groupPath <> [name]
+            let recordSummary = tmRecord recorder (groupPath <> [name])
             tmRef <- getTmResultsRef
             allResults <- readIORef tmRef
             let outcomeEntries = fromMaybe [] (Map.lookup (ThreatModelId claim name) allResults)
@@ -1069,14 +1068,14 @@ perModelCase claim getTmResultsRef tm onTested =
 
             -- Errors are warnings: they say nothing either way about the verdict.
             reportErrors step outcomes
-            tmRecord recorder key summary
+            recordSummary summary
 
             if total == 0
               then step "No tests were generated by positive tests"
               else
                 if tested == 0
-                  then reportZeroCoverage step recorder key claim summary outcomeEntries
-                  else onTested step recorder key summary outcomeEntries
+                  then reportZeroCoverage step recordSummary claim summary outcomeEntries
+                  else onTested step recordSummary summary outcomeEntries
 
 -- | Create a test case for displaying threat model results
 threatModelTestCase
@@ -1091,7 +1090,7 @@ threatModelTestCase
 threatModelTestCase claim getTmResultsRef (tm, _noReason) =
   perModelCase claim getTmResultsRef tm onTested
  where
-  onTested step recorder key summary outcomeEntries = do
+  onTested step recordSummary summary outcomeEntries = do
     let outcomes = map fst outcomeEntries
         ThreatModelSummary{tmsTotal = total, tmsPassed = numPassed} = summary
     step $ "Tested " <> show numPassed <> "/" <> show total <> " tests (" <> skipCounts summary <> ")"
@@ -1102,7 +1101,7 @@ threatModelTestCase claim getTmResultsRef (tm, _noReason) =
         when (claim == Surveyed) $
           step "  Untriaged: the contract resisted it - move it to 'threatModels' to claim that resistance."
       (firstFailure : rest) ->
-        failWithFault recorder key summary (if claim == Surveyed then Declaration else Contract) $
+        failWithFault recordSummary summary (if claim == Surveyed then Declaration else Contract) $
           [ if claim == Surveyed
               then "an untriaged model detected a vulnerability after " <> show (numPassed + 1) <> " tests."
               else "vulnerability detected after " <> show (numPassed + 1) <> " tests."
@@ -1148,7 +1147,7 @@ triagedFindingTestCase claim getTmResultsRef (tm, why) =
   perModelCase claim getTmResultsRef tm onTested
  where
   accepted = claim == Accepted
-  onTested step recorder key summary outcomeEntries = do
+  onTested step recordSummary summary outcomeEntries = do
     let ThreatModelSummary{tmsTotal = total, tmsFailed = numFound, tmsTested = tested} = summary
         validationErrors = distinctValidationErrors outcomeEntries
         validationErrorLines = case validationErrors of
@@ -1167,7 +1166,7 @@ triagedFindingTestCase claim getTmResultsRef (tm, why) =
       else
         -- The run disproves the declaration: the attack no longer lands. Same
         -- fault in both slots; only the consequence for the reader differs.
-        failWithFault recorder key summary Declaration $
+        failWithFault recordSummary summary Declaration $
           ( if accepted
               then
                 [ "NO LONGER DETECTED - this finding no longer occurs (" <> show tested <> " of " <> show total <> " transactions attacked)."
@@ -1233,9 +1232,9 @@ bare failure is routinely misread as "the contract is broken" when it means
 "this declaration is stale". Recording it too lets a dashboard route the
 two apart without parsing prose.
 -}
-failWithFault :: TMRecorder -> [String] -> ThreatModelSummary -> Fault -> [String] -> IO ()
-failWithFault recorder key summary fault ls = do
-  tmRecord recorder key summary{tmsFault = Just fault}
+failWithFault :: (ThreatModelSummary -> IO ()) -> ThreatModelSummary -> Fault -> [String] -> IO ()
+failWithFault recordSummary summary fault ls = do
+  recordSummary summary{tmsFault = Just fault}
   assertFailure $ unlines $ case ls of
     (firstLine : rest) -> (faultLabel fault <> ": " <> firstLine) : rest
     [] -> [faultLabel fault]
@@ -1352,9 +1351,9 @@ notApplicableTestCase claim getTmResultsRef (tm, why) =
   carries no prior, and may always have been benign) is the declaration's.
   Detection here is 'tmsFailed', i.e. the mutated transaction still
   validated. -}
-  onTested _step recorder key summary _entries
+  onTested _step recordSummary summary _entries
     | tmsFailed summary > 0 =
-        failWithFault recorder key summary Contract $
+        failWithFault recordSummary summary Contract $
           [ "VULNERABLE - a model recorded as not applicable now applies, and the contract"
           , "  accepted its attack (" <> show (tmsFailed summary) <> " of " <> show (tmsTested summary) <> " attacked transactions)."
           , "  This contract previously had no surface for it, so the likely cause is a"
@@ -1363,7 +1362,7 @@ notApplicableTestCase claim getTmResultsRef (tm, why) =
           , "  Declared not applicable because: " <> why
           ]
     | otherwise =
-        failWithFault recorder key summary Declaration $
+        failWithFault recordSummary summary Declaration $
           [ "APPLIES NOW - tested on " <> show (tmsTested summary) <> " of " <> show (tmsTotal summary) <> " transactions, but listed in 'notApplicable'."
           , "  The contract resisted the attack, so this is a stale declaration rather"
           , "  than a bug: the contract grew a surface this model looks for, or the"
@@ -1498,10 +1497,10 @@ case, status lines are reported as steps. The single place that says what
 counts as a reason - the model's own errors, plus the ledger's verdicts on
 whatever it did manage to submit.
 -}
-reportZeroCoverage :: (String -> IO ()) -> TMRecorder -> [String] -> ThreatModelCategory -> ThreatModelSummary -> [(ThreatModelOutcome, [String])] -> IO ()
-reportZeroCoverage step recorder key claim summary outcomeEntries =
+reportZeroCoverage :: (String -> IO ()) -> (ThreatModelSummary -> IO ()) -> ThreatModelCategory -> ThreatModelSummary -> [(ThreatModelOutcome, [String])] -> IO ()
+reportZeroCoverage step recordSummary claim summary outcomeEntries =
   either
-    (\(fault, msg) -> failWithFault recorder key summary fault (lines msg))
+    (\(fault, msg) -> failWithFault recordSummary summary fault (lines msg))
     (mapM_ step)
     $ zeroCoverageVerdict claim summary
     $ modelErrors (map fst outcomeEntries) <> distinctValidationErrors outcomeEntries

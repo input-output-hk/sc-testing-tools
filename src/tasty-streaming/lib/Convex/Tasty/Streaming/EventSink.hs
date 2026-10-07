@@ -38,7 +38,7 @@ newEventSink write = EventSink write <$> newMVar IntSet.empty
 
 -- | An event as one NDJSON line, newline included.
 encodeLine :: Event -> ByteString
-encodeLine evt = BL.toStrict (encode evt) <> "\n"
+encodeLine evt = BL.toStrict (encode evt <> "\n")
 
 {- | Write an event, announcing its test first if that has not happened yet.
 

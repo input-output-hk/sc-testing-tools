@@ -64,18 +64,19 @@ own name and their group's name (most @propRunActions@ suites call theirs
 \"property-based testing\").
 -}
 findTestId :: IntMap TestInfo -> [String] -> Maybe Int
-findTestId testMap path = case reverse (map Text.pack path) of
-  [] -> Nothing
-  name : groupsReversed ->
-    let groups = reverse groupsReversed
-        matches (_, ti) = tiName ti == name && tiPath ti == groups
-     in fst <$> find matches (IntMap.toAscList testMap)
+findTestId testMap path = tiId <$> find ((== wanted) . fullPath) (IntMap.elems testMap)
+ where
+  wanted = map Text.pack path
 
 {- | A test's full path: the names of its groups, outermost first, then its
 own name. What a test case records its threat-model summary under.
 -}
 testPath :: TestInfo -> [String]
-testPath ti = map Text.unpack (tiPath ti <> [tiName ti])
+testPath = map Text.unpack . fullPath
+
+-- | 'testPath' as the test map spells it.
+fullPath :: TestInfo -> [Text.Text]
+fullPath ti = tiPath ti <> [tiName ti]
 
 {- | Internal Tasty option carrying the names of the groups enclosing a
 subtree, outermost first: the 'tiPath' that 'buildTestMap' gives the tests
