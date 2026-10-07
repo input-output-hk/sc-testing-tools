@@ -163,15 +163,22 @@ instance FromJSON ThreatModelSummary where
       -- Optional: only a failing case has a fault.
       <*> o .:? "fault"
 
--- | Mutable storage for threat-model summaries, owned by the reporter.
-newtype TMStore = TMStore (IORef (Map String ThreatModelSummary))
+{- | Mutable storage for threat-model summaries, owned by the reporter, keyed
+by the full path of the test case each is for.
+-}
+newtype TMStore = TMStore (IORef (Map [String] ThreatModelSummary))
 
 {- | A recorder closure passed to test bodies via Tasty's option system.
 The default no-op makes summaries silently dropped when the streaming
 reporter is not active.
+
+A test case records its summary under its full path: the names of its
+groups, outermost first (read from 'Convex.Tasty.Streaming.TreeMap.GroupPathOpt'),
+then its own name. Less would not do: same-named cases of other suites sit
+in same-named groups.
 -}
 newtype TMRecorder = TMRecorder
-  { tmRecord :: String -> ThreatModelSummary -> IO ()
+  { tmRecord :: [String] -> ThreatModelSummary -> IO ()
   }
 
 {- | Internal option carrying the live store. Set by `defaultMainStreaming`
@@ -200,8 +207,8 @@ storeRecorder :: TMStore -> TMRecorder
 storeRecorder (TMStore ref) = TMRecorder $ \key s ->
   atomicModifyIORef' ref $ \m -> (Map.insert key s m, ())
 
--- | Look up a summary by key (does not delete).
-lookupThreatModelSummary :: TMStore -> String -> IO (Maybe ThreatModelSummary)
+-- | Look up a summary by its test case's full path (does not delete).
+lookupThreatModelSummary :: TMStore -> [String] -> IO (Maybe ThreatModelSummary)
 lookupThreatModelSummary (TMStore ref) key =
   Map.lookup key <$> readIORef ref
 

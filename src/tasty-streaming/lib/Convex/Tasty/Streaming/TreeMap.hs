@@ -1,6 +1,7 @@
 module Convex.Tasty.Streaming.TreeMap (
   buildTestMap,
   findTestId,
+  testPath,
   GroupPathOpt (..),
   annotateGroupPaths,
 ) where
@@ -70,6 +71,12 @@ findTestId testMap groupPath name =
   path = map Text.pack groupPath
   name' = Text.pack name
   matches (_, ti) = tiPath ti == path && tiName ti == name'
+
+{- | A test's full path: the names of its groups, outermost first, then its
+own name. What a test case records its threat-model summary under.
+-}
+testPath :: TestInfo -> [String]
+testPath ti = map Text.unpack (tiPath ti <> [tiName ti])
 
 {- | Internal Tasty option carrying the names of the groups enclosing a
 subtree, outermost first: the 'tiPath' that 'buildTestMap' gives the tests
